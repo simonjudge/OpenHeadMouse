@@ -1,0 +1,60 @@
+{
+  "screen": {
+    "geometry_source": "qscreen",
+    "corner_failsafe_ms": 500,
+    "corner_region_px": 20
+  },
+  "hotkeys": {
+    "toggle_tracking": "<cmd>+<alt>+m"
+  },
+  "active_provider": "uniface",
+  "providers": {
+    "uniface": {
+      "camera_index": 0,
+      "target_fps": 30,
+      "landmarker_model_path": "models/face_landmarker.task",
+      "tracking_lost_hold_ms": 500
+    },
+    "ximu3": {
+      "connection_type": "usb",
+      "axes_alignment": "+X+Z+Y",
+      "target_rate_hz": 200
+    },
+    "airpods": {
+      "udp_host": "127.0.0.1",
+      "udp_port": 5005
+    }
+  },
+  "dsp": {
+    "mode": "absolute",
+    "absolute": {
+      "kx": 8.0,
+      "ky": -8.0
+    },
+    "velocity": {
+      "kx": 1.0,
+      "ky": 1.0,
+      "gamma": 1.5,
+      "deadband_deg_s": 3.0
+    },
+    "one_euro_filter": {
+      "enabled": true,
+      "min_cutoff": 1.0,
+      "beta": 0.3,
+      "d_cutoff": 1.0
+    },
+    "auto_zero": {
+      "enabled": true,
+      "stationary_window_ms": 200,
+      "stationary_threshold_deg_s": 2.0
+    },
+    "yaw_drift_correction": {
+      "enabled": false,
+      "time_constant_s": 20.0
+    }
+  },
+  "recorder": {
+    "output_dir": "sessions/",
+    "format": "json"
+  }
+}
