@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:headmouse_project}/providers/airpods/swift_src",
+            "name": "Debug AirPodsHeadMouseHelper (providers/airpods/swift_src)",
+            "target": "AirPodsHeadMouseHelper",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug AirPodsHeadMouseHelper (providers/airpods/swift_src)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:headmouse_project}/providers/airpods/swift_src",
+            "name": "Release AirPodsHeadMouseHelper (providers/airpods/swift_src)",
+            "target": "AirPodsHeadMouseHelper",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release AirPodsHeadMouseHelper (providers/airpods/swift_src)"
+        }
+    ]
+}

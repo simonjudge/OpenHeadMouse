@@ -3,7 +3,7 @@
 Pipeline: OpenCV grabs BGR frames -> MediaPipe Tasks `FaceLandmarker` (VIDEO
 running mode, ``output_facial_transformation_matrixes=True``) returns a 4x4
 facial transformation matrix per detected face -> the rotation part is
-re-expressed in this project's [+X forward, +Y left, +Z up] head frame (see
+re-expressed in this project's [+X forward, +Y right, +Z down] head frame (see
 core/quaternion_math.py) -> converted to a [w, x, y, z] quaternion.
 
 MediaPipe's facial transformation matrix is expressed in its camera-space
@@ -13,16 +13,16 @@ the rotation part of the matrix is close to identity). Matching this
 project's convention up when facing the camera dead-on:
   - head "forward" (nose direction, +X_head) <-> camera +Z (out of the face,
     toward the camera)
-  - head "left" (+Y_head, ear-to-ear) <-> camera +X (a person's own left ear
-    appears on the *viewer's* right, i.e. +X in camera space)
-  - head "up" (+Z_head) <-> camera +Y
+  - head "right" (+Y_head, toward right ear) <-> camera +X (a person's own
+    right ear appears on the *viewer's* left, but in camera space it's +X)
+  - head "down" (+Z_head) <-> camera -Y (downward is opposite camera +Y up)
 
 That mapping is a fixed axis permutation P (a rotation matrix, not a
 reflection: det(P) = +1, so handedness is preserved):
     P = [[0, 0, 1],
          [1, 0, 0],
-         [0, 1, 0]]
-    (i.e. head_x = cam_z, head_y = cam_x, head_z = cam_y)
+         [0, -1, 0]]
+    (i.e. head_x = cam_z, head_y = cam_x, head_z = -cam_y)
 Re-expressing the MediaPipe rotation matrix R_mp in the head-labeled frame is
 the similarity transform R_head = P @ R_mp @ P.T (P is orthogonal, P^-1 = P.T).
 
@@ -31,7 +31,7 @@ convention, not empirically verified against a live camera in this sandboxed
 build environment. Run this module standalone (``python -m
 providers.uniface_provider``) in front of a real webcam and confirm the
 printed yaw/pitch/roll signs match real head motion (turn left -> yaw
-positive, look up -> pitch positive, tilt left ear down -> roll positive)
+positive, look down -> pitch positive, tilt left ear down -> roll positive)
 before relying on it for cursor control. See tests/test_quaternion_math.py
 for the project's sign-convention definitions.
 """
@@ -46,8 +46,8 @@ import numpy as np
 from core import quaternion_math as qm
 from providers.base_provider import BaseProvider, ProviderSample, ProviderState
 
-# Permutation matrix mapping MediaPipe camera-space axes (X right, Y up, Z
-# toward viewer) to this project's head frame (X forward, Y left, Z up).
+# Permutation matrix mapping MediaPipe camera-space axes to head frame.
+# (Updated comment to reflect current frame definition)
 _CAMERA_TO_HEAD_FRAME = np.array(
     [
         [0.0, 0.0, 1.0],

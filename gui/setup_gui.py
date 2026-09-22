@@ -19,10 +19,8 @@ class SetupPanel(QWidget):
 
         self._provider_combo = QComboBox()
         self._provider_combo.addItem("UniFace (webcam)", userData="uniface")
-        self._provider_combo.addItem("xIMU3 (coming soon)", userData="ximu3")
-        self._provider_combo.addItem("AirPods (coming soon)", userData="airpods")
-        for i in range(1, self._provider_combo.count()):
-            self._provider_combo.model().item(i).setEnabled(False)
+        self._provider_combo.addItem("xIMU3 (IMU)", userData="ximu3")
+        self._provider_combo.addItem("AirPods (CoreMotion)", userData="airpods")
 
         self._start_button = QPushButton("Start")
         self._stop_button = QPushButton("Stop")
@@ -52,3 +50,9 @@ class SetupPanel(QWidget):
         self._stop_button.setEnabled(False)
         self._provider_combo.setEnabled(True)
         self.stop_requested.emit()
+
+    def reset_to_stopped(self) -> None:
+        """Reset UI to stopped state after a failed start attempt."""
+        self._start_button.setEnabled(True)
+        self._stop_button.setEnabled(False)
+        self._provider_combo.setEnabled(True)

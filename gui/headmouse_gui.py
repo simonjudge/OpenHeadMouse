@@ -9,6 +9,7 @@ and calls into this window's update methods.
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from gui.setup_gui import SetupPanel
 from gui.vis_gui import TelemetryWidget
+from gui.control_panel import ControlPanel
 
 _STATE_COLORS = {
     "active": "#2e7d32",
@@ -34,13 +36,17 @@ class HeadMouseWindow(QMainWindow):
     recenter_requested = Signal()
     kx_changed = Signal(float)
     ky_changed = Signal(float)
+    load_session_requested = Signal()
 
-    def __init__(self, initial_kx: float, initial_ky: float, parent=None):
+    def __init__(self, initial_kx: float, initial_ky: float, hotkey: str = "<cmd>+<alt>+m", parent=None):
         super().__init__(parent)
         self.setWindowTitle("HeadMouse")
 
+        self._create_menu()
+
         self.setup_panel = SetupPanel()
         self.telemetry = TelemetryWidget()
+        self.controls = ControlPanel()
 
         self._kx_spin = QDoubleSpinBox()
         self._kx_spin.setRange(-1000.0, 1000.0)
@@ -64,14 +70,26 @@ class HeadMouseWindow(QMainWindow):
         self._status_label = QLabel("PAUSED")
         self._status_label.setStyleSheet(f"font-weight: bold; color: {_STATE_COLORS['paused']};")
 
+        self._hotkey_label = QLabel(f"Toggle tracking: {hotkey}")
+        self._hotkey_label.setStyleSheet("color: #666; font-size: 10pt;")
+
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.addWidget(self.setup_panel)
+        layout.addWidget(self.controls)
         layout.addWidget(gain_box)
         layout.addWidget(self._recenter_button)
         layout.addWidget(self._status_label)
+        layout.addWidget(self._hotkey_label)
         layout.addWidget(self.telemetry)
         self.setCentralWidget(central)
+
+    def _create_menu(self) -> None:
+        open_visualizer_action = QAction("Open Session Viewer...", self)
+        open_visualizer_action.triggered.connect(self.load_session_requested)
+
+        file_menu = self.menuBar().addMenu("File")
+        file_menu.addAction(open_visualizer_action)
 
     def set_status(self, state_name: str) -> None:
         color = _STATE_COLORS.get(state_name, "#000000")

@@ -1,0 +1,2 @@
+// Minimal Xcode project structure - use Xcode to open and configure properly
+// For now, build from command line with Info.plist manually copied

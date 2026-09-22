@@ -49,15 +49,29 @@ class DSPEngine:
     def process_absolute(self, q_current: np.ndarray) -> tuple[float, float]:
         """Map a raw head-pose quaternion to a clamped absolute (pixel_x, pixel_y).
 
+        Extracts yaw and pitch directly from the relative quaternion (continuous),
+        avoiding Euler angle discontinuities at ±180°.
+
         Pixel_x = ScreenWidth/2 + kx * Yaw_relative
         Pixel_y = ScreenHeight/2 + ky * Pitch_relative
-        (spec 7.1, angles in degrees, relative to q_neutral). To make "look
-        up" move the cursor toward the top of the screen (smaller pixel_y in
-        the usual top-left-origin screen convention), given this project's
-        "pitch up = positive" convention (core/quaternion_math.py), ``ky``
-        should be configured negative.
         """
-        yaw_deg, pitch_deg, _roll_deg = self.relative_euler_deg(q_current)
+        q_relative = qm.relative_rotation(self._q_neutral, q_current)
+
+        # Extract yaw and pitch directly from quaternion to avoid Euler discontinuities
+        # Yaw: rotation about Z axis
+        # For q=[w,x,y,z], yaw ≈ 2*atan2(z, w) when z-axis dominates
+        w, x, y, z = q_relative
+
+        # Yaw from quaternion (rotation about Z)
+        yaw_rad = 2.0 * np.arctan2(z, w)
+
+        # Pitch from quaternion (rotation about Y)
+        # Use sin(pitch) = 2(w*y - z*x) clamped to [-1, 1]
+        pitch_sin = np.clip(2.0 * (w * y - z * x), -1.0, 1.0)
+        pitch_rad = np.arcsin(pitch_sin)
+
+        yaw_deg = float(np.degrees(yaw_rad))
+        pitch_deg = float(np.degrees(pitch_rad))
 
         pixel_x = self.screen_width / 2.0 + self.kx * yaw_deg
         pixel_y = self.screen_height / 2.0 + self.ky * pitch_deg

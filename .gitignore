@@ -5,3 +5,11 @@ __pycache__/
 sessions/
 *.egg-info/
 .DS_Store
+
+# Downloaded ML/mesh assets (fetched automatically or per README instructions)
+models/
+
+# Swift Package Manager / Xcode build artifacts and per-user IDE state
+.build/
+xcuserdata/
+*.xcuserstate

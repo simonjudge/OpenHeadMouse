@@ -6,21 +6,26 @@ which uses scalar-last ``[x, y, z, w]`` — any interop with scipy must
 explicitly reorder components.
 
 Reference frame (right-handed, matches the system spec):
-    +X — forward (direction of view)
-    +Y — left (ear-to-ear lateral axis)
-    +Z — up (vertical axis against gravity)
+    +X — forward (direction of view, out of nose)
+    +Y — right (ear-to-ear lateral axis, toward right ear)
+    +Z — down (vertical axis, toward floor/neck)
+
+This frame is consistent across all providers:
+  - UniFace (webcam): Transforms camera frame → reference frame via permutation
+  - xIMU3 (IMU): Configured via axes_alignment command to output in this frame
+  - AirPods (CoreMotion): Assumes device frame matches this frame
 
 Sign convention for the derived Euler angles, given the above frame and a
 right-hand rotation rule (positive rotation = counter-clockwise when viewed
 from the positive end of the rotation axis looking toward the origin):
     - Yaw   (rotation about +Z): turning the head to the LEFT is POSITIVE
-      (rotating the +X forward axis toward +Y left is a positive right-hand
-      rotation about +Z).
-    - Pitch (rotation about +Y): looking UP is POSITIVE (rotating +X toward
-      +Z up is a positive right-hand rotation about +Y).
+      (rotating the +X forward axis toward -Y, which is left, is a positive
+      right-hand rotation about +Z).
+    - Pitch (rotation about +Y): looking DOWN is POSITIVE (rotating +X toward
+      -Z down is a positive right-hand rotation about +Y).
     - Roll  (rotation about +X): tilting the head so the LEFT ear drops
-      toward the ground is POSITIVE (rotating +Y toward -Z is a positive
-      right-hand rotation about +X).
+      toward the ground is POSITIVE (rotating +Y right toward +Z down is a
+      positive right-hand rotation about +X).
 
 Euler angles are extracted using an intrinsic Z-Y-X sequence
 (yaw, then pitch, then roll), i.e. ``R = Rz(yaw) @ Ry(pitch) @ Rx(roll)``,

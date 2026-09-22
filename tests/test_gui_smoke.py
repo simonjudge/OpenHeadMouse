@@ -51,7 +51,7 @@ def test_telemetry_widget_updates_labels(qt_app):
 def test_headmouse_window_builds_and_reports_status(qt_app):
     from gui.headmouse_gui import HeadMouseWindow
 
-    window = HeadMouseWindow(initial_kx=8.0, initial_ky=-8.0)
+    window = HeadMouseWindow(initial_kx=8.0, initial_ky=-8.0, hotkey="<cmd>+<alt>+m")
     assert window._kx_spin.value() == 8.0
     assert window._ky_spin.value() == -8.0
 

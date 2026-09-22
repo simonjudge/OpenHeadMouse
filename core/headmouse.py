@@ -111,12 +111,17 @@ class HeadMouse:
         try:
             self._hotkey_listener = keyboard.GlobalHotKeys({self._hotkey_str: self._toggle_tracking})
             self._hotkey_listener.start()
-        except Exception:
+            print(f"✓ Global hotkey '{self._hotkey_str}' registered successfully")
+        except Exception as e:
+            print(f"✗ Failed to register hotkey '{self._hotkey_str}': {e}")
+            print(f"  On macOS, the app needs Accessibility permission.")
+            print(f"  Go to System Settings > Privacy & Security > Accessibility and allow this app.")
             self._hotkey_listener = None
         try:
             self._mouse_listener = mouse.Listener(on_move=self._on_manual_mouse_move)
             self._mouse_listener.start()
-        except Exception:
+        except Exception as e:
+            print(f"✗ Failed to register mouse listener: {e}")
             self._mouse_listener = None
 
     def stop(self) -> None:

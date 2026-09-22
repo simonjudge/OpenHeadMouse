@@ -16,8 +16,12 @@
       "tracking_lost_hold_ms": 500
     },
     "ximu3": {
-      "connection_type": "usb",
-      "axes_alignment": "+X+Z+Y",
+      "connection_type": "wifi_ap",
+      "port_name": "",
+      "wifi_ip_address": "192.168.1.1",
+      "wifi_port_send": 9000,
+      "wifi_port_receive": 8001,
+      "axes_alignment": "+X+Z-Y",
       "target_rate_hz": 200
     },
     "airpods": {
@@ -28,8 +32,8 @@
   "dsp": {
     "mode": "absolute",
     "absolute": {
-      "kx": 8.0,
-      "ky": -8.0
+      "kx": 14.0,
+      "ky": -9.0
     },
     "velocity": {
       "kx": 1.0,

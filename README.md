@@ -21,5 +21,6 @@ python main.py
 
 - `core/` — quaternion math, DSP engine, recorder, OS cursor control
 - `providers/` — input drivers (UniFace/MediaPipe, xIMU3, AirPods)
-- `gui/` — PySide6 setup, visualization, DSP tuning, and Fitts' Law test screens
+- `gui/` — PySide6 setup, DSP tuning, and Fitts' Law test screens
+- `session_viewer/` — standalone pyqtgraph session viewer (mesh + line-graph playback), opened from the main window's File menu
 - `tests/` — unit tests
