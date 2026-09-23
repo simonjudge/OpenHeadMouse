@@ -37,6 +37,7 @@ class HeadMouseWindow(QMainWindow):
     kx_changed = Signal(float)
     ky_changed = Signal(float)
     load_session_requested = Signal()
+    fitts_test_requested = Signal()
 
     def __init__(self, initial_kx: float, initial_ky: float, hotkey: str = "<cmd>+<alt>+m", parent=None):
         super().__init__(parent)
@@ -88,8 +89,12 @@ class HeadMouseWindow(QMainWindow):
         open_visualizer_action = QAction("Open Session Viewer...", self)
         open_visualizer_action.triggered.connect(self.load_session_requested)
 
+        open_fitts_action = QAction("Open Fitts' Law Test...", self)
+        open_fitts_action.triggered.connect(self.fitts_test_requested)
+
         file_menu = self.menuBar().addMenu("File")
         file_menu.addAction(open_visualizer_action)
+        file_menu.addAction(open_fitts_action)
 
     def set_status(self, state_name: str) -> None:
         color = _STATE_COLORS.get(state_name, "#000000")

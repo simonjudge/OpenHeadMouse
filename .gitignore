@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 sessions/
+fitts_sessions/
 *.egg-info/
 .DS_Store
 

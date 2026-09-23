@@ -1,0 +1,811 @@
+"""Standalone Fitts' Law test suite window.
+
+Run directly (`python fitts_law/fitts_test.py`) or launch from the main
+HeadMouse window's File menu (see main.py's _on_fitts_test_requested).
+Deliberately has zero coupling to core/headmouse.py - it only reacts to
+ordinary Qt mouse events on its own canvas, agnostic to whatever is actually
+driving the OS cursor (head tracking, a trackpad, a switch, etc).
+"""
+
+from __future__ import annotations
+
+import math
+import random
+import sys
+import time
+from pathlib import Path
+
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+import pyqtgraph as pg
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QPainter, QPixmap
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
+    QSpinBox,
+    QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from fitts_law.conditions import (
+    build_condition_set,
+    generate_circle_positions,
+    generate_edge_extremity_targets,
+    max_safe_circle_radius,
+    multi_directional_sequence,
+)
+from fitts_law.keyboard import PROMPT_HEIGHT_PX, TYPING_WORDS, build_keyboard_layout, key_at
+from fitts_law.results import FittsResultsLogger, FittsStats, TrialResult
+from fitts_law.fitts_settings import FittsSettings
+from fitts_law.stimuli import EMOJI_CHOICES, STIMULUS_CHOICES, CircleStimulus, EmojiStimulus, ImageStimulus, Stimulus
+
+MODE_ISO_STANDARD = "ISO Standard"
+MODE_ISO_EDGE = "ISO Standard + Edge Targets"
+MODE_TYPING = "Typing Test"
+
+KEY_SIZE_CONSISTENT = "Consistent key size"
+KEY_SIZE_RANDOM = "Random key size"
+
+
+def _parse_number_list(text: str) -> list[float]:
+    values = []
+    for part in text.split(","):
+        part = part.strip()
+        if part:
+            values.append(float(part))
+    return values
+
+
+class FittsTrialCanvas(QWidget):
+    """Paints the current target and turns mouse clicks into TrialResults."""
+
+    trial_completed = Signal(object)  # TrialResult
+    all_trials_completed = Signal()
+
+    _TRAJECTORY_MIN_INTERVAL_S = 1.0 / 60.0  # cap trajectory sampling to ~60Hz
+
+    def __init__(self, trial_specs: list[dict], stimulus: Stimulus, parent=None):
+        super().__init__(parent)
+        self._specs = trial_specs
+        self._stimulus = stimulus
+        self._index = 0
+        self._trial_start_time: float | None = None
+        self._trajectory: list[list[float]] = []
+        self._last_trajectory_sample_time: float | None = None
+        self.setMouseTracking(True)
+        self.setMinimumSize(400, 300)
+        self._start_current_trial()
+
+    def _start_current_trial(self) -> None:
+        if self._index >= len(self._specs):
+            self.all_trials_completed.emit()
+            return
+        self._trial_start_time = time.monotonic()
+        self._trajectory = []
+        self._last_trajectory_sample_time = None
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        if self._index < len(self._specs):
+            spec = self._specs[self._index]
+            w = spec["width_px"]
+            x, y = spec["target_pos"]
+            rect = QRectF(x - w / 2, y - w / 2, w, w)
+            self._stimulus.paint(painter, rect, True)
+        painter.end()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._trial_start_time is None or self._index >= len(self._specs):
+            return
+        now = time.monotonic()
+        if (
+            self._last_trajectory_sample_time is not None
+            and now - self._last_trajectory_sample_time < self._TRAJECTORY_MIN_INTERVAL_S
+        ):
+            return
+        self._last_trajectory_sample_time = now
+        pos = event.position()
+        self._trajectory.append([now - self._trial_start_time, pos.x(), pos.y()])
+
+    def mousePressEvent(self, event) -> None:
+        if self._index >= len(self._specs) or self._trial_start_time is None:
+            return
+        spec = self._specs[self._index]
+        pos = event.position()
+        click_pos = (pos.x(), pos.y())
+        end_time = time.monotonic()
+        distance = math.dist(spec["target_pos"], click_pos)
+        hit = distance <= spec["width_px"] / 2
+
+        result = TrialResult(
+            condition_label=spec["condition_label"],
+            block_type=spec["block_type"],
+            amplitude_px=spec["amplitude_px"],
+            width_px=spec["width_px"],
+            start_pos=spec["start_pos"],
+            target_pos=spec["target_pos"],
+            click_pos=click_pos,
+            start_time=self._trial_start_time,
+            end_time=end_time,
+            movement_time_s=end_time - self._trial_start_time,
+            hit=hit,
+            trial_index=spec["trial_index"],
+            repetition_index=spec["repetition_index"],
+            trajectory=self._trajectory,
+        )
+        self._index += 1
+        self.trial_completed.emit(result)
+        self._start_current_trial()
+
+
+class TypingTrialCanvas(QWidget):
+    """Paints a full-screen on-screen keyboard and a typing prompt; each
+    keystroke becomes a TrialResult (previous key center -> next key center).
+    Hit-testing is rectangular (real key shapes), unlike FittsTrialCanvas's
+    circular stimulus hit-test - documented in fitts_law/keyboard.py.
+    """
+
+    trial_completed = Signal(object)  # TrialResult
+    all_trials_completed = Signal()
+
+    _TRAJECTORY_MIN_INTERVAL_S = 1.0 / 60.0
+
+    def __init__(self, trial_specs: list[dict], layout: dict, parent=None):
+        super().__init__(parent)
+        self._specs = trial_specs
+        self._layout = layout
+        self._index = 0
+        self._trial_start_time: float | None = None
+        self._trajectory: list[list[float]] = []
+        self._last_trajectory_sample_time: float | None = None
+        self.setMouseTracking(True)
+        self.setMinimumSize(400, 300)
+        self._start_current_trial()
+
+    def _start_current_trial(self) -> None:
+        if self._index >= len(self._specs):
+            self.all_trials_completed.emit()
+            return
+        self._trial_start_time = time.monotonic()
+        self._trajectory = []
+        self._last_trajectory_sample_time = None
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        spec = self._specs[self._index] if self._index < len(self._specs) else None
+        layout = spec["layout"] if spec is not None else self._layout
+
+        for letter, rect in layout.items():
+            key_rect = QRectF(rect.x, rect.y, rect.width, rect.height)
+            is_target = spec is not None and letter == spec["target_letter"]
+            painter.setPen(QColor("#455a64"))
+            painter.setBrush(QColor("#e53935") if is_target else QColor("#eceff1"))
+            painter.drawRoundedRect(key_rect, 6, 6)
+            painter.setPen(Qt.white if is_target else Qt.black)
+            painter.drawText(key_rect, Qt.AlignCenter, letter)
+
+        prompt_rect = QRectF(0, self.height() - PROMPT_HEIGHT_PX, self.width(), PROMPT_HEIGHT_PX)
+        painter.fillRect(prompt_rect, QColor("#263238"))
+        if spec is not None:
+            word = spec["word"]
+            word_start_index = next(i for i, s in enumerate(self._specs) if s["word"] == word and s["repetition_index"] == spec["repetition_index"])
+            typed_so_far = self._index - word_start_index
+            font = QFont()
+            font.setPixelSize(28)
+            painter.setFont(font)
+            painter.setPen(QColor("#78909c"))
+            painter.drawText(prompt_rect.adjusted(20, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, word[:typed_so_far])
+            remaining_rect = QRectF(prompt_rect)
+            metrics = painter.fontMetrics()
+            offset = metrics.horizontalAdvance(word[:typed_so_far])
+            remaining_rect.adjust(20 + offset, 0, 0, 0)
+            painter.setPen(Qt.white)
+            painter.drawText(remaining_rect, Qt.AlignVCenter | Qt.AlignLeft, word[typed_so_far:])
+
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._trial_start_time is None or self._index >= len(self._specs):
+            return
+        now = time.monotonic()
+        if (
+            self._last_trajectory_sample_time is not None
+            and now - self._last_trajectory_sample_time < self._TRAJECTORY_MIN_INTERVAL_S
+        ):
+            return
+        self._last_trajectory_sample_time = now
+        pos = event.position()
+        self._trajectory.append([now - self._trial_start_time, pos.x(), pos.y()])
+
+    def mousePressEvent(self, event) -> None:
+        if self._index >= len(self._specs) or self._trial_start_time is None:
+            return
+        spec = self._specs[self._index]
+        pos = event.position()
+        click_pos = (pos.x(), pos.y())
+        end_time = time.monotonic()
+        clicked_letter = key_at(spec["layout"], *click_pos)
+        hit = clicked_letter == spec["target_letter"]
+
+        result = TrialResult(
+            condition_label=spec["condition_label"],
+            block_type=spec["block_type"],
+            amplitude_px=spec["amplitude_px"],
+            width_px=spec["width_px"],
+            start_pos=spec["start_pos"],
+            target_pos=spec["target_pos"],
+            click_pos=click_pos,
+            start_time=self._trial_start_time,
+            end_time=end_time,
+            movement_time_s=end_time - self._trial_start_time,
+            hit=hit,
+            trial_index=spec["trial_index"],
+            repetition_index=spec["repetition_index"],
+            trajectory=self._trajectory,
+        )
+        self._index += 1
+        self.trial_completed.emit(result)
+        self._start_current_trial()
+        self.update()
+
+
+class FittsTestWindow(QMainWindow):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Fitts' Law Test")
+        self.resize(900, 700)
+
+        screen = QGuiApplication.primaryScreen()
+        geometry = screen.geometry() if screen is not None else None
+        self._screen_w = float(geometry.width()) if geometry else 1920.0
+        self._screen_h = float(geometry.height()) if geometry else 1080.0
+
+        self._logger = FittsResultsLogger()
+        self._canvas: FittsTrialCanvas | TypingTrialCanvas | None = None
+        self._typing_layout: dict | None = None
+        self._settings = FittsSettings()
+
+        self._create_menu()
+
+        self._stack = QStackedWidget()
+        self.setCentralWidget(self._stack)
+
+        self._setup_page = self._build_setup_page()
+        self._results_page = self._build_results_page()
+        self._stack.addWidget(self._setup_page)  # index 0
+        self._stack.addWidget(self._results_page)  # index 1 (trial canvas inserted at index 2 when started)
+
+    def _current_screen_geometry(self) -> tuple[float, float]:
+        """The width/height of whichever screen this window is actually
+        displayed on right now (not necessarily the primary screen) - used so
+        fullscreen layouts don't leave dead space when the window is on a
+        secondary monitor with a different resolution."""
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        geometry = screen.geometry() if screen is not None else None
+        w = float(geometry.width()) if geometry else 1920.0
+        h = float(geometry.height()) if geometry else 1080.0
+        return w, h
+
+    def _create_menu(self) -> None:
+        open_action = QAction("Open Results...", self)
+        open_action.triggered.connect(self._on_open_results)
+
+        save_action = QAction("Save Results As...", self)
+        save_action.triggered.connect(self._on_save_results)
+
+        file_menu = self.menuBar().addMenu("File")
+        file_menu.addAction(open_action)
+        file_menu.addAction(save_action)
+
+    # -- Setup page ----------------------------------------------------
+
+    def _save_settings(self) -> None:
+        """Save all current UI values to settings file."""
+        self._settings.set("mode", self._mode_combo.currentText())
+        self._settings.set("num_targets", self._num_targets_combo.currentText())
+        self._settings.set("amplitudes", self._amplitudes_edit.text())
+        self._settings.set("widths", self._widths_edit.text())
+        self._settings.set("repetitions", self._repetitions_spin.value())
+        self._settings.set("randomize_targets", self._randomize_targets_checkbox.isChecked())
+        self._settings.set("stimulus", self._stimulus_combo.currentText())
+        self._settings.set("icon", self._icon_combo.currentText())
+        self._settings.set("typing_key_size", self._typing_key_size_combo.currentText())
+        self._settings.set("typing_word_count", self._typing_word_count_spin.value())
+        self._settings.set("typing_reassign_widths", self._typing_reassign_widths_checkbox.isChecked())
+        self._settings.save()
+
+    def _build_setup_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        form = QFormLayout()
+        self._mode_combo = QComboBox()
+        self._mode_combo.addItems([MODE_ISO_STANDARD, MODE_ISO_EDGE, MODE_TYPING])
+        self._mode_combo.setCurrentText(self._settings.get("mode", MODE_ISO_STANDARD))
+        self._mode_combo.currentTextChanged.connect(self._update_mode_visibility)
+        self._mode_combo.currentTextChanged.connect(lambda _: self._save_settings())
+        form.addRow("Test mode", self._mode_combo)
+
+        self._stimulus_combo = QComboBox()
+        self._stimulus_combo.addItems(list(STIMULUS_CHOICES.keys()))
+        self._stimulus_combo.setCurrentText(self._settings.get("stimulus", "Circle (ISO standard)"))
+        self._stimulus_combo.currentTextChanged.connect(lambda _: self._save_settings())
+        self._stimulus_combo.currentTextChanged.connect(self._update_stimulus_visibility)
+        form.addRow("Stimulus", self._stimulus_combo)
+
+        self._icon_combo = QComboBox()
+        self._icon_combo.addItems(EMOJI_CHOICES)
+        self._icon_combo.setCurrentText(self._settings.get("icon", "🎯"))
+        self._icon_combo.currentTextChanged.connect(lambda _: self._save_settings())
+        form.addRow("Icon", self._icon_combo)
+
+        self._num_targets_combo = QComboBox()
+        self._num_targets_combo.addItems(["3", "6", "9", "12", "13"])
+        self._num_targets_combo.setCurrentText(self._settings.get("num_targets", "13"))
+        self._num_targets_combo.currentTextChanged.connect(lambda _: self._save_settings())
+        form.addRow("Circle targets (ISO modes)", self._num_targets_combo)
+
+        self._amplitudes_edit = QLineEdit(self._settings.get("amplitudes", "300,600"))
+        self._amplitudes_edit.textChanged.connect(lambda _: self._save_settings())
+        form.addRow("Amplitudes (px, comma-separated)", self._amplitudes_edit)
+
+        self._widths_edit = QLineEdit(self._settings.get("widths", "30,60"))
+        self._widths_edit.textChanged.connect(lambda _: self._save_settings())
+        form.addRow("Widths (px, comma-separated)", self._widths_edit)
+
+        self._repetitions_spin = QSpinBox()
+        self._repetitions_spin.setRange(1, 10)
+        self._repetitions_spin.setValue(self._settings.get("repetitions", 2))
+        self._repetitions_spin.valueChanged.connect(lambda _: self._save_settings())
+        form.addRow("Repetitions per condition (ISO modes)", self._repetitions_spin)
+
+        self._randomize_targets_checkbox = QCheckBox("Randomize target order")
+        self._randomize_targets_checkbox.setChecked(self._settings.get("randomize_targets", False))
+        self._randomize_targets_checkbox.stateChanged.connect(lambda _: self._save_settings())
+        form.addRow("", self._randomize_targets_checkbox)
+
+        self._typing_key_size_combo = QComboBox()
+        self._typing_key_size_combo.addItems([KEY_SIZE_CONSISTENT, KEY_SIZE_RANDOM])
+        self._typing_key_size_combo.setCurrentText(self._settings.get("typing_key_size", KEY_SIZE_CONSISTENT))
+        self._typing_key_size_combo.currentTextChanged.connect(lambda _: self._save_settings())
+        form.addRow("Key size (Typing Test)", self._typing_key_size_combo)
+
+        self._typing_word_count_spin = QSpinBox()
+        self._typing_word_count_spin.setRange(1, 30)
+        self._typing_word_count_spin.setValue(self._settings.get("typing_word_count", 8))
+        self._typing_word_count_spin.valueChanged.connect(lambda _: self._save_settings())
+        form.addRow("Number of words (Typing Test)", self._typing_word_count_spin)
+
+        self._typing_reassign_widths_checkbox = QCheckBox("Reassign random key sizes each word")
+        self._typing_reassign_widths_checkbox.setChecked(self._settings.get("typing_reassign_widths", False))
+        self._typing_reassign_widths_checkbox.stateChanged.connect(lambda _: self._save_settings())
+        form.addRow("", self._typing_reassign_widths_checkbox)
+
+        form.addRow(QLabel(""))  # blank separator line
+        self._access_method_combo = QComboBox()
+        self._access_method_combo.addItems(["HeadMouse", "EyeGaze", "Mouse", "Other"])
+        self._access_method_combo.setCurrentText("HeadMouse")
+        self._access_method_combo.currentTextChanged.connect(self._update_access_method_visibility)
+        form.addRow("Access method", self._access_method_combo)
+
+        self._access_method_other_edit = QLineEdit()
+        self._access_method_other_edit.setPlaceholderText("Specify other access method")
+        form.addRow("Other (specify)", self._access_method_other_edit)
+
+        self._session_notes_edit = QPlainTextEdit()
+        self._session_notes_edit.setMaximumHeight(60)
+        form.addRow("Session notes", self._session_notes_edit)
+
+        self._iso_only_fields = [self._num_targets_combo, self._amplitudes_edit, self._repetitions_spin, self._randomize_targets_checkbox]
+        self._iso_and_typing_fields = [self._widths_edit]
+        self._typing_only_fields = [self._typing_key_size_combo, self._typing_word_count_spin, self._typing_reassign_widths_checkbox]
+        self._non_typing_fields = [self._stimulus_combo]
+        self._form = form
+
+        group = QGroupBox("Setup")
+        group.setLayout(form)
+        layout.addWidget(group)
+
+        start_button = QPushButton("Start Test")
+        start_button.clicked.connect(self._on_start_clicked)
+        layout.addWidget(start_button)
+        layout.addStretch()
+
+        self._update_mode_visibility(self._mode_combo.currentText())
+        self._update_access_method_visibility(self._access_method_combo.currentText())
+        self._update_stimulus_visibility(self._stimulus_combo.currentText())
+        return page
+
+    def _update_mode_visibility(self, mode: str) -> None:
+        is_iso = mode in (MODE_ISO_STANDARD, MODE_ISO_EDGE)
+        is_typing = mode == MODE_TYPING
+
+        def _set_visible(fields: list, visible: bool) -> None:
+            for field in fields:
+                field.setVisible(visible)
+                label = self._form.labelForField(field)
+                if label is not None:
+                    label.setVisible(visible)
+
+        _set_visible(self._iso_only_fields, is_iso)
+        _set_visible(self._iso_and_typing_fields, is_iso or is_typing)
+        _set_visible(self._typing_only_fields, is_typing)
+        _set_visible(self._non_typing_fields, is_iso)
+
+    def _update_access_method_visibility(self, access_method: str) -> None:
+        is_other = access_method == "Other"
+        self._access_method_other_edit.setVisible(is_other)
+        label = self._form.labelForField(self._access_method_other_edit)
+        if label is not None:
+            label.setVisible(is_other)
+
+    def _update_stimulus_visibility(self, stimulus: str) -> None:
+        is_icon = stimulus == "Icon"
+        self._icon_combo.setVisible(is_icon)
+        label = self._form.labelForField(self._icon_combo)
+        if label is not None:
+            label.setVisible(is_icon)
+
+    def _resolve_stimulus(self) -> Stimulus | None:
+        choice = self._stimulus_combo.currentText()
+        if choice == "Custom image...":
+            filepath, _ = QFileDialog.getOpenFileName(self, "Choose target image", "", "Images (*.png *.jpg *.jpeg *.gif)")
+            if not filepath:
+                return None
+            pixmap = QPixmap(filepath)
+            if pixmap.isNull():
+                QMessageBox.warning(self, "Invalid image", "Could not load that image; using circle stimulus instead.")
+                return CircleStimulus()
+            return ImageStimulus(pixmap)
+        if choice == "Icon":
+            return EmojiStimulus(self._icon_combo.currentText())
+        return CircleStimulus()
+
+    def _on_start_clicked(self) -> None:
+        mode = self._mode_combo.currentText()
+        self._screen_w, self._screen_h = self._current_screen_geometry()
+        stimulus = None
+        if mode != MODE_TYPING:
+            stimulus = self._resolve_stimulus()
+            if stimulus is None:
+                return  # user cancelled the image picker
+
+        self._logger = FittsResultsLogger()
+        access_method = self._access_method_combo.currentText()
+        self._logger.metadata["access_method"] = access_method
+        if access_method == "Other":
+            self._logger.metadata["access_method_other"] = self._access_method_other_edit.text() or None
+        self._logger.metadata["notes"] = self._session_notes_edit.toPlainText() or None
+        self._exclude_repetitions_spin.blockSignals(True)
+        self._exclude_repetitions_spin.setValue(0)
+        self._exclude_repetitions_spin.blockSignals(False)
+
+        try:
+            if mode == MODE_TYPING:
+                trial_specs = self._build_typing_specs()
+            else:
+                trial_specs = self._build_iso_specs(include_edge=(mode == MODE_ISO_EDGE))
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid setup", str(exc))
+            return
+
+        if self._canvas is not None:
+            self._stack.removeWidget(self._canvas)
+            self._canvas.deleteLater()
+
+        if mode == MODE_TYPING:
+            self._canvas = TypingTrialCanvas(trial_specs, self._typing_layout)
+        else:
+            self._canvas = FittsTrialCanvas(trial_specs, stimulus)
+        self._canvas.trial_completed.connect(self._on_trial_completed)
+        self._canvas.all_trials_completed.connect(self._on_all_trials_completed)
+        self._stack.addWidget(self._canvas)
+        self._stack.setCurrentWidget(self._canvas)
+        self.showFullScreen()
+
+    def _build_iso_specs(self, include_edge: bool) -> list[dict]:
+        num_targets = int(self._num_targets_combo.currentText())
+        amplitudes = _parse_number_list(self._amplitudes_edit.text())
+        widths = _parse_number_list(self._widths_edit.text())
+        if not amplitudes or not widths:
+            raise ValueError("Provide at least one amplitude and one width")
+        repetitions = self._repetitions_spin.value()
+        randomize = self._randomize_targets_checkbox.isChecked()
+        center = (self._screen_w / 2, self._screen_h / 2)
+
+        specs: list[dict] = []
+        trial_index = 0
+        conditions = build_condition_set(amplitudes, widths)
+        for condition in conditions:
+            safe_amplitude = min(
+                condition.amplitude_px,
+                max_safe_circle_radius(self._screen_w, self._screen_h, condition.width_px),
+            )
+            positions = generate_circle_positions(center, num_targets, safe_amplitude)
+            sequence = multi_directional_sequence(num_targets)
+            last_pos = center
+            for rep in range(repetitions):
+                rep_sequence = list(sequence)
+                if randomize:
+                    random.shuffle(rep_sequence)
+                for idx in rep_sequence:
+                    target_pos = positions[idx]
+                    specs.append(
+                        {
+                            "condition_label": condition.label,
+                            "block_type": "circle",
+                            "amplitude_px": condition.amplitude_px,
+                            "width_px": condition.width_px,
+                            "start_pos": last_pos,
+                            "target_pos": target_pos,
+                            "trial_index": trial_index,
+                            "repetition_index": rep,
+                        }
+                    )
+                    trial_index += 1
+                    last_pos = target_pos
+
+        if include_edge:
+            edge_points = generate_edge_extremity_targets(self._screen_w, self._screen_h, num_targets=num_targets)
+            for width in widths:
+                last_pos = center
+                for rep in range(repetitions):
+                    rep_edge_points = list(edge_points)
+                    if randomize:
+                        random.shuffle(rep_edge_points)
+                    for point in rep_edge_points:
+                        amplitude = math.dist(last_pos, point)
+                        specs.append(
+                            {
+                                "condition_label": f"edge W={width:.0f}",
+                                "block_type": "edge",
+                                "amplitude_px": amplitude,
+                                "width_px": width,
+                                "start_pos": last_pos,
+                                "target_pos": point,
+                                "trial_index": trial_index,
+                                "repetition_index": rep,
+                            }
+                        )
+                        trial_index += 1
+                        last_pos = point
+                        # step back to center between reaches, alternating out and back
+                        specs.append(
+                            {
+                                "condition_label": f"edge W={width:.0f}",
+                                "block_type": "edge",
+                                "amplitude_px": amplitude,
+                                "width_px": width,
+                                "start_pos": last_pos,
+                                "target_pos": center,
+                                "trial_index": trial_index,
+                                "repetition_index": rep,
+                            }
+                        )
+                        trial_index += 1
+                        last_pos = center
+        return specs
+
+    def _build_typing_specs(self) -> list[dict]:
+        key_size_mode = "random" if self._typing_key_size_combo.currentText() == KEY_SIZE_RANDOM else "consistent"
+        widths = _parse_number_list(self._widths_edit.text())
+        if not widths:
+            raise ValueError("Provide at least one width")
+        reassign_each_word = self._typing_reassign_widths_checkbox.isChecked()
+        rng = random.Random()
+
+        def _make_layout() -> dict:
+            return build_keyboard_layout(
+                self._screen_w,
+                self._screen_h,
+                key_size_mode,
+                possible_widths=widths,
+                rng=rng,
+            )
+
+        layout = _make_layout()
+        self._typing_layout = layout
+
+        num_words = self._typing_word_count_spin.value()
+        words = [rng.choice(TYPING_WORDS) for _ in range(num_words)]
+
+        specs: list[dict] = []
+        trial_index = 0
+        last_pos = (self._screen_w / 2, self._screen_h / 2)
+        for word_index, word in enumerate(words):
+            if word_index > 0 and reassign_each_word and key_size_mode == "random":
+                layout = _make_layout()
+            for letter in word:
+                key = layout[letter]
+                dist = math.dist(last_pos, key.center)
+                specs.append(
+                    {
+                        "condition_label": f"Word {word_index + 1}: {word}",
+                        "block_type": "typing",
+                        "amplitude_px": dist,
+                        "width_px": key.width,
+                        "start_pos": last_pos,
+                        "target_pos": key.center,
+                        "target_letter": letter,
+                        "word": word,
+                        "layout": layout,
+                        "trial_index": trial_index,
+                        "repetition_index": word_index,
+                    }
+                )
+                trial_index += 1
+                last_pos = key.center
+        return specs
+
+    # -- Trial callbacks -------------------------------------------------
+
+    def _on_trial_completed(self, result: TrialResult) -> None:
+        self._logger.add_trial(result)
+
+    def _on_all_trials_completed(self) -> None:
+        if self._logger.trials:
+            autosave_path = self._logger.save()
+            print(f"[Fitts] Raw trial data auto-saved to {autosave_path}")
+        self._populate_results_page()
+        self.showNormal()
+        self._stack.setCurrentWidget(self._results_page)
+
+    # -- Results page ------------------------------------------------------
+
+    def _build_results_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        self._score_label = QLabel("")
+        layout.addWidget(self._score_label)
+
+        exclude_row = QHBoxLayout()
+        exclude_row.addWidget(QLabel("Exclude first N repetitions per condition (e.g. practice trial):"))
+        self._exclude_repetitions_spin = QSpinBox()
+        self._exclude_repetitions_spin.setRange(0, 10)
+        self._exclude_repetitions_spin.valueChanged.connect(lambda _: self._populate_results_page())
+        exclude_row.addWidget(self._exclude_repetitions_spin)
+        exclude_row.addStretch()
+        layout.addLayout(exclude_row)
+
+        self._results_table = QTableWidget()
+        self._results_table.setColumnCount(7)
+        self._results_table.setHorizontalHeaderLabels(
+            ["Condition", "Trials", "IDe (bits)", "Mean MT (s)", "Error rate", "Throughput (bits/s)", "We (px)"]
+        )
+        self._results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(self._results_table)
+
+        self._throughput_plot = pg.PlotWidget()
+        self._throughput_plot.setLabel("left", "Throughput (bits/s)")
+        self._throughput_plot.getAxis("bottom").setStyle(showValues=False)
+        self._throughput_plot.setMaximumHeight(220)
+        layout.addWidget(self._throughput_plot)
+
+        button_row = QHBoxLayout()
+        save_button = QPushButton("Save Results As...")
+        save_button.clicked.connect(self._on_save_results)
+        open_button = QPushButton("Open Results...")
+        open_button.clicked.connect(self._on_open_results)
+        again_button = QPushButton("Run Again")
+        again_button.clicked.connect(self._on_start_clicked)
+        back_button = QPushButton("Back to Setup")
+        back_button.clicked.connect(self._on_back_to_setup_clicked)
+        button_row.addWidget(save_button)
+        button_row.addWidget(open_button)
+        button_row.addWidget(again_button)
+        button_row.addWidget(back_button)
+        layout.addLayout(button_row)
+        return page
+
+    def _on_back_to_setup_clicked(self) -> None:
+        self.showNormal()
+        self._stack.setCurrentWidget(self._setup_page)
+
+    def _populate_results_page(self) -> None:
+        exclude_repetitions = self._exclude_repetitions_spin.value()
+        stats = FittsStats(self._logger.trials)
+        summary = stats.summary(exclude_repetitions=exclude_repetitions)
+
+        self._score_label.setText(
+            f"Overall throughput: {summary['overall_throughput_bits_per_s']:.2f} bits/s   "
+            f"Overall error rate: {summary['overall_error_rate']:.1%}   "
+            f"({summary['trial_count']} of {len(self._logger.trials)} trials, after exclusions)"
+        )
+
+        conditions = summary["conditions"]
+        self._results_table.setRowCount(len(conditions) + 1)
+        overall_values = [
+            "Overall",
+            str(summary["trial_count"]),
+            f"{summary['overall_index_of_difficulty_bits']:.2f}",
+            f"{summary['overall_mean_movement_time_s']:.3f}",
+            f"{summary['overall_error_rate']:.1%}",
+            f"{summary['overall_throughput_bits_per_s']:.2f}",
+            f"{summary['overall_effective_width_px']:.1f}",
+        ]
+        for col, value in enumerate(overall_values):
+            self._results_table.setItem(0, col, QTableWidgetItem(value))
+        for row, data in enumerate(conditions.values(), start=1):
+            values = [
+                data["condition_label"],
+                str(data["trial_count"]),
+                f"{data['index_of_difficulty_bits']:.2f}",
+                f"{data['mean_movement_time_s']:.3f}",
+                f"{data['error_rate']:.1%}",
+                f"{data['throughput_bits_per_s']:.2f}",
+                f"{data['effective_width_px']:.1f}",
+            ]
+            for col, value in enumerate(values):
+                self._results_table.setItem(row, col, QTableWidgetItem(value))
+
+        self._throughput_plot.clear()
+        throughputs = [data["throughput_bits_per_s"] for data in conditions.values()]
+        if throughputs:
+            xs = list(range(len(throughputs)))
+            bar_item = pg.BarGraphItem(x=xs, height=throughputs, width=0.6, brush="#1e88e5")
+            self._throughput_plot.addItem(bar_item)
+
+    def _on_save_results(self) -> None:
+        default_name = str(self._logger.output_dir / f"fitts_session_{int(time.time())}.json")
+        filepath, _ = QFileDialog.getSaveFileName(self, "Save Fitts' Law results", default_name, "JSON (*.json)")
+        if not filepath:
+            return
+        saved_path = self._logger.save(filepath)
+        QMessageBox.information(self, "Saved", f"Results saved to {saved_path}")
+
+    def _on_open_results(self) -> None:
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Open Fitts' Law results", str(self._logger.output_dir), "JSON (*.json)"
+        )
+        if not filepath:
+            return
+        self._logger = FittsResultsLogger()
+        self._logger.load(filepath)
+        self._populate_results_page()
+        self.showNormal()
+        self._stack.setCurrentWidget(self._results_page)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape and self._canvas is not None and self._stack.currentWidget() is self._canvas:
+            self._on_back_to_setup_clicked()
+            return
+        super().keyPressEvent(event)
+
+
+def launch_fitts_test() -> FittsTestWindow:
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication(sys.argv[:1])
+    window = FittsTestWindow()
+    window.show()
+    return window
+
+
+if __name__ == "__main__":
+    app_window = launch_fitts_test()
+    from PySide6.QtWidgets import QApplication
+
+    sys.exit(QApplication.instance().exec())

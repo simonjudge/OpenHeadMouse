@@ -92,6 +92,7 @@ class App:
         self._playback_session = None  # for loading/replaying recorded sessions
         self._last_target = None
         self._session_viewer_window = None  # keep a reference so Qt/PySide doesn't GC it
+        self._fitts_test_window = None  # keep a reference so Qt/PySide doesn't GC it
 
         from core.recorder import Recorder
 
@@ -129,6 +130,7 @@ class App:
         self.window.kx_changed.connect(self._on_kx_changed)
         self.window.ky_changed.connect(self._on_ky_changed)
         self.window.load_session_requested.connect(self._on_load_session_requested)
+        self.window.fitts_test_requested.connect(self._on_fitts_test_requested)
 
         if auto_start_listeners:
             self.headmouse.start()
@@ -270,6 +272,21 @@ class App:
         # for the window and garbage-collects it as soon as this method
         # returns, so nothing ever appears on screen.
         self._session_viewer_window = visualize_session_native()
+
+    def _on_fitts_test_requested(self) -> None:
+        """Open the standalone Fitts' Law test suite."""
+        from fitts_law.fitts_test import launch_fitts_test
+
+        if self._fitts_test_window is not None:
+            try:
+                self._fitts_test_window.show()
+                self._fitts_test_window.raise_()
+                self._fitts_test_window.activateWindow()
+                return
+            except RuntimeError:
+                self._fitts_test_window = None
+
+        self._fitts_test_window = launch_fitts_test()
 
     def _drain_latest(self):
         """Pop every currently-queued sample and return only the newest one from the live provider."""
