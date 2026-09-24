@@ -95,6 +95,9 @@ if __name__ == "__main__":
             wifi_ip_address=device.ip_address,
             wifi_port_send=9000,
             wifi_port_receive=8001,
+            axes_alignment=config.get("providers", {}).get("ximu3", {}).get("axes_alignment", "+X-Z+Y"),
+            ahrs_axes_convention=config.get("providers", {}).get("ximu3", {}).get("ahrs_axes_convention", 2),
+            target_rate_hz=config.get("providers", {}).get("ximu3", {}).get("target_rate_hz", 200),
         )
     else:
         provider = make_provider(args.provider, config)

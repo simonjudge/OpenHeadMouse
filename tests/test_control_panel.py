@@ -11,6 +11,14 @@ def test_control_panel_builds(qt_app):
     assert panel.mouse_control_enabled is True
 
 
+def test_control_panel_accepts_initial_toggle_values(qt_app):
+    from gui.control_panel import ControlPanel
+
+    panel = ControlPanel(recording_enabled=False, mouse_control_enabled=False)
+    assert panel.recording_enabled is False
+    assert panel.mouse_control_enabled is False
+
+
 def test_control_panel_toggles_recording(qt_app):
     from gui.control_panel import ControlPanel
 

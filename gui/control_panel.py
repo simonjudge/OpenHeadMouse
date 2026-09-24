@@ -17,15 +17,20 @@ class ControlPanel(QWidget):
     recording_toggled = Signal(bool)
     mouse_control_toggled = Signal(bool)
 
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        parent=None,
+        recording_enabled: bool = True,
+        mouse_control_enabled: bool = True,
+    ):
         super().__init__(parent)
 
         self._record_check = QCheckBox("Recording")
-        self._record_check.setChecked(True)
+        self._record_check.setChecked(recording_enabled)
         self._record_check.toggled.connect(self.recording_toggled)
 
         self._mouse_check = QCheckBox("Mouse Control")
-        self._mouse_check.setChecked(False)
+        self._mouse_check.setChecked(mouse_control_enabled)
         self._mouse_check.toggled.connect(self.mouse_control_toggled)
 
         box = QGroupBox("Subsystems")

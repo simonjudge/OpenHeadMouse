@@ -1,8 +1,8 @@
 {
-  "mode": "ISO Standard + Edge Targets",
-  "num_targets": "3",
-  "amplitudes": "160,320,640",
-  "widths": "16,32,64",
+  "mode": "Typing Test",
+  "num_targets": "9",
+  "amplitudes": "100",
+  "widths": "50",
   "repetitions": 1,
   "randomize_targets": false,
   "stimulus": "Icon",

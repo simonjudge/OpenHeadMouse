@@ -7,6 +7,8 @@ plan's M6 note. Requires QT_QPA_PLATFORM=offscreen (see conftest.py).
 """
 
 import time
+import copy
+import json
 
 import pytest
 
@@ -39,6 +41,55 @@ def test_setup_panel_start_stop_signals(qt_app):
     assert not panel._stop_button.isEnabled()
 
 
+def test_setup_panel_only_shows_airpods_when_enabled(qt_app):
+    from gui.setup_gui import SetupPanel
+
+    non_mac_panel = SetupPanel(show_airpods=False)
+    assert non_mac_panel._provider_combo.findData("airpods") == -1
+
+    mac_panel = SetupPanel(show_airpods=True)
+    assert mac_panel._provider_combo.findData("airpods") != -1
+
+
+def test_ximu3_ignore_magnetometer_button_visibility_and_signal(qt_app):
+    from gui.setup_gui import SetupPanel
+
+    panel = SetupPanel()
+    # uniface is selected by default; the xIMU3-only button should be hidden.
+    assert panel._ximu3_ignore_mag_button.isHidden()
+
+    ximu3_index = panel._provider_combo.findData("ximu3")
+    panel._provider_combo.setCurrentIndex(ximu3_index)
+    assert not panel._ximu3_ignore_mag_button.isHidden()
+
+    seen = []
+    panel.ximu3_ignore_magnetometer_toggled.connect(seen.append)
+    panel._ximu3_ignore_mag_button.click()
+    assert seen == [True]
+    assert "On" in panel._ximu3_ignore_mag_button.text()
+    assert panel.ximu3_ignore_magnetometer_enabled is True
+
+    panel._ximu3_ignore_mag_button.click()
+    assert seen == [True, False]
+    assert "Off" in panel._ximu3_ignore_mag_button.text()
+
+    # Switching away from xIMU3 hides the button again.
+    panel._provider_combo.setCurrentIndex(panel._provider_combo.findData("uniface"))
+    assert panel._ximu3_ignore_mag_button.isHidden()
+
+
+def test_set_ximu3_ignore_magnetometer_does_not_emit_signal(qt_app):
+    from gui.setup_gui import SetupPanel
+
+    panel = SetupPanel()
+    seen = []
+    panel.ximu3_ignore_magnetometer_toggled.connect(seen.append)
+
+    panel.set_ximu3_ignore_magnetometer(True)
+    assert panel.ximu3_ignore_magnetometer_enabled is True
+    assert seen == []
+
+
 def test_telemetry_widget_updates_labels(qt_app):
     from gui.vis_gui import TelemetryWidget
 
@@ -51,12 +102,109 @@ def test_telemetry_widget_updates_labels(qt_app):
 def test_headmouse_window_builds_and_reports_status(qt_app):
     from gui.headmouse_gui import HeadMouseWindow
 
-    window = HeadMouseWindow(initial_kx=8.0, initial_ky=-8.0, hotkey="<cmd>+<alt>+m")
+    window = HeadMouseWindow(initial_kx=8.0, initial_ky=-8.0, hotkey="<esc>")
     assert window._kx_spin.value() == 8.0
     assert window._ky_spin.value() == -8.0
 
     window.set_status("active")
     assert window._status_label.text() == "ACTIVE"
+
+    window.set_hotkey_status("Hotkey unavailable")
+    assert window._hotkey_label.text() == "Hotkey unavailable"
+
+
+def test_default_toggle_hotkey_is_escape(qt_app):
+    from main import load_config
+    from core.headmouse import HeadMouse, ScreenBounds
+
+    assert load_config()["hotkeys"]["toggle_tracking"] == "<esc>"
+    headmouse = HeadMouse(ScreenBounds(800, 600), mouse_controller=FakeMouseController())
+    assert headmouse._hotkey_str == "<esc>"
+
+
+def test_headmouse_window_exposes_dsp_mode_and_filter_controls(qt_app):
+    from gui.headmouse_gui import HeadMouseWindow
+
+    window = HeadMouseWindow(initial_kx=8.0, initial_ky=-8.0)
+    seen = []
+    window.dsp_config_changed.connect(seen.append)
+
+    assert not window._absolute_options.isHidden()
+    assert window._velocity_options.isHidden()
+    assert not window._one_euro_check.isHidden()
+    window._one_euro_check.setChecked(True)
+    window._filter_preset_combo.setCurrentText("High filtering")
+    window._mode_combo.setCurrentText("Velocity")
+    assert window._absolute_options.isHidden()
+    assert not window._velocity_options.isHidden()
+    assert not window._filter_options.isHidden()
+    window._gamma_spin.setValue(1.5)
+
+    assert seen[-1]["mode"] == "velocity"
+    assert seen[-1]["gamma"] == pytest.approx(1.5)
+    assert seen[-1]["one_euro_enabled"] is True
+    assert seen[-1]["one_euro_min_cutoff"] == pytest.approx(0.4)
+    assert seen[-1]["one_euro_beta"] == pytest.approx(0.15)
+
+
+def test_headmouse_window_preserves_configured_velocity_mode_when_filter_changes(qt_app):
+    from gui.headmouse_gui import HeadMouseWindow
+
+    config = {
+        "mode": "velocity",
+        "velocity": {"kx": 2.0, "ky": 3.0, "gamma": 1.4, "deadband_deg_s": 2.5},
+        "one_euro_filter": {"enabled": False, "min_cutoff": 0.8, "beta": 0.2, "d_cutoff": 1.2},
+        "auto_zero": {"enabled": True},
+        "yaw_drift_correction": {"enabled": True},
+    }
+    window = HeadMouseWindow(initial_kx=8.0, initial_ky=-8.0, initial_dsp_config=config)
+    seen = []
+    window.dsp_config_changed.connect(seen.append)
+
+    assert window._mode_combo.currentData() == "velocity"
+    assert window._velocity_kx_spin.value() == pytest.approx(2.0)
+    assert window._auto_zero_check.isChecked()
+    window._one_euro_check.setChecked(True)
+
+    assert seen[-1]["mode"] == "velocity"
+    assert seen[-1]["one_euro_enabled"] is True
+
+
+def test_dsp_numeric_formatting_steps_and_tooltips(qt_app):
+    from gui.headmouse_gui import HeadMouseWindow
+
+    window = HeadMouseWindow(initial_kx=8.0, initial_ky=-8.0)
+
+    assert window._kx_spin.text() == "8"
+    assert window._ky_spin.text() == "-8"
+    assert window._velocity_kx_spin.text() == "1"
+    assert window._velocity_ky_spin.text() == "1"
+    assert window._gamma_spin.singleStep() == pytest.approx(0.1)
+    assert window._deadband_spin.singleStep() == pytest.approx(0.1)
+
+    controls = (
+        window._mode_combo,
+        window._kx_spin,
+        window._ky_spin,
+        window._velocity_kx_spin,
+        window._velocity_ky_spin,
+        window._gamma_spin,
+        window._deadband_spin,
+        window._one_euro_check,
+        window._filter_preset_combo,
+        window._auto_zero_check,
+        window._drift_check,
+    )
+    assert all(control.toolTip() for control in controls)
+
+
+def test_filter_presets_progress_from_responsive_to_steady(qt_app):
+    from gui.headmouse_gui import HeadMouseWindow, ONE_EURO_PRESETS
+
+    window = HeadMouseWindow(initial_kx=8.0, initial_ky=-8.0)
+    assert [window._filter_preset_combo.itemText(i) for i in range(3)] == list(ONE_EURO_PRESETS)
+    assert ONE_EURO_PRESETS["Low filtering"]["min_cutoff"] > ONE_EURO_PRESETS["Medium filtering"]["min_cutoff"]
+    assert ONE_EURO_PRESETS["Medium filtering"]["min_cutoff"] > ONE_EURO_PRESETS["High filtering"]["min_cutoff"]
 
 
 class FakeMouseController:
@@ -81,6 +229,7 @@ def test_app_wires_mock_provider_through_to_headmouse(qt_app):
     app = App(config, poll_hz=90.0, auto_start_listeners=False, mouse_controller=FakeMouseController())
     try:
         app._on_start_requested("mock")
+        assert app.headmouse._mouse.position == (400.0, 400.0)
         time.sleep(0.3)  # let the MockProvider thread push a few samples
 
         app._poll()
@@ -119,3 +268,135 @@ def test_app_recenter_zeroes_out_current_pose(qt_app):
     finally:
         app._on_stop_requested()
         app.shutdown()
+
+
+def test_app_starts_and_stops_airpods_helper_with_provider(qt_app, monkeypatch, tmp_path):
+    from main import App, load_config
+    import main as main_module
+
+    run_commands = []
+    kill_calls = []
+    helper_alive = True
+    pid_path = tmp_path / "airpods-helper.pid"
+    log_path = tmp_path / "airpods-helper.log"
+
+    def fake_run(command, **kwargs):
+        run_commands.append(command)
+        pid_path.write_text("12345")
+
+    def fake_kill(pid, sig):
+        nonlocal helper_alive
+        kill_calls.append((pid, sig))
+        if not helper_alive:
+            raise ProcessLookupError
+        if sig != 0:
+            helper_alive = False
+
+    monkeypatch.setattr(main_module.sys, "platform", "darwin")
+    monkeypatch.setattr(main_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(main_module.os, "kill", fake_kill)
+    monkeypatch.setattr(main_module, "AIRPODS_HELPER_PID_PATH", pid_path)
+    monkeypatch.setattr(main_module, "AIRPODS_HELPER_LOG_PATH", log_path)
+
+    config = copy.deepcopy(load_config())
+    config["providers"]["airpods"]["udp_port"] = 5997
+    app = App(config, poll_hz=90.0, auto_start_listeners=False, mouse_controller=FakeMouseController())
+    try:
+        airpods_index = app.window.setup_panel._provider_combo.findData("airpods")
+        assert airpods_index != -1
+
+        app._on_start_requested("airpods")
+        assert run_commands[0][:2] == ["/usr/bin/osascript", "-e"]
+        assert 'tell application "Terminal"' in run_commands[0][2]
+        assert app._airpods_helper_pid == 12345
+        assert app._provider is not None
+
+        app._on_stop_requested()
+        assert (12345, main_module.signal.SIGTERM) in kill_calls
+        assert app._airpods_helper_pid is None
+        assert app._provider is None
+    finally:
+        app.shutdown()
+
+
+def test_main_gui_settings_persist_and_reload(qt_app, tmp_path):
+    from main import App, load_config
+
+    config_path = tmp_path / "config.json"
+    config = copy.deepcopy(load_config())
+    config_path.write_text(json.dumps(config))
+
+    app = App(
+        config,
+        auto_start_listeners=False,
+        mouse_controller=FakeMouseController(),
+        config_path=config_path,
+    )
+    try:
+        setup = app.window.setup_panel
+        setup._provider_combo.setCurrentIndex(setup._provider_combo.findData("ximu3"))
+        setup._ximu3_ignore_mag_button.setChecked(True)
+        app.window.controls._record_check.setChecked(False)
+        app.window.controls._mouse_check.setChecked(False)
+        app.window._kx_spin.setValue(21)
+        app.window._ky_spin.setValue(-17)
+        app.window._mode_combo.setCurrentIndex(app.window._mode_combo.findData("velocity"))
+        app.window._velocity_kx_spin.setValue(2)
+        app.window._velocity_ky_spin.setValue(3)
+        app.window._gamma_spin.setValue(1.8)
+        app.window._deadband_spin.setValue(4.5)
+        app.window._one_euro_check.setChecked(False)
+        app.window._filter_preset_combo.setCurrentText("High filtering")
+        app.window._auto_zero_check.setChecked(False)
+        app.window._drift_check.setChecked(True)
+    finally:
+        app.shutdown()
+
+    saved = json.loads(config_path.read_text())
+    assert saved["active_provider"] == "ximu3"
+    assert saved["ui"] == {
+        "recording_enabled": False,
+        "mouse_control_enabled": False,
+    }
+    assert saved["providers"]["ximu3"]["ahrs_ignore_magnetometer"] is True
+    assert saved["dsp"]["absolute"] == {"kx": 21.0, "ky": -17.0}
+    assert saved["dsp"]["mode"] == "velocity"
+    assert saved["dsp"]["velocity"] == {
+        "kx": 2.0,
+        "ky": 3.0,
+        "gamma": 1.8,
+        "deadband_deg_s": 4.5,
+    }
+    assert saved["dsp"]["one_euro_filter"] == {
+        "enabled": False,
+        "min_cutoff": 0.4,
+        "beta": 0.15,
+        "d_cutoff": 1.0,
+    }
+    assert saved["dsp"]["auto_zero"]["enabled"] is False
+    assert saved["dsp"]["yaw_drift_correction"]["enabled"] is True
+
+    reloaded_app = App(
+        load_config(config_path),
+        auto_start_listeners=False,
+        mouse_controller=FakeMouseController(),
+        config_path=config_path,
+    )
+    try:
+        assert reloaded_app.window.setup_panel._provider_combo.currentData() == "ximu3"
+        assert reloaded_app.window.setup_panel.ximu3_ignore_magnetometer_enabled is True
+        assert reloaded_app.window.controls.recording_enabled is False
+        assert reloaded_app.window.controls.mouse_control_enabled is False
+        assert reloaded_app.window._kx_spin.value() == 21
+        assert reloaded_app.window._ky_spin.value() == -17
+        assert reloaded_app.window._mode_combo.currentData() == "velocity"
+        assert reloaded_app.window._velocity_kx_spin.value() == 2
+        assert reloaded_app.window._velocity_ky_spin.value() == 3
+        assert reloaded_app.window._gamma_spin.value() == pytest.approx(1.8)
+        assert reloaded_app.window._deadband_spin.value() == pytest.approx(4.5)
+        assert reloaded_app.window._one_euro_check.isChecked() is False
+        assert reloaded_app.window._filter_preset_combo.currentText() == "High filtering"
+        assert reloaded_app.window._auto_zero_check.isChecked() is False
+        assert reloaded_app.window._drift_check.isChecked() is True
+    finally:
+        reloaded_app.shutdown()

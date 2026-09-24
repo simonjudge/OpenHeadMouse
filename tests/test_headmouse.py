@@ -69,6 +69,29 @@ def test_process_frame_clamps_to_screen_bounds():
     assert hm._mouse.position == (1919.0, 1079.0)
 
 
+def test_process_frame_clamps_to_virtual_desktop_with_negative_origin():
+    hm, _clock = make_headmouse(width=100, height=80)
+    hm.screen_bounds.origin_x = -100
+    hm.screen_bounds.origin_y = -40
+    hm._position = [-50.0, -20.0]
+    hm.set_tracking_state(True)
+
+    hm.process_frame(delta_x=-1000.0, delta_y=-1000.0, timestamp=0.0)
+    assert hm._mouse.position == (-100.0, -40.0)
+
+    hm.process_frame(delta_x=1000.0, delta_y=1000.0, timestamp=0.0)
+    assert hm._mouse.position == (-1.0, 39.0)
+
+
+def test_center_cursor_moves_to_the_active_screen_center():
+    hm, _clock = make_headmouse(width=100, height=80)
+    hm.set_screen_bounds(ScreenBounds(width=100, height=80, origin_x=-100, origin_y=-40))
+
+    assert hm.center_cursor() == (-50.0, 0.0)
+    assert hm._mouse.position == (-50.0, 0.0)
+    assert hm._position == [-50.0, 0.0]
+
+
 def test_disable_prevents_reactivation():
     hm, _clock = make_headmouse()
     hm.disable()
@@ -86,6 +109,11 @@ def test_state_callback_fires_on_transitions():
     hm.set_tracking_state(False)
     hm.disable()
     assert seen == [TrackingState.ACTIVE, TrackingState.PAUSED, TrackingState.DISABLED]
+
+
+def test_macos_access_check_is_noop_on_non_macos(monkeypatch):
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    HeadMouse._check_macos_input_access()
 
 
 def test_own_injected_move_does_not_trigger_corner_failsafe():

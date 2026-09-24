@@ -1,7 +1,8 @@
 """xIMU3 IMU provider (spec section 4, direct Python SDK integration).
 
 Connects to an xIMU3 IMU device (USB or WiFi AP mode; Bluetooth excluded per
-spec), auto-configures the hardware `axesAlignment` based on mount location,
+spec), auto-configures the hardware `axesAlignment` and AHRS axes convention based
+on the configured reference frame,
 and streams quaternions at up to 400 Hz.
 
 COORDINATE FRAME & AXES ALIGNMENT LOGIC:
@@ -11,6 +12,8 @@ Reference frame (right-handed):
   +X: Forward (direction of head gaze, out of nose)
   +Y: Right (ear-to-ear lateral axis, toward right ear)
   +Z: Down (vertical, toward neck/floor)
+  This is the right-handed NED convention. The xIMU3 AHRS axes convention
+  value for NED is 2.
 
 xIMU3 Physical Axes:
   The device has three axes printed with arrows: X, Y, Z
@@ -34,10 +37,11 @@ Example: Left Temple Mounting (USB Pointing Backward)
   Hold the sensor flat against the left side of the head with USB pointing back:
 
   1. Physical +X arrow points Forward ✓ → Logical X = +X
-  2. Physical +Z arrow points into the head (toward right ear) ✓ → Logical Y = +Z
-  3. Physical +Y arrow points Up ✗ (we need Down) → Logical Z = -Y
+  2. Physical +Z arrow points out of the head (from the left ear) ✓
+     → Logical Y = -Z
+  3. Physical +Y arrow points Down ✓ → Logical Z = +Y
 
-  Result: axes_alignment = "+X+Z-Y"
+  Result: axes_alignment = "+X-Z+Y"
 
 The xIMU3 SDK returns quaternions already aligned per this configuration,
 requiring no software transformation.
@@ -165,7 +169,9 @@ class Ximu3Provider(BaseProvider):
         wifi_ip_address: str = "192.168.1.1",  # WiFi AP IP address
         wifi_port_send: int = 9000,  # WiFi AP send port
         wifi_port_receive: int = 8001,  # WiFi AP receive port
-        axes_alignment: str = "+X+Z+Y",  # left temple (default) or "+X-Z+Y" for right temple
+        axes_alignment: str = "+X-Z+Y",
+        ahrs_axes_convention: int = 2,
+        ahrs_ignore_magnetometer: bool = False,
         target_rate_hz: int = 200,
         queue_maxsize: int = 256,
     ):
@@ -176,6 +182,8 @@ class Ximu3Provider(BaseProvider):
         self.wifi_port_send = wifi_port_send
         self.wifi_port_receive = wifi_port_receive
         self.axes_alignment = axes_alignment
+        self.ahrs_axes_convention = ahrs_axes_convention
+        self.ahrs_ignore_magnetometer = ahrs_ignore_magnetometer
         self.target_rate_hz = target_rate_hz
         self._connection = None
 
@@ -210,6 +218,8 @@ class Ximu3Provider(BaseProvider):
 
             # Configure axes alignment via command
             self._configure_axes_alignment(self._connection)
+            self._configure_ahrs_axes_convention(self._connection)
+            self._configure_ahrs_ignore_magnetometer(self._connection)
 
             # Register quaternion callback
             self._connection.add_quaternion_callback(self._on_quaternion)
@@ -252,6 +262,46 @@ class Ximu3Provider(BaseProvider):
                     time.sleep(0.5)
                 else:
                     raise RuntimeError(f"Failed to configure axes alignment after {max_retries} attempts: {e}")
+
+    def _configure_ahrs_axes_convention(self, connection) -> None:
+        """Set the xIMU3 AHRS axes convention (2 is NED)."""
+        cmd = f"ahrsAxesConvention {self.ahrs_axes_convention}"
+        try:
+            print(
+                f"Configuring AHRS axes convention "
+                f"'{self.ahrs_axes_convention}' (NED=2)..."
+            )
+            connection.send_command(cmd)
+            time.sleep(0.5)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to configure AHRS axes convention "
+                f"'{self.ahrs_axes_convention}': {e}"
+            ) from e
+
+    def _configure_ahrs_ignore_magnetometer(self, connection) -> None:
+        """Set whether the xIMU3 AHRS algorithm ignores the magnetometer."""
+        cmd = f"ahrsIgnoreMagnetometer {'true' if self.ahrs_ignore_magnetometer else 'false'}"
+        try:
+            print(f"Configuring AHRS ignore magnetometer '{self.ahrs_ignore_magnetometer}'...")
+            connection.send_command(cmd)
+            time.sleep(0.5)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to configure AHRS ignore magnetometer "
+                f"'{self.ahrs_ignore_magnetometer}': {e}"
+            ) from e
+
+    def set_ahrs_ignore_magnetometer(self, enabled: bool) -> None:
+        """Toggle the AHRS ignore-magnetometer setting on a live connection.
+
+        Unlike the startup-only `_configure_*` helpers, this can be called
+        after the device has already connected (e.g. from the GUI thread).
+        """
+        if self._connection is None:
+            raise RuntimeError("Cannot set ahrsIgnoreMagnetometer: xIMU3 is not connected")
+        self.ahrs_ignore_magnetometer = enabled
+        self._configure_ahrs_ignore_magnetometer(self._connection)
 
     def _on_quaternion(self, message: ximu3.QuaternionMessage) -> None:
         """Callback from the xIMU3 quaternion stream (runs in connection's callback thread)."""

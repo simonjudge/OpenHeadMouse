@@ -11,8 +11,9 @@ import json
 import queue
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -31,6 +32,9 @@ class RecordedSample:
     yaw_deg: float
     pitch_deg: float
     roll_deg: float
+    # Provider-specific values are deliberately nested so adding metadata does
+    # not change the meaning of the established pose fields.
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def quaternion(self) -> np.ndarray:
@@ -50,8 +54,34 @@ class Recorder:
         self._lock = threading.Lock()
         self._events: list[dict] = []  # Track recenter and other events with timestamps
 
-    def record_sample(self, timestamp: float, quaternion: np.ndarray) -> None:
-        """Record a single pose sample (called from the provider thread)."""
+    @property
+    def sample_count(self) -> int:
+        """Return the number of recorded samples."""
+        with self._lock:
+            return len(self._samples)
+
+    @property
+    def has_samples(self) -> bool:
+        """Whether at least one sample has been recorded."""
+        return self.sample_count > 0
+
+    def record_sample(
+        self,
+        timestamp: float,
+        quaternion: np.ndarray,
+        metadata: Mapping[str, Any] | None = None,
+        *,
+        raw_metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Record a pose sample and optional provider metadata.
+
+        ``raw_metadata`` is accepted as an alias for providers that expose
+        that name (for example, ``ProviderSample.raw_metadata``). Metadata is
+        stored under the additive ``metadata`` field in saved sessions.
+        """
+        if metadata is not None and raw_metadata is not None:
+            raise ValueError("pass metadata or raw_metadata, not both")
+        sample_metadata = metadata if metadata is not None else raw_metadata
         q = np.asarray(quaternion, dtype=np.float64)
         yaw, pitch, roll = qm.to_euler_zyx(q)
         sample = RecordedSample(
@@ -63,6 +93,7 @@ class Recorder:
             yaw_deg=float(np.degrees(yaw)),
             pitch_deg=float(np.degrees(pitch)),
             roll_deg=float(np.degrees(roll)),
+            metadata=_json_compatible(sample_metadata or {}),
         )
         with self._lock:
             self._samples.append(sample)
@@ -115,12 +146,30 @@ class Recorder:
                 f.write("")
             return
 
-        fieldnames = list(asdict(samples[0]).keys())
+        fieldnames = [
+            "timestamp",
+            "quaternion_w",
+            "quaternion_x",
+            "quaternion_y",
+            "quaternion_z",
+            "yaw_deg",
+            "pitch_deg",
+            "roll_deg",
+        ]
+        # Keep the legacy CSV header unchanged unless metadata is actually
+        # present. This allows existing CSV consumers to continue unchanged.
+        if any(sample.metadata for sample in samples):
+            fieldnames.append("metadata")
         with open(filepath, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for sample in samples:
-                writer.writerow(asdict(sample))
+                row = asdict(sample)
+                if "metadata" in fieldnames:
+                    row["metadata"] = json.dumps(sample.metadata, separators=(",", ":"))
+                else:
+                    row.pop("metadata", None)
+                writer.writerow(row)
 
     def load(self, filepath: Path) -> list[RecordedSample]:
         """Load a previously-saved session. Returns list of RecordedSample.
@@ -141,7 +190,12 @@ class Recorder:
     def _load_json(self, filepath: Path) -> list[RecordedSample]:
         with open(filepath) as f:
             data = json.load(f)
-        samples = [RecordedSample(**s) for s in data["samples"]]
+        samples = [
+            RecordedSample(
+                **{**s, "metadata": s.get("metadata", {})},
+            )
+            for s in data["samples"]
+        ]
 
         # Store events if present in the JSON
         if "events" in data:
@@ -166,6 +220,20 @@ class Recorder:
                     yaw_deg=float(row["yaw_deg"]),
                     pitch_deg=float(row["pitch_deg"]),
                     roll_deg=float(row["roll_deg"]),
+                    metadata=json.loads(row["metadata"]) if row.get("metadata") else {},
                 )
                 samples.append(sample)
         return samples
+
+
+def _json_compatible(value: Any) -> Any:
+    """Convert common numpy/provider values into JSON-compatible values."""
+    if isinstance(value, np.ndarray):
+        return [_json_compatible(item) for item in value.tolist()]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Mapping):
+        return {str(key): _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_compatible(item) for item in value]
+    return value

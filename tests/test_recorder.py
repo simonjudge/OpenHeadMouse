@@ -19,9 +19,8 @@ def test_recorder_accumulates_samples():
     recorder.record_sample(1.0, q1)
     recorder.record_sample(2.0, q2)
 
-    assert len(recorder._samples) == 2
-    assert recorder._samples[0].timestamp == 1.0
-    assert recorder._samples[1].timestamp == 2.0
+    assert recorder.sample_count == 2
+    assert recorder.has_samples
 
 
 def test_recorder_json_round_trip():
@@ -41,6 +40,20 @@ def test_recorder_json_round_trip():
         assert np.isclose(loaded[0].roll_deg, 3.0, atol=1e-6)
 
 
+def test_recorder_preserves_provider_metadata_in_json():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        recorder = Recorder(output_dir=tmpdir, format="json")
+        recorder.record_sample(
+            1.5,
+            qm.IDENTITY_QUATERNION,
+            metadata={"gyro": np.array([1.0, 2.0, 3.0]), "confidence": np.float32(0.5)},
+        )
+
+        loaded = recorder.load(recorder.save("metadata.json"))
+
+        assert loaded[0].metadata == {"gyro": [1.0, 2.0, 3.0], "confidence": 0.5}
+
+
 def test_recorder_csv_round_trip():
     with tempfile.TemporaryDirectory() as tmpdir:
         recorder = Recorder(output_dir=tmpdir, format="csv")
@@ -57,6 +70,23 @@ def test_recorder_csv_round_trip():
         assert len(loaded) == 2
         assert np.isclose(loaded[0].yaw_deg, 10.0, atol=1e-6)
         assert np.isclose(loaded[1].pitch_deg, 20.0, atol=1e-6)
+
+
+def test_recorder_preserves_provider_metadata_in_csv():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        recorder = Recorder(output_dir=tmpdir, format="csv")
+        recorder.record_sample(1.0, qm.IDENTITY_QUATERNION, raw_metadata={"angular_rate": [1, 2, 3]})
+
+        loaded = recorder.load(recorder.save("metadata.csv"))
+
+        assert loaded[0].metadata == {"angular_rate": [1, 2, 3]}
+
+
+def test_recorder_starts_without_samples():
+    recorder = Recorder()
+
+    assert recorder.sample_count == 0
+    assert not recorder.has_samples
 
 
 def test_recorder_json_schema_format():

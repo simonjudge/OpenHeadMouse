@@ -12,8 +12,13 @@ let package = Package(
             dependencies: [],
             path: ".",
             exclude: ["BUILD.md", "Info.plist"],
-            resources: [
-                .copy("Info.plist")
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Info.plist",
+                ])
             ]
         )
     ]

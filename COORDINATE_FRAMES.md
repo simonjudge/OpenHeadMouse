@@ -67,6 +67,11 @@ But the comment says camera frame has X right, Y down, Z forward (into camera).
 +Z: Down (toward neck/floor)
 ```
 
+This is the right-handed NED convention (North/forward, East/right,
+Down). The xIMU3 alignment below maps the physical device axes into this
+logical frame. Configure the xIMU3 **AHRS axes convention** to `2` (NED) in
+addition to the axes alignment.
+
 **Physical Device:**
 The xIMU3 has three axes printed with arrows on its case: X, Y, Z.
 
@@ -93,19 +98,19 @@ Holding the sensor flat against the left side of the head:
 1. Physical +X arrow → points Forward ✓
    Set Logical X = +X
 
-2. Physical +Z arrow → points into head (toward right ear) ✓
-   Set Logical Y = +Z
+2. Physical +Z arrow → points out of the head (from the left ear) ✓
+   Set Logical Y = -Z
 
-3. Physical +Y arrow → points Up ✗ (need Down)
-   Set Logical Z = -Y
+3. Physical +Y arrow → points Down ✓
+   Set Logical Z = +Y
 ```
 
-**Result: `axes_alignment = "+X+Z-Y"`**
+**Result: `axes_alignment = "+X-Z+Y"`**
 
 This tells the xIMU3 device:
 - Output X ← Physical X
-- Output Y ← Physical Z
-- Output Z ← Physical -Y (negated)
+- Output Y ← Physical -Z (negated)
+- Output Z ← Physical Y
 
 Device quaternions output in the correct reference frame with no software transformation needed.
 
@@ -129,4 +134,3 @@ python test_orientation.py --provider ximu3 --duration 20
 3. Tilt head LEFT (left ear down) → Roll = POSITIVE (e.g., +15°)
 
 If signs don't match, the axes_alignment or quaternion extraction needs correction.
-

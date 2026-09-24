@@ -1,10 +1,11 @@
 """Setup panel: provider selection and start/stop control (spec gui/setup_gui.py).
 
-Reduced scope for the M6 vertical slice: only the UniFace provider is wired
-up; xIMU3/AirPods are listed but disabled until their milestones land.
+AirPods is only offered on macOS because the helper depends on CoreMotion.
 """
 
 from __future__ import annotations
+
+import sys
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QComboBox, QGroupBox, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
@@ -13,14 +14,27 @@ from PySide6.QtWidgets import QComboBox, QGroupBox, QHBoxLayout, QPushButton, QV
 class SetupPanel(QWidget):
     start_requested = Signal(str)  # provider name, e.g. "uniface"
     stop_requested = Signal()
+    provider_changed = Signal(str)
+    ximu3_ignore_magnetometer_toggled = Signal(bool)
 
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        parent=None,
+        show_airpods: bool | None = None,
+        initial_provider: str = "uniface",
+    ):
         super().__init__(parent)
+        if show_airpods is None:
+            show_airpods = sys.platform == "darwin"
 
         self._provider_combo = QComboBox()
         self._provider_combo.addItem("UniFace (webcam)", userData="uniface")
         self._provider_combo.addItem("xIMU3 (IMU)", userData="ximu3")
-        self._provider_combo.addItem("AirPods (CoreMotion)", userData="airpods")
+        if show_airpods:
+            self._provider_combo.addItem("AirPods (CoreMotion)", userData="airpods")
+        provider_index = self._provider_combo.findData(initial_provider)
+        if provider_index >= 0:
+            self._provider_combo.setCurrentIndex(provider_index)
 
         self._start_button = QPushButton("Start")
         self._stop_button = QPushButton("Stop")
@@ -29,14 +43,51 @@ class SetupPanel(QWidget):
         self._start_button.clicked.connect(self._on_start_clicked)
         self._stop_button.clicked.connect(self._on_stop_clicked)
 
+        self._ximu3_ignore_mag_button = QPushButton("AHRS: Ignore Magnetometer (Off)")
+        self._ximu3_ignore_mag_button.setCheckable(True)
+        self._ximu3_ignore_mag_button.toggled.connect(self._on_ximu3_ignore_mag_toggled)
+
+        selection_row = QHBoxLayout()
+        selection_row.addWidget(self._provider_combo)
+        selection_row.addWidget(self._start_button)
+        selection_row.addWidget(self._stop_button)
+
         box = QGroupBox("Input Provider")
-        box_layout = QHBoxLayout(box)
-        box_layout.addWidget(self._provider_combo)
-        box_layout.addWidget(self._start_button)
-        box_layout.addWidget(self._stop_button)
+        box_layout = QVBoxLayout(box)
+        box_layout.addLayout(selection_row)
+        box_layout.addWidget(self._ximu3_ignore_mag_button)
 
         layout = QVBoxLayout(self)
         layout.addWidget(box)
+
+        self._provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        self._update_ximu3_button_visibility()
+
+    def _on_provider_changed(self) -> None:
+        self._update_ximu3_button_visibility()
+        self.provider_changed.emit(self._provider_combo.currentData())
+
+    def _update_ximu3_button_visibility(self) -> None:
+        self._ximu3_ignore_mag_button.setVisible(self._provider_combo.currentData() == "ximu3")
+
+    def _on_ximu3_ignore_mag_toggled(self, checked: bool) -> None:
+        self._ximu3_ignore_mag_button.setText(
+            f"AHRS: Ignore Magnetometer ({'On' if checked else 'Off'})"
+        )
+        self.ximu3_ignore_magnetometer_toggled.emit(checked)
+
+    @property
+    def ximu3_ignore_magnetometer_enabled(self) -> bool:
+        return self._ximu3_ignore_mag_button.isChecked()
+
+    def set_ximu3_ignore_magnetometer(self, enabled: bool) -> None:
+        """Sync the button's checked state (e.g. from config) without re-emitting the signal."""
+        self._ximu3_ignore_mag_button.blockSignals(True)
+        self._ximu3_ignore_mag_button.setChecked(enabled)
+        self._ximu3_ignore_mag_button.setText(
+            f"AHRS: Ignore Magnetometer ({'On' if enabled else 'Off'})"
+        )
+        self._ximu3_ignore_mag_button.blockSignals(False)
 
     def _on_start_clicked(self) -> None:
         provider_name = self._provider_combo.currentData()

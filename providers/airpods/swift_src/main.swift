@@ -32,15 +32,41 @@ class HeadMotionManager {
     private let motionManager = CMHeadphoneMotionManager()
     private let udpSocket = UDPSocket(host: "127.0.0.1", port: 5005)
     private var packetCount = 0
+    var onStatusChanged: ((String) -> Void)?
 
     func start() throws {
         debugPrint("HeadMotionManager: starting headphone motion updates...")
         print("Starting headphone motion updates...")
+        onStatusChanged?(
+            motionManager.isDeviceMotionAvailable
+                ? "Waiting for motion data"
+                : "Waiting for compatible AirPods"
+        )
 
-        // TEMPORARY: Comment out the actual startDeviceMotionUpdates to test
-        motionManager.startDeviceMotionUpdates(to: .main) { motion, error in
-            debugPrint("HeadMotionManager: callback fired")
-            print("Callback fired!")
+        motionManager.startDeviceMotionUpdates(to: .main) { [weak self] motion, error in
+            guard let self = self else {
+                return
+            }
+            if let error = error {
+                let message = "CoreMotion error: \(error.localizedDescription)"
+                debugPrint("HeadMotionManager: \(message)")
+                print("✗ \(message)")
+                self.onStatusChanged?("Error: \(error.localizedDescription)")
+                return
+            }
+            guard let motion = motion else {
+                return
+            }
+
+            do {
+                try self.sendQuaternion(attitude: motion.attitude)
+                if self.packetCount == 1 {
+                    self.onStatusChanged?("Streaming motion data")
+                }
+            } catch {
+                debugPrint("HeadMotionManager: sendQuaternion error: \(error)")
+                self.onStatusChanged?("UDP send error")
+            }
         }
 
         debugPrint("HeadMotionManager: startDeviceMotionUpdates call completed")
@@ -131,22 +157,33 @@ class UDPSocket {
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var motionManager: HeadMotionManager?
     private var statusItem: NSStatusItem?
+    private var statusMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_: Notification) {
         debugPrint("AppDelegate: applicationDidFinishLaunching called")
 
         // Create system tray icon
         debugPrint("AppDelegate: creating status bar item...")
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem?.button {
-            button.title = "🎧"
-            debugPrint("AppDelegate: status bar button created")
+            if let image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "HeadMouse AirPods Helper") {
+                image.isTemplate = true
+                button.image = image
+                button.imagePosition = .imageOnly
+                debugPrint("AppDelegate: status bar button created with headphones symbol")
+            } else {
+                button.title = "HM"
+                debugPrint("AppDelegate: status bar button created with HM fallback")
+            }
+            button.toolTip = "HeadMouse AirPods Helper"
         }
+        statusItem?.isVisible = true
 
         // Create menu
         let menu = NSMenu()
         let statusMenuItem = NSMenuItem(title: "Status: Starting", action: nil, keyEquivalent: "")
+        self.statusMenuItem = statusMenuItem
         menu.addItem(statusMenuItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q"))
@@ -156,11 +193,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Start motion manager
         debugPrint("AppDelegate: creating HeadMotionManager...")
         motionManager = HeadMotionManager()
+        motionManager?.onStatusChanged = { [weak self] status in
+            self?.statusMenuItem?.title = "Status: \(status)"
+        }
 
         debugPrint("AppDelegate: calling motionManager.start()...")
         do {
             try motionManager?.start()
-            statusMenuItem.title = "Status: ✓ Running"
+            statusMenuItem.title = "Status: Waiting for AirPods"
             debugPrint("AppDelegate: motionManager started successfully")
             print("✓ AirPods CoreMotion helper started, streaming to 127.0.0.1:5005")
         } catch {
@@ -182,7 +222,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-@main
 @available(macOS 14.0, *)
 struct AirPodsHelper {
     static func main() {
@@ -203,3 +242,5 @@ struct AirPodsHelper {
         debugPrint("Run loop exited (should not reach here)")
     }
 }
+
+AirPodsHelper.main()

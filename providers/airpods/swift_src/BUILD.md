@@ -1,46 +1,66 @@
-# Building the AirPods CoreMotion Helper
+# AirPods CoreMotion Helper
 
 ## Requirements
-- macOS 12 or later
-- Xcode 14+
+- macOS 14 or later
+- Xcode command-line tools
 - AirPods Pro (2nd generation) or AirPods Max
 
-## Quick Start
+## Source of truth
 
-1. **Open Xcode and create a new Cocoa App project:**
-   - File → New → Project
-   - Choose "App" under macOS
-   - Product Name: `HeadMouseAirPods`
-   - Uncheck "Include SwiftUI"
+This directory contains the only Swift helper implementation:
 
-2. **Replace the generated code:**
-   - Delete the default `AppDelegate.swift`
-   - Copy `main.swift` from this directory into the Xcode project
+- `main.swift` — menu-bar helper and CoreMotion-to-UDP bridge
+- `Package.swift` — SwiftPM build definition
+- `Info.plist` — privacy descriptions for signed/app-bundle builds
 
-3. **Configure Info.plist:**
-   - Open Info.plist in Xcode
-   - Add these keys:
-     ```
-     NSMicrophoneUsageDescription: "Required for AirPods Pro motion tracking"
-     NSBonjourServices: (empty array, or leave out)
-     ```
+HeadMouse runs `main.swift` in a minimized Terminal window. Terminal must
+have Motion permission because an unsigned or ad-hoc-signed standalone
+helper is rejected by macOS TCC without an Apple Development signature.
 
-4. **Build and run:**
-   - Cmd+B to build
-   - Cmd+R to run
-   - You may be prompted for Microphone permission; grant it
-   - When running, the app will stream to `127.0.0.1:5005`
+## Build
 
-5. **In the Python app:**
-   - Select "AirPods (coming soon)" in the provider dropdown
-   - Hit Start
-   - The Python receiver will connect and display real-time telemetry
+From this directory:
+
+```bash
+swift build
+```
+
+This verifies that the helper compiles and creates:
+
+```text
+.build/debug/AirPodsHeadMouseHelper
+```
+
+Do not run that raw executable for normal use. macOS may terminate an
+ad-hoc-signed executable when it requests Motion access.
+
+HeadMouse executes the source directly, so rebuilding is not required after
+editing `main.swift`: pressing Stop and Start loads the latest source.
+
+## Run manually
+
+From this directory:
+
+```bash
+xcrun swift main.swift
+```
+
+Keep Terminal open. Stop with `Control-C` or choose Quit from the headphones
+menu-bar item.
+
+## Run through HeadMouse
+
+1. Select **AirPods (CoreMotion)**.
+2. Press **Start**.
+3. HeadMouse opens the helper in a minimized Terminal window and starts the
+   Python UDP receiver.
+4. Press **Stop** to stop both processes.
 
 ## Troubleshooting
 
 - **"CoreMotion not available":** Only AirPods Pro 2 or AirPods Max support CoreMotion. Earlier AirPods models won't work.
-- **No packets received:** Check that the Swift app is running and Microphone permission is granted.
-- **Microphone permission denied:** System Preferences → Security & Privacy → Microphone → Allow HeadMouseAirPods.
+- **No packets received:** Check that the helper is running and Microphone permission is granted.
+- **Motion permission denied:** System Settings → Privacy & Security → Motion & Fitness → allow Terminal.
 
 ## How it Works
 
