@@ -87,7 +87,7 @@ If registration is denied, the main window displays the reason instead of silent
 claiming the hotkey is active.
 
 TODO:
-
+FITTS - Record rest position
 RECORDER - ?? What to record RE trajectory. 
 
  * recentering tool for absolute mode
