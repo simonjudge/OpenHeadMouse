@@ -160,3 +160,18 @@ def test_sign_convention_roll_left_ear_down_is_positive():
     left = np.array([0.0, 1.0, 0.0])
     rotated = r.apply(left)
     assert rotated[2] < 0  # left ear moved down (toward -Z)
+
+
+def test_mean_quaternion_averages_small_spread_and_handles_hemisphere():
+    q_a = qm.from_euler_zyx(np.radians(10), 0.0, 0.0)
+    q_b = qm.from_euler_zyx(np.radians(20), 0.0, 0.0)
+    mean = qm.mean_quaternion([q_a, -q_b])  # -q_b is the same rotation as q_b
+    yaw, pitch, roll = np.degrees(qm.to_euler_zyx(mean))
+    assert yaw == pytest.approx(15.0, abs=1e-6)
+    assert pitch == pytest.approx(0.0, abs=1e-9)
+    assert roll == pytest.approx(0.0, abs=1e-9)
+    assert np.linalg.norm(mean) == pytest.approx(1.0)
+
+
+def test_mean_quaternion_empty_is_identity():
+    np.testing.assert_allclose(qm.mean_quaternion([]), [1.0, 0.0, 0.0, 0.0])

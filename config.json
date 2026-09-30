@@ -7,10 +7,15 @@
   "hotkeys": {
     "toggle_tracking": "<esc>"
   },
-  "active_provider": "airpods",
+  "active_provider": "ximu3",
   "ui": {
     "recording_enabled": true,
-    "mouse_control_enabled": true
+    "mouse_control_enabled": true,
+    "calibration_enabled": true
+  },
+  "calibration": {
+    "read_duration_s": 5.0,
+    "capture_duration_s": 5.0
   },
   "providers": {
     "uniface": {
@@ -27,7 +32,7 @@
       "wifi_port_receive": 8001,
       "axes_alignment": "+X-Z+Y",
       "ahrs_axes_convention": 2,
-      "ahrs_ignore_magnetometer": false,
+      "ahrs_ignore_magnetometer": true,
       "target_rate_hz": 200
     },
     "airpods": {
@@ -38,23 +43,23 @@
   "dsp": {
     "mode": "absolute",
     "absolute": {
-      "kx": -30.0,
-      "ky": 30.0
+      "kx": 50.0,
+      "ky": 50.0
     },
     "velocity": {
-      "kx": 1.0,
-      "ky": 1.0,
-      "gamma": 1.5,
-      "deadband_deg_s": 3.0
+      "kx": 70,
+      "ky": 70,
+      "gamma": 1.2,
+      "deadband_deg_s": 0.0
     },
     "one_euro_filter": {
       "enabled": true,
-      "min_cutoff": 1.0,
-      "beta": 0.3,
+      "min_cutoff": 2.0,
+      "beta": 0.5,
       "d_cutoff": 1.0
     },
     "auto_zero": {
-      "enabled": true,
+      "enabled": false,
       "stationary_window_ms": 200,
       "stationary_threshold_deg_s": 2.0
     },

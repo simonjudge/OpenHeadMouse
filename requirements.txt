@@ -5,5 +5,5 @@ pyqtgraph>=0.13
 opencv-python>=4.10
 mediapipe>=0.10.21
 pynput>=1.7
-ximu3>=1.8
+ximu3>=1.9.1
 pytest>=8.0

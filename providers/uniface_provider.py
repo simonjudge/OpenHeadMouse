@@ -3,37 +3,32 @@
 Pipeline: OpenCV grabs BGR frames -> MediaPipe Tasks `FaceLandmarker` (VIDEO
 running mode, ``output_facial_transformation_matrixes=True``) returns a 4x4
 facial transformation matrix per detected face -> the rotation part is
-re-expressed in this project's [+X forward, +Y right, +Z down] head frame (see
-core/quaternion_math.py) -> converted to a [w, x, y, z] quaternion.
+re-expressed in this project's canonical [+X forward, +Y left, +Z up] head
+frame (see core/quaternion_math.py and COORDINATE_FRAMES.md) -> converted to
+a [w, x, y, z] quaternion.
 
-MediaPipe's facial transformation matrix is expressed in its camera-space
-coordinate system: +X right, +Y up, +Z toward the viewer/camera (an
-OpenGL-style right-handed frame; when a face looks straight at the camera,
-the rotation part of the matrix is close to identity). Matching this
-project's convention up when facing the camera dead-on:
-  - head "forward" (nose direction, +X_head) <-> camera +Z (out of the face,
-    toward the camera)
-  - head "right" (+Y_head, toward right ear) <-> camera +X (a person's own
-    right ear appears on the *viewer's* left, but in camera space it's +X)
-  - head "down" (+Z_head) <-> camera -Y (downward is opposite camera +Y up)
+MediaPipe's facial transformation matrix is expressed in the canonical face
+model's coordinate system: +X toward the subject's LEFT (viewer's right),
++Y up, +Z out of the face toward the camera (right-handed; when a face looks
+straight at the camera, the rotation part of the matrix is close to
+identity). The canonical head axes therefore map as:
+  - head forward (+X_head) <-> MediaPipe +Z (out of the face)
+  - head left    (+Y_head) <-> MediaPipe +X (subject's left)
+  - head up      (+Z_head) <-> MediaPipe +Y
 
 That mapping is a fixed axis permutation P (a rotation matrix, not a
 reflection: det(P) = +1, so handedness is preserved):
     P = [[0, 0, 1],
          [1, 0, 0],
-         [0, -1, 0]]
-    (i.e. head_x = cam_z, head_y = cam_x, head_z = -cam_y)
-Re-expressing the MediaPipe rotation matrix R_mp in the head-labeled frame is
-the similarity transform R_head = P @ R_mp @ P.T (P is orthogonal, P^-1 = P.T).
+         [0, 1, 0]]
+    (i.e. head_x = mp_z, head_y = mp_x, head_z = mp_y)
+Re-expressing the MediaPipe rotation matrix R_mp in the head frame is the
+similarity transform R_head = P @ R_mp @ P.T (P is orthogonal, P^-1 = P.T).
 
-CAVEAT: this axis mapping is derived from MediaPipe's documented camera-space
-convention, not empirically verified against a live camera in this sandboxed
-build environment. Run this module standalone (``python -m
-providers.uniface_provider``) in front of a real webcam and confirm the
-printed yaw/pitch/roll signs match real head motion (turn left -> yaw
-positive, look down -> pitch positive, tilt left ear down -> roll positive)
-before relying on it for cursor control. See tests/test_quaternion_math.py
-for the project's sign-convention definitions.
+Confirmed with a live webcam for yaw (turn left -> positive) and pitch (look
+up -> positive); roll (left ear down -> positive) follows from the same
+mapping. ``python -m providers.uniface_provider`` prints live angles for
+re-checking.
 """
 
 from __future__ import annotations
@@ -46,8 +41,7 @@ import numpy as np
 from core import quaternion_math as qm
 from providers.base_provider import BaseProvider, ProviderSample, ProviderState
 
-# Permutation matrix mapping MediaPipe camera-space axes to head frame.
-# (Updated comment to reflect current frame definition)
+# Rows are the canonical head axes (forward, left, up) in MediaPipe face-model coordinates.
 _CAMERA_TO_HEAD_FRAME = np.array(
     [
         [0.0, 0.0, 1.0],

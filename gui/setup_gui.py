@@ -8,7 +8,7 @@ from __future__ import annotations
 import sys
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QComboBox, QGroupBox, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 
 class SetupPanel(QWidget):
@@ -56,6 +56,9 @@ class SetupPanel(QWidget):
         box_layout = QVBoxLayout(box)
         box_layout.addLayout(selection_row)
         box_layout.addWidget(self._ximu3_ignore_mag_button)
+        self._connection_status = QLabel()
+        self._connection_status.setVisible(False)
+        box_layout.addWidget(self._connection_status)
 
         layout = QVBoxLayout(self)
         layout.addWidget(box)
@@ -107,3 +110,12 @@ class SetupPanel(QWidget):
         self._start_button.setEnabled(True)
         self._stop_button.setEnabled(False)
         self._provider_combo.setEnabled(True)
+
+    def set_connection_status(self, text: str) -> None:
+        self._connection_status.setText(text)
+        self._connection_status.setVisible(bool(text))
+
+    def keep_stop_enabled(self) -> None:
+        self._start_button.setEnabled(False)
+        self._stop_button.setEnabled(True)
+        self._provider_combo.setEnabled(False)

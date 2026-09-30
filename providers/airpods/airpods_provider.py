@@ -7,54 +7,33 @@ that socket and normalizes the stream into ProviderSample.
 COORDINATE FRAME & ALIGNMENT:
 =============================
 
-Reference Frame (right-handed, shared across all providers):
-  +X: Forward (direction of head gaze, out of nose)
-  +Y: Right (ear-to-ear lateral axis, toward right ear)
-  +Z: Down (vertical, toward neck/floor)
+Canonical head frame (right-handed, shared across all providers; see
+COORDINATE_FRAMES.md):
+  +X: Forward (out of the nose)
+  +Y: Left (toward the left ear)
+  +Z: Up (toward the top of the head)
 
-CMHeadphoneMotionManager Frame:
-  CMHeadphoneMotionManager (available on AirPods Pro 2nd gen and AirPods Max)
-  returns head motion as quaternions in the **device frame**, where the device
-  frame is referenced to the AirPods' physical orientation and inertial sensors.
+CMHeadphoneMotionManager frame (as worn):
+  +X: Right (toward the right ear)   - attitude.pitch (nod) is about this axis
+  +Y: Forward (out of the nose)      - attitude.roll (tilt) is about this axis
+  +Z: Up                             - attitude.yaw (turn) is about this axis
 
-  When worn on the head, the device frame axes are designed to align with the
-  wearer's head motion axes in an intuitive way. Apple's implementation returns
-  quaternions that describe head rotation relative to a neutral orientation
-  (device-level zero).
+Conversion (a proper rotation, applied in :meth:`AirPodsProvider._process_packet`):
+  head_x = +raw_y, head_y = -raw_x, head_z = +raw_z
+  i.e. q_head = [w, y, -x, z].
 
-Assumed Alignment:
-  This implementation **assumes** that the quaternions returned by
-  CMHeadphoneMotionManager already align with the project's reference frame
-  (or align sufficiently closely that no coordinate transformation is required).
+Earlier versions swapped x/y without the sign change (a reflection), which
+inverted pitch relative to the other providers.
 
-  The assumption is based on:
-  1. Apple's design intent: CoreMotion APIs are built for head-tracking
-     applications and naturally express motion in head-centric terms
-  2. Device orientation: When worn on the head, AirPods' sensors provide
-     intuitive mappings (forward tilt → pitch, head turn → yaw, head roll → roll)
-  3. Common implementation: AirPods return quaternions in a frame where +X is
-     forward, +Y is right, and +Z is down (matching our reference frame)
-
-Verification Steps (if this assumption is incorrect):
-  1. Perform real-time test with AirPods running:
-     - Turn head LEFT → Yaw should be POSITIVE
-     - Nod head UP → Pitch should be POSITIVE
-     - Tilt head LEFT (left ear down) → Roll should be POSITIVE
-  2. If signs don't match, a quaternion transformation matrix may be needed
-     (similar to UniFace's camera-to-head frame transformation)
-  3. If yaw/pitch/roll are swapped, the axes may need permutation
-
-To Debug Frame Alignment:
-  Use test_orientation.py with --provider airpods:
-    python test_orientation.py --provider airpods --duration 20
-  Expected: same sign conventions as other providers (see COORDINATE_FRAMES.md)
+Verify with ``python test_orientation.py --provider airpods --duration 20``:
+turn head LEFT -> yaw POSITIVE, nod UP -> pitch POSITIVE, tilt LEFT ear down
+-> roll POSITIVE.
 
 Swift Helper & Normalization:
   The Swift helper (swift_src/main.swift) receives quaternions from
   CMHeadphoneMotionManager, normalizes them to unit length, and transmits
-  in [w, x, y, z] scalar-first format (matching this project's convention).
-  No frame transformation is applied in the Swift code — quaternions pass
-  through unchanged, assuming Apple's frame is already correct.
+  them unchanged in [w, x, y, z] scalar-first format. The frame conversion
+  happens here in Python.
 
 Reference: CMHeadphoneMotionManager documentation (Apple Developer),
            COORDINATE_FRAMES.md (this project)
@@ -73,7 +52,19 @@ import json
 import socket
 import time
 
+import numpy as np
+
+from core import quaternion_math as qm
 from providers.base_provider import BaseProvider, ProviderSample, ProviderState
+
+# Rows are the canonical head axes (forward, left, up) in CMHeadphoneMotionManager coordinates.
+_AIRPODS_TO_HEAD_FRAME = np.array(
+    [
+        [0.0, 1.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ]
+)
 
 
 class AirPodsProvider(BaseProvider):
@@ -120,11 +111,7 @@ class AirPodsProvider(BaseProvider):
                 print(f"AirPods listener closed (received {packet_count} total packets)")
 
     def _process_packet(self, data: bytes) -> None:
-        """Parse a JSON UDP packet and emit a ProviderSample.
-
-        AirPods CMHeadphoneMotionManager returns quaternions with pitch and roll
-        axes swapped relative to our reference frame. Transform them here.
-        """
+        """Parse a JSON UDP packet and emit a ProviderSample in the canonical head frame."""
         try:
             payload = json.loads(data.decode("utf-8"))
             timestamp = float(payload["timestamp"])
@@ -132,9 +119,7 @@ class AirPodsProvider(BaseProvider):
             q = [q_dict["w"], q_dict["x"], q_dict["y"], q_dict["z"]]
             source = payload.get("source", "airpods")
 
-            # Transform: swap x and y components to align with reference frame
-            # AirPods [w, x, y, z] → Our frame [w, y, x, z]
-            q_transformed = [q[0], q[2], q[1], q[3]]
+            q_transformed = qm.change_basis(q, _AIRPODS_TO_HEAD_FRAME)
 
             # Debug: print raw and transformed quaternions every 30 packets
             if not hasattr(self, '_packet_debug_count'):
@@ -142,8 +127,6 @@ class AirPodsProvider(BaseProvider):
             self._packet_debug_count += 1
 
             if self._packet_debug_count % 30 == 0:
-                import numpy as np
-                from core import quaternion_math as qm
                 yaw, pitch, roll = np.degrees(qm.to_euler_zyx(q_transformed))
                 print(f"[AirPods] q_raw=[{q[0]:.3f}, {q[1]:.3f}, {q[2]:.3f}, {q[3]:.3f}] → q_xfm=[{q_transformed[0]:.3f}, {q_transformed[1]:.3f}, {q_transformed[2]:.3f}, {q_transformed[3]:.3f}] → yaw={yaw:+7.1f}° pitch={pitch:+7.1f}° roll={roll:+7.1f}°")
 

@@ -3,6 +3,11 @@
 The engine deliberately keeps Mode A's original API, while Mode B is an
 integrating velocity controller.  All angles exposed by this module are
 degrees (and degrees/second for velocities).
+
+Sign convention (identical in both modes): with POSITIVE gains the cursor
+follows the head — yaw left (+) moves the cursor left and pitch up (+) moves
+it up. Screen x grows rightwards and y grows downwards, hence the minus signs.
+Negative gains invert an axis.
 """
 
 from __future__ import annotations
@@ -116,7 +121,7 @@ class DSPEngine:
         zero = dsp_config.get("auto_zero", {})
         drift = dsp_config.get("yaw_drift_correction", {})
         return cls(
-            kx=float(absolute.get("kx", 1.0)), ky=float(absolute.get("ky", -1.0)),
+            kx=float(absolute.get("kx", 1.0)), ky=float(absolute.get("ky", 1.0)),
             screen_width=screen_width, screen_height=screen_height,
             mode=str(dsp_config.get("mode", "absolute")),
             velocity_kx=float(velocity.get("kx", 1.0)), velocity_ky=float(velocity.get("ky", 1.0)),
@@ -174,8 +179,26 @@ class DSPEngine:
 
     @staticmethod
     def _shape_velocity(value: float, deadband: float, gamma: float) -> float:
+        """Return a signed, deadbanded and non-linear velocity.
+
+        The linear factor preserves the input when ``gamma == 1``.  Using
+        ``1 + magnitude`` for the power term keeps small rates useful while
+        still increasing the response for larger rates.
+        """
+        value = float(value)
+        deadband = float(deadband)
+        gamma = float(gamma)
+        if not np.isfinite(value):
+            return 0.0
+        if not np.isfinite(deadband) or deadband < 0.0:
+            raise ValueError("deadband must be finite and non-negative")
+        if not np.isfinite(gamma) or gamma <= 0.0:
+            raise ValueError("gamma must be finite and positive")
         magnitude = max(abs(value) - deadband, 0.0)
-        return float(np.sign(value) * magnitude**gamma)
+        if magnitude == 0.0:
+            return 0.0
+        shaped = magnitude * (1.0 + magnitude) ** (gamma - 1.0)
+        return float(np.copysign(shaped, value))
 
     def process_absolute(
         self,
@@ -196,8 +219,8 @@ class DSPEngine:
             )
         self._absolute_last_time = timestamp
         yaw_deg, pitch_deg = angles
-        px = self.origin_x + self.screen_width / 2.0 + self.kx * yaw_deg
-        py = self.origin_y + self.screen_height / 2.0 + self.ky * pitch_deg
+        px = self.origin_x + self.screen_width / 2.0 - self.kx * yaw_deg
+        py = self.origin_y + self.screen_height / 2.0 - self.ky * pitch_deg
         return float(np.clip(px, self.origin_x, self.origin_x + self.screen_width - 1)), float(
             np.clip(py, self.origin_y, self.origin_y + self.screen_height - 1)
         )
@@ -245,7 +268,7 @@ class DSPEngine:
             )
         velocity = np.array([self._shape_velocity(velocity[0], self.deadband_deg_s, self.gamma),
                              self._shape_velocity(velocity[1], self.deadband_deg_s, self.gamma)])
-        self._position += np.array([self.velocity_kx * velocity[0], -self.velocity_ky * velocity[1]]) * dt
+        self._position -= np.array([self.velocity_kx * velocity[0], self.velocity_ky * velocity[1]]) * dt
         self._position[0] = np.clip(self._position[0], self.origin_x, self.origin_x + self.screen_width - 1)
         self._position[1] = np.clip(self._position[1], self.origin_y, self.origin_y + self.screen_height - 1)
         self._last_angles, self._last_time = tuple(filtered), now

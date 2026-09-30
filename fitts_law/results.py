@@ -8,10 +8,12 @@ from __future__ import annotations
 import json
 import math
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import numpy as np
+
+from core.clock import HOST_CLOCK_NAME
 
 _DEFAULT_OUTPUT_DIR = Path(__file__).parent.parent / "fitts_sessions"
 
@@ -27,6 +29,11 @@ class TrialResult:
     losing any other information. `trajectory` is the raw mouse path sampled
     during the trial ([t_offset_s, x, y] from trial start to click), saved so
     post-hoc analysis isn't limited to the endpoint alone.
+
+    `start_time`/`end_time` are `time.monotonic()` readings (used for MT);
+    `start_host_time`/`end_host_time` are the same instants on the shared
+    host clock (core.clock.host_time), used to synchronise playback with a
+    head-movement recording. They are None in files saved before 1.1.
     """
 
     condition_label: str
@@ -43,6 +50,8 @@ class TrialResult:
     trial_index: int = 0
     repetition_index: int = 0
     trajectory: list[list[float]] = None
+    start_host_time: float | None = None
+    end_host_time: float | None = None
 
     def __post_init__(self):
         if self.trajectory is None:
@@ -59,6 +68,9 @@ class FittsResultsLogger:
             "access_method": None,
             "access_method_other": None,
             "notes": None,
+            "screen_width_px": None,
+            "screen_height_px": None,
+            "clock": {"host_time": HOST_CLOCK_NAME},
         }
 
     def add_trial(self, trial: TrialResult) -> None:
@@ -78,7 +90,7 @@ class FittsResultsLogger:
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
         data = {
-            "format_version": "1.0",
+            "format_version": "1.1",
             "trial_count": len(self.trials),
             "metadata": self.metadata,
             "trials": [asdict(t) for t in self.trials],
@@ -96,8 +108,14 @@ class FittsResultsLogger:
             "access_method_other": None,
             "notes": None,
         })
+        known = {f.name for f in fields(TrialResult)}
         trials = [
-            TrialResult(**{**t, "start_pos": tuple(t["start_pos"]), "target_pos": tuple(t["target_pos"]), "click_pos": tuple(t["click_pos"])})
+            TrialResult(**{
+                **{k: v for k, v in t.items() if k in known},
+                "start_pos": tuple(t["start_pos"]),
+                "target_pos": tuple(t["target_pos"]),
+                "click_pos": tuple(t["click_pos"]),
+            })
             for t in data["trials"]
         ]
         self.trials = trials
@@ -171,6 +189,117 @@ class FittsStats:
         if mean_mt <= 0:
             return 0.0
         return ide / mean_mt
+
+    # -- Path accuracy measures (MacKenzie, Kauppinen & Silfverberg, CHI 2001) --
+
+    @staticmethod
+    def path_points(trial: TrialResult) -> np.ndarray:
+        """Sampled cursor path as an (N, 2) array, ending at the click point."""
+        points = [(p[1], p[2]) for p in (trial.trajectory or [])]
+        if not points or tuple(points[-1]) != tuple(trial.click_pos):
+            points.append(tuple(trial.click_pos))
+        return np.asarray(points, dtype=float)
+
+    @staticmethod
+    def task_axis_coords(trial: TrialResult, points: np.ndarray | None = None) -> np.ndarray | None:
+        """Path points rotated into task-axis coordinates.
+
+        Column 0 is x' (distance along start->target), column 1 is y' (signed
+        perpendicular distance from the task axis). None if start == target.
+        """
+        if points is None:
+            points = FittsStats.path_points(trial)
+        start = np.asarray(trial.start_pos, dtype=float)
+        axis = np.asarray(trial.target_pos, dtype=float) - start
+        norm = np.linalg.norm(axis)
+        if norm == 0:
+            return None
+        ux, uy = axis / norm
+        rel = points - start
+        x_axis = rel[:, 0] * ux + rel[:, 1] * uy
+        y_axis = -rel[:, 0] * uy + rel[:, 1] * ux
+        return np.column_stack([x_axis, y_axis])
+
+    @staticmethod
+    def _sign_changes(values: np.ndarray) -> int:
+        signs = np.sign(values)
+        signs = signs[signs != 0]
+        return int(np.count_nonzero(signs[1:] != signs[:-1])) if len(signs) > 1 else 0
+
+    @staticmethod
+    def target_reentry(trial: TrialResult, points: np.ndarray | None = None) -> int:
+        """TRE: times the pointer re-enters the target after first entering it."""
+        if points is None:
+            points = FittsStats.path_points(trial)
+        inside = np.linalg.norm(points - np.asarray(trial.target_pos, dtype=float), axis=1) <= trial.width_px / 2
+        entries = int(inside[0]) + int(np.count_nonzero(inside[1:] & ~inside[:-1]))
+        return max(0, entries - 1)
+
+    @staticmethod
+    def task_axis_crossing(coords: np.ndarray) -> int:
+        """TAC: times the path crosses the task axis (sign changes of y')."""
+        return FittsStats._sign_changes(coords[:, 1])
+
+    @staticmethod
+    def movement_direction_change(coords: np.ndarray) -> int:
+        """MDC: direction changes perpendicular to the task axis (sign changes of dy')."""
+        return FittsStats._sign_changes(np.diff(coords[:, 1]))
+
+    @staticmethod
+    def orthogonal_direction_change(coords: np.ndarray) -> int:
+        """ODC: direction changes along the task axis (sign changes of dx')."""
+        return FittsStats._sign_changes(np.diff(coords[:, 0]))
+
+    @staticmethod
+    def movement_variability(coords: np.ndarray) -> float:
+        """MV: sample SD of y' about its mean (px)."""
+        return float(np.std(coords[:, 1], ddof=1)) if len(coords) > 1 else 0.0
+
+    @staticmethod
+    def movement_error(coords: np.ndarray) -> float:
+        """ME: mean absolute deviation of the path from the task axis (px)."""
+        return float(np.mean(np.abs(coords[:, 1])))
+
+    @staticmethod
+    def movement_offset(coords: np.ndarray) -> float:
+        """MO: mean signed deviation of the path from the task axis (px)."""
+        return float(np.mean(coords[:, 1]))
+
+    @staticmethod
+    def path_measures(trial: TrialResult, points: np.ndarray | None = None) -> dict | None:
+        """All seven MacKenzie et al. (2001) measures for one trial's path.
+
+        `points` may be a partial path (e.g. up to a playback position).
+        Returns None when there is no usable path (fewer than 2 points).
+        """
+        if points is None:
+            points = FittsStats.path_points(trial)
+        if len(points) < 2:
+            return None
+        coords = FittsStats.task_axis_coords(trial, points)
+        if coords is None:
+            return None
+        return {
+            "tre": FittsStats.target_reentry(trial, points),
+            "tac": FittsStats.task_axis_crossing(coords),
+            "mdc": FittsStats.movement_direction_change(coords),
+            "odc": FittsStats.orthogonal_direction_change(coords),
+            "mv_px": FittsStats.movement_variability(coords),
+            "me_px": FittsStats.movement_error(coords),
+            "mo_px": FittsStats.movement_offset(coords),
+        }
+
+    @staticmethod
+    def accuracy_summary(trials: list[TrialResult]) -> dict:
+        """Mean of each path measure over trials with a usable path.
+
+        TRE/TAC/MDC/ODC are mean counts per trial; MV/ME/MO are mean px.
+        """
+        measures = [m for m in (FittsStats.path_measures(t) for t in trials) if m is not None]
+        keys = ("tre", "tac", "mdc", "odc", "mv_px", "me_px", "mo_px")
+        summary = {k: (float(np.mean([m[k] for m in measures])) if measures else None) for k in keys}
+        summary["trial_count"] = len(measures)
+        return summary
 
     def summary(self, exclude_repetitions: int = 0) -> dict:
         """Per-condition breakdown plus an overall pooled throughput.

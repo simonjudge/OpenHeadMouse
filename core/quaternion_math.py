@@ -5,30 +5,27 @@ Convention: quaternions are represented as numpy arrays ``[w, x, y, z]``
 which uses scalar-last ``[x, y, z, w]`` — any interop with scipy must
 explicitly reorder components.
 
-Reference frame (right-handed, matches the system spec):
+Canonical head frame (right-handed "FLU"; see COORDINATE_FRAMES.md):
     +X — forward (direction of view, out of nose)
-    +Y — right (ear-to-ear lateral axis, toward right ear)
-    +Z — down (vertical axis, toward floor/neck)
+    +Y — left (ear-to-ear lateral axis, toward the LEFT ear)
+    +Z — up (vertical axis, toward the top of the head)
 
-This frame is consistent across all providers:
-  - UniFace (webcam): Transforms camera frame → reference frame via permutation
-  - xIMU3 (IMU): Configured via axes_alignment command to output in this frame
-  - AirPods (CoreMotion): Assumes device frame matches this frame
+Every provider MUST emit quaternions in this frame (use :func:`change_basis`
+to convert from a device's native axes):
+  - UniFace (webcam): MediaPipe camera space re-expressed via a fixed permutation
+  - xIMU3 (IMU): device configured for NED/FRD body axes, converted in software
+  - AirPods (CoreMotion): headphone frame (X right, Y forward, Z up) converted in software
 
-Sign convention for the derived Euler angles, given the above frame and a
-right-hand rotation rule (positive rotation = counter-clockwise when viewed
-from the positive end of the rotation axis looking toward the origin):
-    - Yaw   (rotation about +Z): turning the head to the LEFT is POSITIVE
-      (rotating the +X forward axis toward -Y, which is left, is a positive
-      right-hand rotation about +Z).
-    - Pitch (rotation about +Y): looking DOWN is POSITIVE (rotating +X toward
-      -Z down is a positive right-hand rotation about +Y).
-    - Roll  (rotation about +X): tilting the head so the LEFT ear drops
-      toward the ground is POSITIVE (rotating +Y right toward +Z down is a
-      positive right-hand rotation about +X).
+Sign convention for the derived Euler angles (identical for every provider):
+    - Yaw   (about +Z): turning the head LEFT is POSITIVE.
+    - Pitch (about +Y): looking UP is POSITIVE.
+    - Roll  (about +X): tilting the LEFT ear toward the shoulder is POSITIVE.
+Yaw is a right-hand rotation about +Z. Pitch and roll are reported as the
+NEGATED right-hand rotations about +Y and +X, so that "up" and "left ear down"
+come out positive.
 
 Euler angles are extracted using an intrinsic Z-Y-X sequence
-(yaw, then pitch, then roll), i.e. ``R = Rz(yaw) @ Ry(pitch) @ Rx(roll)``,
+(yaw, then pitch, then roll), i.e. ``R = Rz(yaw) @ Ry(-pitch) @ Rx(-roll)``,
 per the spec's requirement to avoid gimbal lock/discontinuities within
 normal cervical range of motion (pitch away from +/-90 degrees).
 """
@@ -87,9 +84,9 @@ def to_euler_zyx(q: np.ndarray) -> np.ndarray:
     """Convert quaternion(s) ``[w, x, y, z]`` to intrinsic Z-Y-X Euler angles.
 
     Returns an array (or batch of arrays) ``[yaw, pitch, roll]`` in radians,
-    matching the sign convention documented at module level. ``R = Rz(yaw) @
-    Ry(pitch) @ Rx(roll)`` for a quaternion-derived rotation matrix R applied
-    to column vectors in the [+X forward, +Y left, +Z up] frame.
+    matching the sign convention documented at module level (yaw left, pitch
+    up and roll left-ear-down positive) for quaternions in the canonical
+    [+X forward, +Y left, +Z up] head frame.
     """
     q = normalize(np.asarray(q, dtype=np.float64))
     w, x, y, z = np.moveaxis(q, -1, 0)
@@ -130,3 +127,50 @@ def from_euler_zyx(yaw: float, pitch: float, roll: float) -> np.ndarray:
     qy = np.array([cp, 0.0, -sp, 0.0])
     qx = np.array([cr, -sr, 0.0, 0.0])
     return normalize(multiply(multiply(qz, qy), qx))
+
+
+def change_basis(q: np.ndarray, device_to_head: np.ndarray) -> np.ndarray:
+    """Re-express a device-frame quaternion ``[w, x, y, z]`` in the canonical head frame.
+
+    ``device_to_head`` is the 3x3 matrix whose row ``i`` gives canonical head
+    axis ``i`` (forward, left, up) in device coordinates, i.e.
+    ``v_head = device_to_head @ v_device``. It must be a proper rotation
+    (det = +1); a reflection would silently invert rotation directions.
+    Equivalent to ``R_head = M @ R_device @ M.T`` on rotation matrices.
+    """
+    m = np.asarray(device_to_head, dtype=np.float64)
+    if m.shape != (3, 3) or not np.allclose(m @ m.T, np.eye(3)) or np.linalg.det(m) < 0:
+        raise ValueError("device_to_head must be a proper 3x3 rotation matrix (det = +1)")
+    q = normalize(q)
+    return np.concatenate(([q[0]], m @ q[1:]))
+
+
+def angle_between(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
+    """Geodesic rotation angle (radians) between unit quaternions, or batches.
+
+    This is the true magnitude of the rotation from ``q1`` to ``q2``, so unlike
+    a sum of Euler-angle differences it has no gimbal-lock inflation and no
+    ±180° wrap-around jumps. Double-cover is handled by taking ``|dot|``.
+    """
+    q1 = normalize(np.atleast_2d(np.asarray(q1, dtype=np.float64)))
+    q2 = normalize(np.atleast_2d(np.asarray(q2, dtype=np.float64)))
+    dot = np.clip(np.abs(np.sum(q1 * q2, axis=-1)), -1.0, 1.0)
+    angle = 2.0 * np.arccos(dot)
+    return angle if angle.size > 1 else float(angle[0])
+
+
+def mean_quaternion(quaternions) -> np.ndarray:
+    """Hemisphere-aligned mean of unit quaternions ``[w, x, y, z]``.
+
+    Each quaternion is flipped into the same hemisphere as the first before
+    averaging (q and -q represent the same rotation). Adequate for the small
+    spread of a held-still pose. Returns identity for an empty input.
+    """
+    qs = [normalize(np.asarray(q, dtype=np.float64)) for q in quaternions]
+    if not qs:
+        return np.array([1.0, 0.0, 0.0, 0.0])
+    q_ref = qs[0]
+    total = np.zeros(4)
+    for q in qs:
+        total += -q if np.dot(q_ref, q) < 0 else q
+    return normalize(total)

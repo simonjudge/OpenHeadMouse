@@ -65,6 +65,7 @@ class HeadMouseWindow(QMainWindow):
         self.controls = ControlPanel(
             recording_enabled=bool(ui_config.get("recording_enabled", True)),
             mouse_control_enabled=bool(ui_config.get("mouse_control_enabled", True)),
+            calibration_enabled=bool(ui_config.get("calibration_enabled", False)),
         )
         dsp_config = initial_dsp_config or {}
         velocity_config = dsp_config.get("velocity", {})
@@ -108,13 +109,13 @@ class HeadMouseWindow(QMainWindow):
             absolute_form,
             "Horizontal gain",
             self._kx_spin,
-            "Pixels moved horizontally per degree of yaw. Larger magnitudes make left/right head turns move farther.",
+            "Pixels moved horizontally per degree of yaw. Positive values move the cursor in the direction you turn; negative values invert it.",
         )
         self._add_labeled_row(
             absolute_form,
             "Vertical gain",
             self._ky_spin,
-            "Pixels moved vertically per degree of pitch. The sign controls whether looking up moves the cursor up or down.",
+            "Pixels moved vertically per degree of pitch. Positive values move the cursor up when you look up; negative values invert it.",
         )
         self._filter_options = QGroupBox("Adaptive smoothing")
         filter_form = QFormLayout(self._filter_options)
@@ -132,13 +133,13 @@ class HeadMouseWindow(QMainWindow):
             velocity_form,
             "Horizontal gain",
             self._velocity_kx_spin,
-            "Scales horizontal cursor speed produced by yaw speed. Larger values move the cursor faster.",
+            "Scales horizontal cursor speed produced by yaw speed. Positive values move the cursor in the direction you turn; negative values invert it.",
         )
         self._add_labeled_row(
             velocity_form,
             "Vertical gain",
             self._velocity_ky_spin,
-            "Scales vertical cursor speed produced by pitch speed. Larger values move the cursor faster.",
+            "Scales vertical cursor speed produced by pitch speed. Positive values move the cursor up when you look up; negative values invert it.",
         )
         self._add_labeled_row(
             velocity_form,

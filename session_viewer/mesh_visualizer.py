@@ -84,11 +84,31 @@ def rotation_from_quaternion(qw: float, qx: float, qy: float, qz: float) -> np.n
     ])
 
 
+# Canonical head frame (forward, left, up) expressed in MediaPipe face-model axes; the same P as
+# providers/uniface_provider.py (R_head = P @ R_mesh @ P.T). The canonical mesh is authored in
+# MediaPipe coordinates, so head-frame rotations from any provider are mapped back with
+# R_mesh = P.T @ R_head @ P before being applied to its vertices.
+_MESH_TO_HEAD_FRAME = np.array(
+    [
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ]
+)
+
+
+def head_rotation_to_mesh_frame(r_head: np.ndarray) -> np.ndarray:
+    """Re-express a head-frame rotation matrix in the canonical mesh's coordinate frame."""
+    return _MESH_TO_HEAD_FRAME.T @ np.asarray(r_head, dtype=float) @ _MESH_TO_HEAD_FRAME
+
+
 def calculate_neutral_quaternion(recorded_samples: list, recorder=None) -> np.ndarray:
     """Calculate neutral (reference) quaternion for visualization.
 
     Priority:
-    1. Use quaternion from a 'recenter' event if available (from recorder._events)
+    1. Use quaternion from a 'recenter' event if available (from recorder._events):
+       the last one at or before the first sample (the pose in effect when the
+       shown data starts), else the first one
     2. Otherwise calculate mean quaternion (in same hemisphere)
     3. Default to identity if no samples
 
@@ -98,38 +118,32 @@ def calculate_neutral_quaternion(recorded_samples: list, recorder=None) -> np.nd
     """
     # Check for recenter event in recorder's events list
     if recorder is not None and hasattr(recorder, '_events'):
-        for event in recorder._events:
-            if event.get('event_type') == 'recenter':
-                data = event.get('data', {})
-                if 'quaternion' in data:
-                    q = np.array(data['quaternion'], dtype=np.float64)
-                    # Ensure it's normalized
-                    return q / np.linalg.norm(q)
+        recenters = [
+            e for e in recorder._events
+            if e.get('event_type') == 'recenter' and 'quaternion' in e.get('data', {})
+        ]
+        if recenters:
+            chosen = recenters[0]
+            first = recorded_samples[0] if recorded_samples else None
+            if first is not None:
+                # Prefer the shared host clock; provider clocks may differ between runs.
+                key = 'host_time' if getattr(first, 'host_time', None) is not None else 'timestamp'
+                start = getattr(first, key)
+                before = [e for e in recenters if e.get(key) is not None and e[key] <= start]
+                if before:
+                    chosen = max(before, key=lambda e: e[key])
+            q = np.array(chosen['data']['quaternion'], dtype=np.float64)
+            return q / np.linalg.norm(q)
 
     if not recorded_samples:
         return np.array([1.0, 0.0, 0.0, 0.0])  # Identity quaternion
 
-    # Calculate mean quaternion keeping all in same hemisphere
-    quaternions = []
-    for sample in recorded_samples:
-        q = sample.quaternion if isinstance(sample.quaternion, np.ndarray) else np.array(sample.quaternion)
-        quaternions.append(q / np.linalg.norm(q))  # Normalize
+    from core.quaternion_math import mean_quaternion
 
-    # Use first as reference, flip others if in opposite hemisphere
-    q_ref = quaternions[0]
-    q_avg = q_ref.copy()
-
-    for q in quaternions[1:]:
-        # If dot product is negative, quaternion is in opposite hemisphere
-        if np.dot(q_ref, q) < 0:
-            q = -q
-        q_avg += q
-
-    q_avg = q_avg / len(quaternions)
-    # Normalize result
-    q_neutral = q_avg / np.linalg.norm(q_avg)
-
-    return q_neutral
+    return mean_quaternion(
+        sample.quaternion if isinstance(sample.quaternion, np.ndarray) else np.array(sample.quaternion)
+        for sample in recorded_samples
+    )
 
 
 def rotation_from_euler(yaw: float, pitch: float, roll: float, degrees: bool = True) -> np.ndarray:

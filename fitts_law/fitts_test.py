@@ -19,7 +19,6 @@ project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-import pyqtgraph as pg
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QPainter, QPixmap
 from PySide6.QtWidgets import (
@@ -45,6 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.clock import host_time
 from fitts_law.conditions import (
     build_condition_set,
     generate_circle_positions,
@@ -99,6 +99,7 @@ class FittsTrialCanvas(QWidget):
             self.all_trials_completed.emit()
             return
         self._trial_start_time = time.monotonic()
+        self._trial_start_host_time = host_time()
         self._trajectory = []
         self._last_trajectory_sample_time = None
         self.update()
@@ -134,6 +135,7 @@ class FittsTrialCanvas(QWidget):
         pos = event.position()
         click_pos = (pos.x(), pos.y())
         end_time = time.monotonic()
+        end_host_time = host_time()
         distance = math.dist(spec["target_pos"], click_pos)
         hit = distance <= spec["width_px"] / 2
 
@@ -152,6 +154,8 @@ class FittsTrialCanvas(QWidget):
             trial_index=spec["trial_index"],
             repetition_index=spec["repetition_index"],
             trajectory=self._trajectory,
+            start_host_time=self._trial_start_host_time,
+            end_host_time=end_host_time,
         )
         self._index += 1
         self.trial_completed.emit(result)
@@ -187,6 +191,7 @@ class TypingTrialCanvas(QWidget):
             self.all_trials_completed.emit()
             return
         self._trial_start_time = time.monotonic()
+        self._trial_start_host_time = host_time()
         self._trajectory = []
         self._last_trajectory_sample_time = None
         self.update()
@@ -246,6 +251,7 @@ class TypingTrialCanvas(QWidget):
         pos = event.position()
         click_pos = (pos.x(), pos.y())
         end_time = time.monotonic()
+        end_host_time = host_time()
         clicked_letter = key_at(spec["layout"], *click_pos)
         hit = clicked_letter == spec["target_letter"]
 
@@ -264,6 +270,8 @@ class TypingTrialCanvas(QWidget):
             trial_index=spec["trial_index"],
             repetition_index=spec["repetition_index"],
             trajectory=self._trajectory,
+            start_host_time=self._trial_start_host_time,
+            end_host_time=end_host_time,
         )
         self._index += 1
         self.trial_completed.emit(result)
@@ -286,6 +294,11 @@ class FittsTestWindow(QMainWindow):
         self._canvas: FittsTrialCanvas | TypingTrialCanvas | None = None
         self._typing_layout: dict | None = None
         self._settings = FittsSettings()
+        self._saved_path: Path | None = None
+        # Set by the host application (see main.py) so this window can stop and
+        # save a running head recording before replaying it. Returns its path.
+        self._head_session_provider = None
+        self._playback_windows: list = []  # keep references so Qt/PySide doesn't GC them
 
         self._create_menu()
 
@@ -308,16 +321,29 @@ class FittsTestWindow(QMainWindow):
         h = float(geometry.height()) if geometry else 1080.0
         return w, h
 
+    def set_head_session_provider(self, provider) -> None:
+        """Register a callable that stops the host app's head recording and
+        returns the saved session path (or None if nothing was recorded)."""
+        self._head_session_provider = provider
+
     def _create_menu(self) -> None:
         open_action = QAction("Open Results...", self)
+        open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self._on_open_results)
 
         save_action = QAction("Save Results As...", self)
+        save_action.setShortcut("Ctrl+S")
         save_action.triggered.connect(self._on_save_results)
+
+        self._sync_action = QAction("Open Synchronised Playback...", self)
+        self._sync_action.setShortcut("Ctrl+Shift+O")
+        self._sync_action.triggered.connect(self._on_open_synchronised)
 
         file_menu = self.menuBar().addMenu("File")
         file_menu.addAction(open_action)
         file_menu.addAction(save_action)
+        file_menu.addSeparator()
+        file_menu.addAction(self._sync_action)
 
     # -- Setup page ----------------------------------------------------
 
@@ -498,6 +524,8 @@ class FittsTestWindow(QMainWindow):
         if access_method == "Other":
             self._logger.metadata["access_method_other"] = self._access_method_other_edit.text() or None
         self._logger.metadata["notes"] = self._session_notes_edit.toPlainText() or None
+        self._logger.metadata["screen_width_px"] = self._screen_w
+        self._logger.metadata["screen_height_px"] = self._screen_h
         self._exclude_repetitions_spin.blockSignals(True)
         self._exclude_repetitions_spin.setValue(0)
         self._exclude_repetitions_spin.blockSignals(False)
@@ -666,8 +694,8 @@ class FittsTestWindow(QMainWindow):
 
     def _on_all_trials_completed(self) -> None:
         if self._logger.trials:
-            autosave_path = self._logger.save()
-            print(f"[Fitts] Raw trial data auto-saved to {autosave_path}")
+            self._saved_path = self._logger.save()
+            print(f"[Fitts] Raw trial data auto-saved to {self._saved_path}")
         self._populate_results_page()
         self.showNormal()
         self._stack.setCurrentWidget(self._results_page)
@@ -698,23 +726,19 @@ class FittsTestWindow(QMainWindow):
         self._results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(self._results_table)
 
-        self._throughput_plot = pg.PlotWidget()
-        self._throughput_plot.setLabel("left", "Throughput (bits/s)")
-        self._throughput_plot.getAxis("bottom").setStyle(showValues=False)
-        self._throughput_plot.setMaximumHeight(220)
-        layout.addWidget(self._throughput_plot)
-
         button_row = QHBoxLayout()
-        save_button = QPushButton("Save Results As...")
-        save_button.clicked.connect(self._on_save_results)
-        open_button = QPushButton("Open Results...")
-        open_button.clicked.connect(self._on_open_results)
+        # Save/Open live in the File menu; this page keeps only the actions
+        # that follow on from the run that just finished.
+        self._sync_button = QPushButton("Open Synchronised Playback...")
+        self._sync_button.setToolTip(
+            "Replay these trials alongside the head-movement recording made at the same time"
+        )
+        self._sync_button.clicked.connect(self._on_open_synchronised)
         again_button = QPushButton("Run Again")
         again_button.clicked.connect(self._on_start_clicked)
         back_button = QPushButton("Back to Setup")
         back_button.clicked.connect(self._on_back_to_setup_clicked)
-        button_row.addWidget(save_button)
-        button_row.addWidget(open_button)
+        button_row.addWidget(self._sync_button)
         button_row.addWidget(again_button)
         button_row.addWidget(back_button)
         layout.addLayout(button_row)
@@ -761,20 +785,13 @@ class FittsTestWindow(QMainWindow):
             for col, value in enumerate(values):
                 self._results_table.setItem(row, col, QTableWidgetItem(value))
 
-        self._throughput_plot.clear()
-        throughputs = [data["throughput_bits_per_s"] for data in conditions.values()]
-        if throughputs:
-            xs = list(range(len(throughputs)))
-            bar_item = pg.BarGraphItem(x=xs, height=throughputs, width=0.6, brush="#1e88e5")
-            self._throughput_plot.addItem(bar_item)
-
     def _on_save_results(self) -> None:
         default_name = str(self._logger.output_dir / f"fitts_session_{int(time.time())}.json")
         filepath, _ = QFileDialog.getSaveFileName(self, "Save Fitts' Law results", default_name, "JSON (*.json)")
         if not filepath:
             return
-        saved_path = self._logger.save(filepath)
-        QMessageBox.information(self, "Saved", f"Results saved to {saved_path}")
+        self._saved_path = self._logger.save(filepath)
+        QMessageBox.information(self, "Saved", f"Results saved to {self._saved_path}")
 
     def _on_open_results(self) -> None:
         filepath, _ = QFileDialog.getOpenFileName(
@@ -784,9 +801,56 @@ class FittsTestWindow(QMainWindow):
             return
         self._logger = FittsResultsLogger()
         self._logger.load(filepath)
+        self._saved_path = Path(filepath)
         self._populate_results_page()
         self.showNormal()
         self._stack.setCurrentWidget(self._results_page)
+
+    # -- Synchronised playback ---------------------------------------------
+
+    def _fitts_session_path(self) -> Path | None:
+        """Path of the current trials on disk, saving them first if needed."""
+        if not self._logger.trials:
+            QMessageBox.warning(self, "No trials", "Run or open a Fitts session first.")
+            return None
+        if self._saved_path is None or not Path(self._saved_path).exists():
+            self._saved_path = self._logger.save()
+        return Path(self._saved_path)
+
+    def _head_session_path(self) -> Path | None:
+        """Stop the host app's recording and use it, or ask for a session file."""
+        if self._head_session_provider is not None:
+            try:
+                path = self._head_session_provider()
+            except Exception as exc:  # a failure here must not lose the results
+                QMessageBox.warning(self, "Could not stop recording", str(exc))
+                path = None
+            if path is not None:
+                return Path(path)
+        start_dir = project_root / "sessions"
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Open the head-movement session recorded during this test",
+            str(start_dir if start_dir.exists() else Path.home()),
+            "JSON Sessions (*.json);;CSV Sessions (*.csv);;All Files (*)",
+        )
+        return Path(filepath) if filepath else None
+
+    def _on_open_synchronised(self) -> None:
+        """Replay these trials alongside the head recording made at the same time."""
+        fitts_path = self._fitts_session_path()
+        if fitts_path is None:
+            return
+        head_path = self._head_session_path()
+        if head_path is None:
+            return
+        from session_viewer.session_viewer import open_synchronised_playback
+
+        try:
+            windows = open_synchronised_playback(head_path, fitts_path, screen=self.screen())
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", f"Failed to open synchronised playback:\n\n{exc}")
+            return
+        self._playback_windows = [w for w in windows if w is not None]
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape and self._canvas is not None and self._stack.currentWidget() is self._canvas:

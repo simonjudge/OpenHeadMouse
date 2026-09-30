@@ -128,3 +128,71 @@ def test_recorder_handles_large_batch():
         assert len(loaded) == n
         assert np.isclose(loaded[0].timestamp, 0.0, atol=1e-6)
         assert np.isclose(loaded[-1].timestamp, 0.99, atol=1e-6)
+
+
+def _calibration_inputs():
+    samples = [
+        (10.0 + i * 0.1, qm.from_euler_zyx(np.radians(5 + d), np.radians(-3), np.radians(1)))
+        for i, d in enumerate((-0.5, 0.0, 0.5))
+    ]
+    neutral = qm.mean_quaternion(q for _, q in samples)
+    return samples, neutral
+
+
+def test_recorder_json_stores_calibration_separately_from_movement(tmp_path):
+    recorder = Recorder(output_dir=tmp_path, format="json")
+    samples, neutral = _calibration_inputs()
+    recorder.set_calibration(samples, neutral, duration_s=5.0)
+    recorder.record_sample(20.0, qm.IDENTITY_QUATERNION)
+    assert recorder.has_calibration
+
+    filepath = recorder.save("calib.json")
+    data = json.loads(filepath.read_text())
+    assert data["format_version"] == "1.1"
+    assert data["sample_count"] == 1
+    assert len(data["samples"]) == 1
+    calibration = data["calibration"]
+    assert calibration["sample_count"] == 3
+    assert calibration["duration_s"] == 5.0
+    assert calibration["start_timestamp"] == pytest.approx(10.0)
+    assert calibration["end_timestamp"] == pytest.approx(10.2)
+    assert calibration["neutral_yaw_deg"] == pytest.approx(5.0, abs=1e-6)
+    assert calibration["neutral_pitch_deg"] == pytest.approx(-3.0, abs=1e-6)
+    assert calibration["neutral_roll_deg"] == pytest.approx(1.0, abs=1e-6)
+    assert calibration["yaw_std_deg"] > 0
+    assert len(calibration["samples"]) == 3
+    assert calibration["samples"][0]["yaw_deg"] == pytest.approx(4.5, abs=1e-6)
+
+    loaded = Recorder()
+    movement = loaded.load(filepath)
+    assert len(movement) == 1
+    assert loaded.calibration["sample_count"] == 3
+    assert len(loaded.calibration_samples) == 3
+
+
+def test_recorder_csv_phase_column_only_with_calibration(tmp_path):
+    recorder = Recorder(output_dir=tmp_path, format="csv")
+    recorder.record_sample(20.0, qm.IDENTITY_QUATERNION)
+    legacy = recorder.save("legacy.csv")
+    assert "phase" not in legacy.read_text().splitlines()[0]
+
+    samples, neutral = _calibration_inputs()
+    recorder.set_calibration(samples, neutral)
+    filepath = recorder.save("calib.csv")
+    lines = filepath.read_text().splitlines()
+    assert lines[0].endswith(",phase")
+    assert [line.rsplit(",", 1)[1] for line in lines[1:]] == ["calibration"] * 3 + ["movement"]
+
+    loaded = Recorder()
+    movement = loaded.load(filepath)
+    assert len(movement) == 1
+    assert loaded.calibration["sample_count"] == 3
+    assert loaded.calibration["neutral_yaw_deg"] == pytest.approx(5.0, abs=1e-6)
+
+
+def test_recorder_json_without_calibration_is_unchanged(tmp_path):
+    recorder = Recorder(output_dir=tmp_path, format="json")
+    recorder.record_sample(0.0, qm.IDENTITY_QUATERNION)
+    data = json.loads(recorder.save("plain.json").read_text())
+    assert "calibration" not in data
+    assert data["format_version"] == "1.0"

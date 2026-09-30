@@ -19,7 +19,7 @@ class FakeMouse:
 def controller(qt_app, tmp_path):
     config = load_config()
     config["dsp"]["mode"] = "absolute"
-    config["dsp"]["absolute"] = {"kx": 10, "ky": -10}
+    config["dsp"]["absolute"] = {"kx": 10, "ky": 10}
     config["dsp"]["velocity"] = {"kx": 1, "ky": 1, "gamma": 1, "deadband_deg_s": 0}
     config["dsp"]["one_euro_filter"] = {
         "enabled": False, "min_cutoff": 0.8, "beta": 0.2, "d_cutoff": 1.2,
@@ -27,6 +27,7 @@ def controller(qt_app, tmp_path):
     config["dsp"]["auto_zero"]["enabled"] = False
     config["dsp"]["yaw_drift_correction"]["enabled"] = False
     config["recorder"]["output_dir"] = str(tmp_path)
+    config.setdefault("ui", {})["calibration_enabled"] = False
     app = App(config, auto_start_listeners=False, mouse_controller=FakeMouse())
     app._timer.stop()
     app.window.controls._mouse_check.setChecked(True)
@@ -49,8 +50,8 @@ def test_absolute_targets_recenter_and_edge_recovery(controller):
     app = controller
     cx = app.dsp.origin_x + app.dsp.screen_width / 2
     cy = app.dsp.origin_y + app.dsp.screen_height / 2
-    assert feed(app, 10, 0) == pytest.approx((cx + 100, cy))
-    assert feed(app, 20, 1) == pytest.approx((cx + 200, cy))
+    assert feed(app, 10, 0) == pytest.approx((cx - 100, cy))
+    assert feed(app, 20, 1) == pytest.approx((cx - 200, cy))
     feed(app, 80, 2)
     assert feed(app, 0, 3) == pytest.approx((cx, cy))
     feed(app, 20, 4)
@@ -66,7 +67,7 @@ def test_live_velocity_edits_do_not_teleport_cursor(controller):
     app.window._mode_combo.setCurrentText("Velocity")
     assert feed(app, 10, 1) == pytest.approx(position)
     moved = feed(app, 20, 2, pitch=10)
-    assert moved == pytest.approx((position[0] + 10, position[1] - 10))
+    assert moved == pytest.approx((position[0] - 10, position[1] - 10))
     position = moved
     for change in (
         lambda: app.window._velocity_kx_spin.setValue(2),
@@ -82,12 +83,12 @@ def test_live_absolute_preset_changes_actual_cursor_response(controller):
     app = controller
     center = feed(app, 0, 0)
     raw = feed(app, 1, 1 / 60)
-    assert raw[0] - center[0] == pytest.approx(10)
+    assert center[0] - raw[0] == pytest.approx(10)
     app.window._filter_preset_combo.setCurrentText("High filtering")
     app.window._one_euro_check.setChecked(True)
     feed(app, 0, 1)
     smoothed = feed(app, 1, 1 + 1 / 60)
-    assert 0 < smoothed[0] - center[0] < 5
+    assert 0 < center[0] - smoothed[0] < 5
 
 
 def test_presets_preserve_custom_config_then_update_live_engine(controller):
@@ -119,4 +120,4 @@ def test_velocity_resume_uses_actual_mouse_position(controller, pause_method):
     else:
         app.window.controls._mouse_check.setChecked(True)
     assert feed(app, 30, 3) == pytest.approx((250, 300))
-    assert feed(app, 40, 4) == pytest.approx((260, 300))
+    assert feed(app, 40, 4) == pytest.approx((240, 300))

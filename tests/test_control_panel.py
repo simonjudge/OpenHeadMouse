@@ -47,3 +47,16 @@ def test_control_panel_toggles_mouse_control(qt_app):
 
     panel._mouse_check.setChecked(True)
     assert panel.mouse_control_enabled is True
+
+
+def test_control_panel_calibration_toggle(qt_app):
+    from gui.control_panel import ControlPanel
+
+    panel = ControlPanel()
+    assert panel.calibration_enabled is False
+    seen = []
+    panel.calibration_toggled.connect(seen.append)
+    panel._calibration_check.setChecked(True)
+    assert panel.calibration_enabled is True
+    assert seen == [True]
+    assert ControlPanel(calibration_enabled=True).calibration_enabled is True

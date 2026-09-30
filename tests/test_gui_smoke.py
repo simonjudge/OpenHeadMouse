@@ -225,7 +225,8 @@ class FakeMouseController:
 def test_app_wires_mock_provider_through_to_headmouse(qt_app):
     from main import App, load_config
 
-    config = load_config()
+    config = copy.deepcopy(load_config())
+    config.setdefault("ui", {})["calibration_enabled"] = False
     app = App(config, poll_hz=90.0, auto_start_listeners=False, mouse_controller=FakeMouseController())
     try:
         app._on_start_requested("mock")
@@ -253,7 +254,8 @@ def test_app_wires_mock_provider_through_to_headmouse(qt_app):
 def test_app_recenter_zeroes_out_current_pose(qt_app):
     from main import App, load_config
 
-    config = load_config()
+    config = copy.deepcopy(load_config())
+    config.setdefault("ui", {})["calibration_enabled"] = False
     app = App(config, poll_hz=90.0, auto_start_listeners=False, mouse_controller=FakeMouseController())
     try:
         app._on_start_requested("mock")
@@ -282,7 +284,10 @@ def test_app_starts_and_stops_airpods_helper_with_provider(qt_app, monkeypatch, 
 
     def fake_run(command, **kwargs):
         run_commands.append(command)
-        pid_path.write_text("12345")
+        if "set helperTab to do script" in command[2]:
+            pid_path.write_text("12345")
+            return main_module.subprocess.CompletedProcess(command, 0, stdout="67890\n")
+        return main_module.subprocess.CompletedProcess(command, 0)
 
     def fake_kill(pid, sig):
         nonlocal helper_alive
@@ -300,6 +305,7 @@ def test_app_starts_and_stops_airpods_helper_with_provider(qt_app, monkeypatch, 
 
     config = copy.deepcopy(load_config())
     config["providers"]["airpods"]["udp_port"] = 5997
+    config.setdefault("ui", {})["calibration_enabled"] = False
     app = App(config, poll_hz=90.0, auto_start_listeners=False, mouse_controller=FakeMouseController())
     try:
         airpods_index = app.window.setup_panel._provider_combo.findData("airpods")
@@ -307,13 +313,17 @@ def test_app_starts_and_stops_airpods_helper_with_provider(qt_app, monkeypatch, 
 
         app._on_start_requested("airpods")
         assert run_commands[0][:2] == ["/usr/bin/osascript", "-e"]
-        assert 'tell application "Terminal"' in run_commands[0][2]
+        assert "set helperTab to do script" in run_commands[0][2]
+        assert "return helperWindowId" in run_commands[0][2]
         assert app._airpods_helper_pid == 12345
+        assert app._airpods_terminal_window_id == 67890
         assert app._provider is not None
 
         app._on_stop_requested()
         assert (12345, main_module.signal.SIGTERM) in kill_calls
         assert app._airpods_helper_pid is None
+        assert app._airpods_terminal_window_id is None
+        assert "close (window id 67890)" in run_commands[1][2]
         assert app._provider is None
     finally:
         app.shutdown()
@@ -338,6 +348,7 @@ def test_main_gui_settings_persist_and_reload(qt_app, tmp_path):
         setup._ximu3_ignore_mag_button.setChecked(True)
         app.window.controls._record_check.setChecked(False)
         app.window.controls._mouse_check.setChecked(False)
+        app.window.controls._calibration_check.setChecked(True)
         app.window._kx_spin.setValue(21)
         app.window._ky_spin.setValue(-17)
         app.window._mode_combo.setCurrentIndex(app.window._mode_combo.findData("velocity"))
@@ -357,6 +368,7 @@ def test_main_gui_settings_persist_and_reload(qt_app, tmp_path):
     assert saved["ui"] == {
         "recording_enabled": False,
         "mouse_control_enabled": False,
+        "calibration_enabled": True,
     }
     assert saved["providers"]["ximu3"]["ahrs_ignore_magnetometer"] is True
     assert saved["dsp"]["absolute"] == {"kx": 21.0, "ky": -17.0}
@@ -387,6 +399,7 @@ def test_main_gui_settings_persist_and_reload(qt_app, tmp_path):
         assert reloaded_app.window.setup_panel.ximu3_ignore_magnetometer_enabled is True
         assert reloaded_app.window.controls.recording_enabled is False
         assert reloaded_app.window.controls.mouse_control_enabled is False
+        assert reloaded_app.window.controls.calibration_enabled is True
         assert reloaded_app.window._kx_spin.value() == 21
         assert reloaded_app.window._ky_spin.value() == -17
         assert reloaded_app.window._mode_combo.currentData() == "velocity"
