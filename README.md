@@ -213,9 +213,9 @@ If registration is denied, the main window displays the reason instead of silent
 claiming the hotkey is active.
 
 TODO:
-FITTS - Record rest position
-RECORDER - ?? What to record RE trajectory. 
+TEST - add centre point to detect headpose and tremor etc.
 
+IDEAS:
  * recentering tool for absolute mode
  * snap to object
  * ?? zooming dwell clicker ??
@@ -223,6 +223,7 @@ RECORDER - ?? What to record RE trajectory.
    * Use for recentering? Work out centre from camera, but only re-centre/adjust when at edges (hard to reach)????
  * calibration - establish ROM - work out the gains...
 
- CHECK
-  * timestamps in mouse logging line up with the timestamps of mouse data
+ * Head joystick - movement threshold ->  mouse movement.....
+
+ * Generic switch - detect movement over threshold... -> switch signal
   
