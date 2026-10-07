@@ -7,3 +7,4 @@ mediapipe>=0.10.21
 pynput>=1.7
 ximu3>=1.9.1
 pytest>=8.0
+pyopengl>=3.1.6

@@ -10,12 +10,15 @@ import sys
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from providers.ximu3_settings import MOUNTING_ORIENTATIONS
+
 
 class SetupPanel(QWidget):
     start_requested = Signal(str)  # provider name, e.g. "uniface"
     stop_requested = Signal()
     provider_changed = Signal(str)
     ximu3_ignore_magnetometer_toggled = Signal(bool)
+    ximu3_mounting_orientation_changed = Signal(str)
 
     def __init__(
         self,
@@ -47,6 +50,17 @@ class SetupPanel(QWidget):
         self._ximu3_ignore_mag_button.setCheckable(True)
         self._ximu3_ignore_mag_button.toggled.connect(self._on_ximu3_ignore_mag_toggled)
 
+        self._ximu3_mounting_label = QLabel("Mounting:")
+        self._ximu3_mounting_combo = QComboBox()
+        for name in MOUNTING_ORIENTATIONS:
+            self._ximu3_mounting_combo.addItem(name, userData=name)
+        self._ximu3_mounting_combo.setToolTip(
+            "Horizontal: USB points backward, hanging from glasses.\n"
+            "Vertical: USB points down, mounted on the temple.\n"
+            "Printed arrows face out of the head in all orientations."
+        )
+        self._ximu3_mounting_combo.currentIndexChanged.connect(self._on_ximu3_mounting_changed)
+
         selection_row = QHBoxLayout()
         selection_row.addWidget(self._provider_combo)
         selection_row.addWidget(self._start_button)
@@ -55,7 +69,11 @@ class SetupPanel(QWidget):
         box = QGroupBox("Input Provider")
         box_layout = QVBoxLayout(box)
         box_layout.addLayout(selection_row)
-        box_layout.addWidget(self._ximu3_ignore_mag_button)
+        ximu3_row = QHBoxLayout()
+        ximu3_row.addWidget(self._ximu3_ignore_mag_button)
+        ximu3_row.addWidget(self._ximu3_mounting_label)
+        ximu3_row.addWidget(self._ximu3_mounting_combo)
+        box_layout.addLayout(ximu3_row)
         self._connection_status = QLabel()
         self._connection_status.setVisible(False)
         box_layout.addWidget(self._connection_status)
@@ -71,7 +89,27 @@ class SetupPanel(QWidget):
         self.provider_changed.emit(self._provider_combo.currentData())
 
     def _update_ximu3_button_visibility(self) -> None:
-        self._ximu3_ignore_mag_button.setVisible(self._provider_combo.currentData() == "ximu3")
+        visible = self._provider_combo.currentData() == "ximu3"
+        self._ximu3_ignore_mag_button.setVisible(visible)
+        self._ximu3_mounting_label.setVisible(visible)
+        self._ximu3_mounting_combo.setVisible(visible)
+
+    def _on_ximu3_mounting_changed(self) -> None:
+        name = self._ximu3_mounting_combo.currentData()
+        if name is not None:
+            self.ximu3_mounting_orientation_changed.emit(name)
+
+    def set_ximu3_axes_configuration(self, alignment: str, convention: int) -> None:
+        """Restore a preset without emitting; leave custom configurations unselected."""
+        name = next(
+            (name for name, settings in MOUNTING_ORIENTATIONS.items()
+             if settings == (alignment.replace(" ", "").upper(), convention)),
+            None,
+        )
+        self._ximu3_mounting_combo.blockSignals(True)
+        self._ximu3_mounting_combo.setPlaceholderText("Custom (from config)")
+        self._ximu3_mounting_combo.setCurrentIndex(self._ximu3_mounting_combo.findData(name))
+        self._ximu3_mounting_combo.blockSignals(False)
 
     def _on_ximu3_ignore_mag_toggled(self, checked: bool) -> None:
         self._ximu3_ignore_mag_button.setText(

@@ -167,6 +167,14 @@ class App:
         self.window.setup_panel.set_ximu3_ignore_magnetometer(
             config.get("providers", {}).get("ximu3", {}).get("ahrs_ignore_magnetometer", False)
         )
+        ximu3_config = config.get("providers", {}).get("ximu3", {})
+        self.window.setup_panel.set_ximu3_axes_configuration(
+            ximu3_config.get("axes_alignment", "+X-Z+Y"),
+            ximu3_config.get("ahrs_axes_convention", 2),
+        )
+        self.window.setup_panel.ximu3_mounting_orientation_changed.connect(
+            self._on_ximu3_mounting_orientation_changed
+        )
         self.window.recenter_requested.connect(self._on_recenter)
         self.window.kx_changed.connect(self._on_kx_changed)
         self.window.ky_changed.connect(self._on_ky_changed)
@@ -214,25 +222,7 @@ class App:
                 layout = QVBoxLayout(dialog)
                 layout.addWidget(QLabel("Select xIMU3 device:"))
                 combo = QComboBox()
-                # wifi_config = self._config.get("providers", {}).get("ximu3", {})
-                # address = wifi_config.get("wifi_ip_address", "192.168.1.1")
-                # send_port = wifi_config.get("wifi_port_send", 9000)
-                # receive_port = wifi_config.get("wifi_port_receive", 8001)
-                # direct_error = None
-                # try:
-                #     ip_address(address)
-                #     if not all(isinstance(port, int) and 1 <= port <= 65535 for port in (send_port, receive_port)):
-                #         raise ValueError("Wi-Fi ports must be between 1 and 65535")
-                # except (ValueError, TypeError) as exc:
-                #     direct_error = f"Direct Wi-Fi configuration invalid: {exc}"
-                # else:
-                #     combo.addItem(
-                #         f"Connect directly to {address} (UDP {send_port}/{receive_port})",
-                #         userData=DiscoveredDevice(
-                #             name=address, connection_type="wifi_ap", ip_address=address,
-                #             port=send_port, receive_port=receive_port,
-                #         ),
-                #     )
+                
                 layout.addWidget(combo)
                 scan_status = QLabel("Scanning for devices...")
                 layout.addWidget(scan_status)
@@ -546,6 +536,49 @@ class App:
             ["/usr/bin/osascript", "-e", close_window_script],
             check=False,
         )
+
+    def _on_ximu3_mounting_orientation_changed(self, name: str) -> None:
+        from providers.ximu3_provider import Ximu3Provider
+        from providers.ximu3_settings import MOUNTING_ORIENTATIONS
+        from PySide6.QtWidgets import QMessageBox
+
+        config = self._config.setdefault("providers", {}).setdefault("ximu3", {})
+        previous_config = config.copy()
+        previous = (
+            config.get("axes_alignment", "+X-Z+Y"),
+            config.get("ahrs_axes_convention", 2),
+        )
+        applied = False
+        try:
+            alignment, convention = MOUNTING_ORIENTATIONS[name]
+            if isinstance(self._provider, Ximu3Provider):
+                self._provider.set_axes_configuration(alignment, convention)
+                applied = True
+            config.update(axes_alignment=alignment, ahrs_axes_convention=convention)
+            self._persist_config()
+        except Exception as exc:
+            config.clear()
+            config.update(previous_config)
+            self.window.setup_panel.set_ximu3_axes_configuration(*previous)
+            error = str(exc)
+            if applied:
+                try:
+                    self._provider.set_axes_configuration(*previous)
+                except Exception as rollback_error:
+                    error += f"\nRestoring previous device settings failed: {rollback_error}"
+            QMessageBox.critical(
+                self.window, "Mounting Setting Failed",
+                f"Failed to set xIMU3 mounting orientation:\n\n{error}",
+            )
+            return
+        if applied:
+            self._end_calibration()
+            self.dsp.reset(position=self.headmouse.cursor_position)
+            self._last_sample = None
+            self._last_target = None
+            self._mouse_was_active = False
+            if self.window.controls.calibration_enabled and not self._ximu_waiting_to_start:
+                self._begin_calibration()
 
     def _on_ximu3_ignore_magnetometer_toggled(self, enabled: bool) -> None:
         from providers.ximu3_provider import Ximu3Provider

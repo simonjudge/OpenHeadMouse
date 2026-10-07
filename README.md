@@ -87,8 +87,23 @@ standard deviation during the capture.
 
 Main-window settings are saved to `config.json` as they change and restored at the next
 launch. This includes the selected provider, recording, mouse-control and calibration toggles, xIMU3
-magnetometer mode, mapping mode and gains, velocity parameters, and filter options. When
+magnetometer mode and mounting orientation, mapping mode and gains, velocity parameters, and filter options. When
 the application is launched with `--config`, settings are saved back to that selected file.
+
+### xIMU3 mounting orientation
+
+When xIMU3 is selected, the **Mounting** dropdown appears beside the magnetometer
+option. Choose **LHS-Horizontal**, **LHS-Vertical**, **RHS-Horizontal**, or
+**RHS-Vertical**. Horizontal means hanging from glasses with USB pointing backward;
+vertical means mounted on the temple with USB pointing down. Printed arrows face
+out of the head in all four cases.
+
+The selection saves `axes_alignment` and `ahrs_axes_convention` and sends both
+settings to a connected device (USB or Wi-Fi). During a Wi-Fi outage it is applied
+on reconnection. Changing a live mount resets cursor mapping and restarts calibration
+if enabled. Existing non-preset settings appear as **Custom (from config)** and
+are preserved until a preset is selected. See [Coordinate Frame Conventions](COORDINATE_FRAMES.md)
+for the preset alignments.
 
 ### xIMU3 Wi-Fi AP connection
 
@@ -106,7 +121,8 @@ configured connection and a real quaternion. During a Wi-Fi outage cursor update
 the SDK retries until Stop is pressed. On recovery tracking resumes using the previous
 neutral pose, without counting the outage as a new recording session. Calibration that
 was interrupted before completion restarts after samples resume. Configuration-command
-rejections are errors, not successful connections. USB behavior is unchanged.
+rejections are errors, not successful connections. Both USB and Wi-Fi startup
+verify and apply the saved device settings.
 
 The xIMU3 SDK timestamps quaternion messages in microseconds of device time. The provider
 converts these to seconds before velocity-mode processing and recording, matching the
@@ -115,7 +131,7 @@ rate, determines angular speed. Existing recordings made before this conversion 
 their original microsecond timestamps and are not migrated.
 
 Requires the `ximu3` Python package 1.9.1 or newer. Settings are sent as JSON commands
-(e.g. `{"axesAlignment": 1}`) followed by `{"apply": null}`, as the x-IMU3 protocol requires.
+(e.g. `{"axesAlignment": 2}`) followed by `{"apply": null}`, as the x-IMU3 protocol requires.
 
 ### Absolute-mode fine pointing
 

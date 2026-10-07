@@ -90,6 +90,150 @@ def test_set_ximu3_ignore_magnetometer_does_not_emit_signal(qt_app):
     assert seen == []
 
 
+def test_mounting_dropdown_visibility_presets_and_signal(qt_app):
+    from gui.setup_gui import SetupPanel
+
+    panel = SetupPanel(show_airpods=True)
+    combo = panel._ximu3_mounting_combo
+    assert combo.isHidden()
+    assert panel._ximu3_mounting_label.isHidden()
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "LHS-Horizontal", "LHS-Vertical", "RHS-Horizontal", "RHS-Vertical",
+    ]
+    panel._provider_combo.setCurrentIndex(panel._provider_combo.findData("ximu3"))
+    assert not combo.isHidden()
+    assert not panel._ximu3_mounting_label.isHidden()
+    seen = []
+    panel.ximu3_mounting_orientation_changed.connect(seen.append)
+    combo.setCurrentIndex(3)
+    assert seen == ["RHS-Vertical"]
+    panel.set_ximu3_axes_configuration("+Y-Z-X", 2)
+    assert combo.currentData() == "LHS-Vertical"
+    assert seen == ["RHS-Vertical"]
+    panel.set_ximu3_axes_configuration("+X+Y+Z", 0)
+    assert combo.currentIndex() == -1
+    assert seen == ["RHS-Vertical"]
+    for provider in ("uniface", "airpods"):
+        panel._provider_combo.setCurrentIndex(panel._provider_combo.findData(provider))
+        assert combo.isHidden()
+        assert panel._ximu3_mounting_label.isHidden()
+
+
+@pytest.mark.parametrize("name,alignment,value", [
+    ("LHS-Horizontal", "+X-Z+Y", 2),
+    ("LHS-Vertical", "+Y-Z-X", 6),
+    ("RHS-Horizontal", "+X+Z-Y", 1),
+    ("RHS-Vertical", "-Y+Z-X", 17),
+])
+def test_app_mounting_applies_and_persists(qt_app, tmp_path, name, alignment, value):
+    from types import SimpleNamespace
+    from main import App, load_config, make_provider
+    from providers.ximu3_provider import Ximu3Provider
+
+    config = copy.deepcopy(load_config())
+    config["providers"]["ximu3"].update(axes_alignment="+X+Y+Z", ahrs_axes_convention=0)
+    config.setdefault("ui", {})["calibration_enabled"] = False
+    config_path = tmp_path / "config.json"
+    app = App(config, auto_start_listeners=False, mouse_controller=FakeMouseController(),
+              config_path=config_path)
+    commands = []
+
+    class Connection:
+        def send_command(self, command):
+            message = json.loads(command)
+            if list(message.values()) != [None] or "apply" in message or "initialise" in message:
+                commands.append(message)
+            return SimpleNamespace(error="", value="0")
+
+    provider = Ximu3Provider()
+    provider._connection = Connection()
+    app._provider = provider
+    try:
+        combo = app.window.setup_panel._ximu3_mounting_combo
+        assert combo.currentIndex() == -1
+        combo.setCurrentIndex(combo.findData(name))
+        assert commands == [
+            {"axesAlignment": value}, {"ahrsAxesConvention": 2},
+            {"ahrsIgnoreMagnetometer": False}, {"apply": None}, {"initialise": None},
+        ]
+        saved = load_config(config_path)
+        assert saved["providers"]["ximu3"]["axes_alignment"] == alignment
+        assert saved["providers"]["ximu3"]["ahrs_axes_convention"] == 2
+        created = make_provider("ximu3", saved)
+        assert (created.axes_alignment, created.ahrs_axes_convention) == (alignment, 2)
+    finally:
+        app.shutdown()
+
+
+def test_app_mounting_failure_restores_gui_config_and_reports_error(qt_app, monkeypatch):
+    from main import App, load_config
+    from providers.ximu3_provider import Ximu3Provider
+    from PySide6.QtWidgets import QMessageBox
+
+    config = copy.deepcopy(load_config())
+    config["providers"]["ximu3"].update(axes_alignment="+X-Z+Y", ahrs_axes_convention=2)
+    previous = copy.deepcopy(config)
+    app = App(config, auto_start_listeners=False, mouse_controller=FakeMouseController())
+    app._provider = Ximu3Provider()
+    errors = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: errors.append(args[2]))
+    try:
+        combo = app.window.setup_panel._ximu3_mounting_combo
+        combo.setCurrentIndex(3)
+        assert combo.currentData() == "LHS-Horizontal"
+        assert config == previous
+        assert len(errors) == 1
+        assert "not connected" in errors[0]
+    finally:
+        app.shutdown()
+
+
+def test_mounting_save_failure_restores_live_device(qt_app, monkeypatch):
+    from types import SimpleNamespace
+    from main import App, load_config
+    from providers.ximu3_provider import Ximu3Provider
+    from PySide6.QtWidgets import QMessageBox
+
+    config = copy.deepcopy(load_config())
+    config["providers"]["ximu3"].update(axes_alignment="+X-Z+Y", ahrs_axes_convention=2)
+    previous = copy.deepcopy(config)
+    app = App(config, auto_start_listeners=False, mouse_controller=FakeMouseController())
+    provider = Ximu3Provider()
+    commands = []
+
+    class Connection:
+        def send_command(self, command):
+            message = json.loads(command)
+            if list(message.values()) != [None] or "apply" in message or "initialise" in message:
+                commands.append(message)
+            return SimpleNamespace(error="", value="0")
+
+    def fail_save():
+        raise RuntimeError("Cannot save settings")
+
+    provider._connection = Connection()
+    app._provider = provider
+    errors = []
+    monkeypatch.setattr(app, "_persist_config", fail_save)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: errors.append(args[2]))
+    try:
+        combo = app.window.setup_panel._ximu3_mounting_combo
+        combo.setCurrentIndex(3)
+        assert config == previous
+        assert combo.currentData() == "LHS-Horizontal"
+        assert (provider.axes_alignment, provider.ahrs_axes_convention) == ("+X-Z+Y", 2)
+        assert commands == [
+            {"axesAlignment": 17}, {"ahrsAxesConvention": 2},
+            {"ahrsIgnoreMagnetometer": False}, {"apply": None}, {"initialise": None},
+            {"axesAlignment": 2}, {"ahrsAxesConvention": 2},
+            {"ahrsIgnoreMagnetometer": False}, {"apply": None}, {"initialise": None},
+        ]
+        assert len(errors) == 1
+        assert "Cannot save settings" in errors[0]
+    finally:
+        app.shutdown()
+
+
 def test_telemetry_widget_updates_labels(qt_app):
     from gui.vis_gui import TelemetryWidget
 
@@ -346,6 +490,7 @@ def test_main_gui_settings_persist_and_reload(qt_app, tmp_path):
         setup = app.window.setup_panel
         setup._provider_combo.setCurrentIndex(setup._provider_combo.findData("ximu3"))
         setup._ximu3_ignore_mag_button.setChecked(True)
+        setup._ximu3_mounting_combo.setCurrentIndex(3)
         app.window.controls._record_check.setChecked(False)
         app.window.controls._mouse_check.setChecked(False)
         app.window.controls._calibration_check.setChecked(True)
@@ -371,6 +516,8 @@ def test_main_gui_settings_persist_and_reload(qt_app, tmp_path):
         "calibration_enabled": True,
     }
     assert saved["providers"]["ximu3"]["ahrs_ignore_magnetometer"] is True
+    assert saved["providers"]["ximu3"]["axes_alignment"] == "-Y+Z-X"
+    assert saved["providers"]["ximu3"]["ahrs_axes_convention"] == 2
     assert saved["dsp"]["absolute"] == {"kx": 21.0, "ky": -17.0}
     assert saved["dsp"]["mode"] == "velocity"
     assert saved["dsp"]["velocity"] == {
@@ -397,6 +544,7 @@ def test_main_gui_settings_persist_and_reload(qt_app, tmp_path):
     try:
         assert reloaded_app.window.setup_panel._provider_combo.currentData() == "ximu3"
         assert reloaded_app.window.setup_panel.ximu3_ignore_magnetometer_enabled is True
+        assert reloaded_app.window.setup_panel._ximu3_mounting_combo.currentData() == "RHS-Vertical"
         assert reloaded_app.window.controls.recording_enabled is False
         assert reloaded_app.window.controls.mouse_control_enabled is False
         assert reloaded_app.window.controls.calibration_enabled is True

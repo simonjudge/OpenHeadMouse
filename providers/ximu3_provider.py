@@ -7,48 +7,28 @@ and streams quaternions at up to 400 Hz.
 
 COORDINATE FRAME & AXES ALIGNMENT LOGIC:
 =========================================
+See: COORDINATE_FRAMES.md for the canonical head frame definition.
 
-Device body frame (configured on the hardware):
-  +X: Forward (direction of head gaze, out of nose)
-  +Y: Right (toward right ear)
-  +Z: Down (toward neck/floor)
-  This is the right-handed NED/FRD convention (AHRS axes convention 2).
-  Quaternions are converted in software to the project's canonical head
-  frame (+X forward, +Y left, +Z up; see COORDINATE_FRAMES.md) by a 180°
-  rotation about X: q_head = [w, x, -y, -z].
+LEFT HAND SIDE OF HEAD:
+Mode 1 - hanging from glasses.  USB pointing back, printing of arrows pointing out of head.  Alignment: "+X-Z+Y"
+Mode 2 - mounted with velcro on left temple.  USB pointing down, printing of arrows pointing out of head.  Alignment: "+Y-Z-X"
 
-xIMU3 Physical Axes:
-  The device has three axes printed with arrows: X, Y, Z
+RIGHT HAND SIDE OF HEAD:
+Mode 1 - hanging from glasses.  USB pointing back, printing of arrows pointing out of head.  Alignment: "+X+Z-Y"
+Mode 2 - mounted with velcro on right temple.  USB pointing down, printing of arrows pointing out of head.  Alignment: "-Y+Z-X"
 
-Determining axes_alignment:
-  Hold the xIMU3 exactly how it will be worn on the head. Then ask three questions:
+All four presets use AHRS axes convention 2 (NED). Horizontal corresponds to
+Mode 1; Vertical corresponds to Mode 2. See providers/ximu3_settings.py.
 
-  1. **Which printed arrow points Forward (out of the nose)?**
-     - Set that as your **Logical X**
-     - If the arrow points backward, use the negative version (e.g., -X)
+The alignment maps the sensor axes onto the device body frame, which with NED is
+Forward-Right-Down (FRD) in head terms. The software then converts FRD into the
+canonical FLU head frame with a 180 deg rotation about X: q_head = [w, x, -y, -z]
+(_XIMU3_TO_HEAD_FRAME). Do not "fix" sign problems by picking a different
+alignment; that just hides a frame error (see COORDINATE_FRAMES.md).
 
-  2. **Which printed arrow points to the Right (toward the right ear)?**
-     - Set that as your **Logical Y**
-     - If the arrow points toward the left ear, use the negative version (e.g., -Y)
+NOTE: the axesAlignment numeric enum in the x-IMU3 user manual / App does not
+match the firmware. _AXES_ALIGNMENT_VALUES holds the mapping verified on hardware.
 
-  3. **Which printed arrow points Down (toward the neck/floor)?**
-     - Set that as your **Logical Z**
-     - If the arrow points up toward the sky, use the negative version (e.g., -Z)
-
-Example: Left Temple Mounting (USB Pointing Backward)
-  Hold the sensor flat against the left side of the head with USB pointing back:
-
-  1. Physical +X arrow points Forward ✓ → Logical X = +X
-  2. Physical +Z arrow points out of the head (from the left ear) ✓
-     → Logical Y = -Z
-  3. Physical +Y arrow points Down ✓ → Logical Z = +Y
-
-  Result: axes_alignment = "+X-Z+Y"
-
-The xIMU3 SDK returns quaternions in this FRD body frame; ``_on_quaternion``
-converts them to the canonical head frame.
-
-Reference: xIMU3 User Manual v1.11, axes alignment command documentation.
 """
 
 from __future__ import annotations
@@ -57,7 +37,7 @@ import json
 import queue
 import time
 from dataclasses import dataclass
-from threading import Lock
+from threading import Lock, RLock
 
 import numpy as np
 import ximu3
@@ -65,17 +45,19 @@ import ximu3
 from core import quaternion_math as qm
 from providers.base_provider import BaseProvider, ProviderSample, ProviderState
 
-# Rows are the canonical head axes (forward, left, up) in the device's FRD body frame.
-_XIMU3_TO_HEAD_FRAME = np.diag([1.0, 1.0, 1.0])
+# Rows are the canonical head axes (forward, left, up) in the device's FRD body frame:
+# left = -right, up = -down (180 deg about X, det +1).
+_XIMU3_TO_HEAD_FRAME = np.diag([1.0, -1.0, -1.0])
 
-# FusionAxesAlignment enum values used by the "axesAlignment" device setting
-# (x-IMU3 App DeviceSettingsEnums.xml).
+# Numeric values for the "axesAlignment" device setting. This order was verified
+# empirically on hardware and deliberately differs from the x-IMU3 manual / App
+# (DeviceSettingsEnums.xml), which is incorrect.
 _AXES_ALIGNMENT_VALUES = {
     name: value
     for value, name in enumerate((
-        "+X+Y+Z", "+X-Z+Y", "+X-Y-Z", "+X+Z-Y", "-X+Y-Z", "-X+Z+Y", "-X-Y+Z", "-X-Z-Y",
-        "+Y-X+Z", "+Y-Z-X", "+Y+X-Z", "+Y+Z+X", "-Y+X+Z", "-Y-Z+X", "-Y-X-Z", "-Y+Z-X",
-        "+Z+Y-X", "+Z+X+Y", "+Z-Y+X", "+Z-X-Y", "-Z+Y+X", "-Z-X+Y", "-Z-Y-X", "-Z+X-Y",
+        "+X+Y+Z", "+X+Z-Y", "+X-Z+Y", "+X-Y-Z", "+Y+X-Z", "+Y+Z+X", "+Y-Z-X", "+Y-X+Z", "+Z+X+Y",
+          "+Z+Y-X", "+Z-Y+X", "+Z-X-Y", "-Z+X-Y", "-Z+Y+X", "-Z-Y-X", "-Z-X+Y", "-Y+X+Z", "-Y+Z-X",
+            "-Y-Z+X", "-Y-X-Z", "-X+Y-Z", "-X+Z+Y", "-X-Z-Y", "-X-Y+Z"   
     ))
 }
 
@@ -222,6 +204,7 @@ class Ximu3Provider(BaseProvider):
         self._connection = None
         self._keep_open = None
         self._link_lock = Lock()
+        self._settings_lock = RLock()
         self._link_status = "connecting"
         self._connected_generation = 0
         self._configured_generation = -1
@@ -280,8 +263,70 @@ class Ximu3Provider(BaseProvider):
         identity = self._connection.ping()
         if identity is None:
             raise RuntimeError("xIMU3 did not respond to ping")
-        for command in (*self._setting_commands(), _command("apply", None)):
+        self._apply_settings()
+
+    def _apply_settings(self) -> None:
+        with self._settings_lock:
+            print(
+                f"[xIMU3] Sending axes settings: axesAlignment='{self.axes_alignment}' "
+                f"({_axes_alignment_value(self.axes_alignment)}), "
+                f"ahrsAxesConvention={int(self.ahrs_axes_convention)}"
+            )
+            for command in self._setting_commands():
+                print(f"[xIMU3] -> {command}")
+                self._send_verified_command(command)
+                time.sleep(0.1)
+            print(f"[xIMU3] -> {_command('apply', None)}")
+            self._send_verified_command(_command("apply", None))
+            time.sleep(0.2)
+            self._report_axes_settings()
+            self._initialise_ahrs()
+
+    def _initialise_ahrs(self) -> None:
+        """Restart the AHRS so its orientation estimate is rebuilt in the newly applied axes.
+
+        Without this the AHRS keeps the estimate from the previous alignment (including the
+        one saved on the device at power-on), and slowly "corrects" it towards gravity,
+        which appears as spurious rotation.
+        """
+        command = _command("initialise", None)
+        print(f"[xIMU3] -> {command}")
+        try:
             self._send_verified_command(command)
+        except (RuntimeError, ValueError, OSError) as exc:
+            print(f"[xIMU3] AHRS initialise failed: {exc}")
+            return
+        self._clear_samples()
+
+    def _read_setting(self, key: str):
+        """Read a setting back from the device (x-IMU3 protocol: send the key with a null value)."""
+        try:
+            response = self._connection.send_command(_command(key, None))
+        except Exception as exc:
+            return None, str(exc)
+        if response is None:
+            return None, "no response"
+        if getattr(response, "error", ""):
+            return None, response.error
+        return getattr(response, "value", None), None
+
+    def _report_axes_settings(self) -> None:
+        names = {value: name for name, value in _AXES_ALIGNMENT_VALUES.items()}
+        for key, expected in (
+            ("axesAlignment", _axes_alignment_value(self.axes_alignment)),
+            ("ahrsAxesConvention", int(self.ahrs_axes_convention)),
+        ):
+            value, error = self._read_setting(key)
+            if error is not None:
+                print(f"[xIMU3] <- {key}: read-back failed ({error})")
+                continue
+            try:
+                reported = int(float(value))
+            except (TypeError, ValueError):
+                reported = value
+            label = f" ('{names[reported]}')" if key == "axesAlignment" and reported in names else ""
+            status = "OK" if reported == expected else f"MISMATCH (expected {expected})"
+            print(f"[xIMU3] <- device reports {key} = {value}{label} {status}")
 
     def _run_wifi(self) -> None:
         config = ximu3.UdpConnectionConfig(
@@ -387,9 +432,7 @@ class Ximu3Provider(BaseProvider):
             print(f"✓ Device ready, configuring...")
 
             # Configure axes alignment via command
-            self._configure_axes_alignment(self._connection)
-            self._configure_ahrs_axes_convention(self._connection)
-            self._configure_ahrs_ignore_magnetometer(self._connection)
+            self._apply_settings()
 
             # Register quaternion callback
             self._connection.add_quaternion_callback(self._on_quaternion)
@@ -462,7 +505,41 @@ class Ximu3Provider(BaseProvider):
                 f"'{self.ahrs_ignore_magnetometer}': {e}"
             ) from e
 
+    def set_axes_configuration(self, alignment: str, convention: int) -> None:
+        """Apply both axes settings together, restoring the old pair on rejection."""
+        _axes_alignment_value(alignment)
+        with self._settings_lock:
+            if self.connection_type == "wifi_ap" and self.link_status in (
+                "connecting", "reconnecting",
+            ):
+                self.axes_alignment = alignment
+                self.ahrs_axes_convention = convention
+                self._configured_generation = -1
+                return
+            if self._connection is None:
+                raise RuntimeError("Cannot set axes configuration: xIMU3 is not connected")
+            previous = (self.axes_alignment, self.ahrs_axes_convention)
+            self.axes_alignment = alignment
+            self.ahrs_axes_convention = convention
+            try:
+                self._apply_settings()
+            except (RuntimeError, ValueError, OSError) as exc:
+                self.axes_alignment, self.ahrs_axes_convention = previous
+                try:
+                    self._apply_settings()
+                except (RuntimeError, ValueError, OSError) as rollback_error:
+                    raise RuntimeError(
+                        f"Axes configuration failed: {exc}. "
+                        f"Restoring previous settings also failed: {rollback_error}"
+                    ) from exc
+                raise
+            self._clear_samples()
+
     def set_ahrs_ignore_magnetometer(self, enabled: bool) -> None:
+        with self._settings_lock:
+            self._set_ahrs_ignore_magnetometer(enabled)
+
+    def _set_ahrs_ignore_magnetometer(self, enabled: bool) -> None:
         """Toggle the AHRS ignore-magnetometer setting on a live connection.
 
         Unlike the startup-only `_configure_*` helpers, this can be called

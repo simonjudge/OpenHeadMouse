@@ -71,6 +71,139 @@ def test_set_ahrs_ignore_magnetometer_updates_live_connection():
 
 
 @pytest.mark.parametrize("connection_type", ["usb", "wifi_ap"])
+@pytest.mark.parametrize("alignment,value", [
+    ("+X-Z+Y", 2), ("+Y-Z-X", 6), ("+X+Z-Y", 1), ("-Y+Z-X", 17),
+])
+def test_saved_mounting_is_applied_at_startup(monkeypatch, connection_type, alignment, value):
+    class Connection(_FakeUdpConnection):
+        def open(self):
+            pass
+
+        def get_statistics(self):
+            return object()
+
+    connection = Connection(None)
+    monkeypatch.setattr(ximu3_provider.ximu3, "Connection", lambda config: connection)
+    monkeypatch.setattr(ximu3_provider.time, "sleep", lambda seconds: None)
+    provider = Ximu3Provider(
+        connection_type=connection_type, port_name="COM3",
+        axes_alignment=alignment, ahrs_axes_convention=2,
+    )
+    if connection_type == "usb":
+        provider._stop_event.set()
+        provider._run()
+        assert connection.closed
+    else:
+        provider._connection = connection
+        provider._configure_wifi()
+    assert connection.commands == [
+        json.dumps({"axesAlignment": value}),
+        '{"ahrsAxesConvention": 2}', '{"ahrsIgnoreMagnetometer": false}', '{"apply": null}', '{"initialise": null}',
+    ]
+
+
+@pytest.mark.parametrize("connection_type", ["usb", "wifi_ap"])
+@pytest.mark.parametrize("alignment,value", [
+    ("+X-Z+Y", 2), ("+Y-Z-X", 6), ("+X+Z-Y", 1), ("-Y+Z-X", 17),
+])
+def test_mounting_sends_both_axes_settings(connection_type, alignment, value, capsys):
+    provider = Ximu3Provider(connection_type=connection_type)
+    connection = _FakeUdpConnection(None)
+    provider._connection = connection
+    provider._link_status = "streaming"
+    provider.output_queue.put(ProviderSample(1.0, np.array([1.0, 0.0, 0.0, 0.0])))
+
+    provider.set_axes_configuration(alignment, 2)
+
+    assert connection.commands == [
+        json.dumps({"axesAlignment": value}),
+        '{"ahrsAxesConvention": 2}', '{"ahrsIgnoreMagnetometer": false}', '{"apply": null}', '{"initialise": null}',
+    ]
+    assert (provider.axes_alignment, provider.ahrs_axes_convention) == (alignment, 2)
+    assert provider._setting_commands()[:2] == connection.commands[:2]
+    assert provider.output_queue.empty()
+    assert connection.reads == ["axesAlignment", "ahrsAxesConvention"]
+    output = capsys.readouterr().out
+    assert f"-> {json.dumps({'axesAlignment': value})}" in output
+    assert f"device reports axesAlignment = {value} ('{alignment}') OK" in output
+    assert "device reports ahrsAxesConvention = 2 OK" in output
+
+
+def test_read_back_mismatch_and_failure_are_reported(capsys):
+    class StaleDevice(_FakeUdpConnection):
+        def send_command(self, command):
+            if command == '{"ahrsAxesConvention": null}':
+                return None
+            response = super().send_command(command)
+            if command == '{"axesAlignment": 6}':
+                self.settings["axesAlignment"] = 2
+            return response
+
+    provider = Ximu3Provider()
+    provider._connection = StaleDevice(None)
+    provider.set_axes_configuration("+Y-Z-X", 2)
+    output = capsys.readouterr().out
+    assert "device reports axesAlignment = 2 ('+X-Z+Y') MISMATCH (expected 6)" in output
+    assert "ahrsAxesConvention: read-back failed (no response)" in output
+
+
+@pytest.mark.parametrize("status", ["connecting", "reconnecting"])
+def test_mounting_during_wifi_outage_is_used_on_reconnect(status):
+    provider = Ximu3Provider(connection_type="wifi_ap")
+    provider._link_status = status
+    provider._connection = _FakeUdpConnection(None)
+
+    provider.set_axes_configuration("-Y+Z-X", 2)
+    assert provider._connection.commands == []
+    provider._configure_wifi()
+    assert provider._connection.commands[:2] == [
+        '{"axesAlignment": 17}', '{"ahrsAxesConvention": 2}',
+    ]
+
+
+def test_mounting_requires_usb_connection_and_valid_settings():
+    provider = Ximu3Provider()
+    with pytest.raises(RuntimeError, match="not connected"):
+        provider.set_axes_configuration("+Y-Z-X", 2)
+    with pytest.raises(ValueError, match="axes alignment"):
+        provider.set_axes_configuration("invalid", 2)
+    provider._connection = _FakeUdpConnection(None)
+    provider.set_axes_configuration("+Y-Z-X", 3)
+    assert provider.ahrs_axes_convention == 3
+    assert provider.axes_alignment == "+Y-Z-X"
+
+
+def test_mounting_rejection_restores_previous_pair():
+    provider = Ximu3Provider()
+
+    class RejectOnce(_FakeUdpConnection):
+        def send_command(self, command):
+            response = super().send_command(command)
+            if len(self.commands) == 2:
+                response.error = "Rejected"
+            return response
+
+    connection = RejectOnce(None)
+    provider._connection = connection
+    with pytest.raises(ValueError, match="Rejected"):
+        provider.set_axes_configuration("-Y+Z-X", 2)
+    assert (provider.axes_alignment, provider.ahrs_axes_convention) == ("+X-Z+Y", 2)
+    assert connection.commands == [
+        '{"axesAlignment": 17}', '{"ahrsAxesConvention": 2}',
+        '{"axesAlignment": 2}', '{"ahrsAxesConvention": 2}',
+        '{"ahrsIgnoreMagnetometer": false}', '{"apply": null}', '{"initialise": null}',
+    ]
+
+
+def test_mounting_failed_rollback_is_reported():
+    provider = Ximu3Provider()
+    provider._connection = _FakeConnection()
+    with pytest.raises(RuntimeError, match="Restoring previous settings also failed"):
+        provider.set_axes_configuration("+Y-Z-X", 2)
+    assert provider.axes_alignment == "+X-Z+Y"
+
+
+@pytest.mark.parametrize("connection_type", ["usb", "wifi_ap"])
 def test_quaternion_timestamps_are_seconds_on_both_connections(connection_type, tmp_path):
     provider = Ximu3Provider(connection_type=connection_type)
     if connection_type == "wifi_ap":
@@ -105,7 +238,8 @@ def test_ximu_velocity_matches_other_second_timestamped_providers():
         for yaw in (0.0, 1.0, 2.0)
     ]
     for timestamp, q in zip((1_000_000, 1_050_000, 1_100_000), poses):
-        provider._on_quaternion(SimpleNamespace(timestamp=timestamp, w=q[0], x=q[1], y=q[2], z=q[3]))
+        # The device reports FRD; FLU -> FRD is the same 180 deg flip about X.
+        provider._on_quaternion(SimpleNamespace(timestamp=timestamp, w=q[0], x=q[1], y=-q[2], z=-q[3]))
     ximu_samples = [provider.output_queue.get_nowait() for _ in poses]
     other_samples = [ProviderSample(10.0 + i * 0.05, q) for i, q in enumerate(poses)]
 
@@ -129,6 +263,8 @@ class _FakeUdpConnection:
     def __init__(self, config):
         self.config = config
         self.commands = []
+        self.reads = []
+        self.settings = {}
         self.callback = None
         self.status_callback = None
         self.status = ximu3_provider.ximu3.CONNECTION_STATUS_DISCONNECTED
@@ -156,7 +292,13 @@ class _FakeUdpConnection:
         return object()
 
     def send_command(self, command):
+        # Like the device: a null value reads a setting; reads are tracked separately.
+        (key, value), = json.loads(command).items()
+        if value is None and key not in ("apply", "initialise"):
+            self.reads.append(key)
+            return type("Response", (), {"error": "", "value": str(self.settings.get(key))})()
         self.commands.append(command)
+        self.settings[key] = value
         return type("Response", (), {"error": ""})()
 
     def close(self):
@@ -220,8 +362,8 @@ def test_wifi_reconnect_reconfigures_and_drops_stale_samples(monkeypatch):
         connection = provider._connection
         assert (connection.config.send_port, connection.config.receive_port) == (9033, 8033)
         assert connection.commands == [
-            '{"axesAlignment": 1}', '{"ahrsAxesConvention": 2}',
-            '{"ahrsIgnoreMagnetometer": false}', '{"apply": null}',
+            '{"axesAlignment": 2}', '{"ahrsAxesConvention": 2}',
+            '{"ahrsIgnoreMagnetometer": false}', '{"apply": null}', '{"initialise": null}',
         ]
         connection.emit()
         _wait_until(lambda: provider.link_status == "streaming")
@@ -239,7 +381,8 @@ def test_wifi_reconnect_reconfigures_and_drops_stale_samples(monkeypatch):
         connection.emit()
         assert provider.output_queue.empty()
         provider._keep_open.callback(ximu3_provider.ximu3.CONNECTION_STATUS_CONNECTED)
-        _wait_until(lambda: len(connection.commands) == 8)
+        _wait_until(lambda: len(connection.commands) == 10)
+        _wait_until(lambda: provider.link_status == "waiting for data")
         connection.emit()
         _wait_until(lambda: provider.link_status == "streaming")
         assert provider.output_queue.qsize() == 1

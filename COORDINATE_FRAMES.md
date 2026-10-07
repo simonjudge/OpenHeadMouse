@@ -69,7 +69,15 @@ MediaPipe coordinates, so it maps canonical rotations back with the UniFace matr
 
 The xIMU3 is configured on the device with AHRS axes convention `2` (NED) and an
 `axes_alignment` that makes its body axes Forward/Right/Down; the provider then converts FRD to
-the canonical FLU frame in software.
+the canonical FLU frame in software with `_XIMU3_TO_HEAD_FRAME = diag(1, −1, −1)`
+(`q_head = [w, x, −y, −z]`). This conversion is the same for every mount; only the
+`axes_alignment` changes between mounts.
+
+> **Do not compensate a sign error by choosing a different `axes_alignment`.** The alignment must
+> describe the physical mount (FRD). An earlier version used an identity conversion and only
+> appeared correct because the wrong alignment number was being sent (the mirror-side mount,
+> which is a hidden 180° flip about X). Use `tests/test_provider_frames.py` and
+> `test_orientation.py` to verify signs instead.
 
 Hold the xIMU3 exactly how you will wear it and answer:
 
@@ -79,7 +87,26 @@ Hold the xIMU3 exactly how you will wear it and answer:
 
 Example — left temple mount, USB pointing backward: physical +X forward, physical +Z out of the
 left ear (so Right = −Z), physical +Y down. Result: `axes_alignment = "+X-Z+Y"`.
-(Reference: xIMU3 User Manual v1.11, axes alignment command.)
+(Reference: xIMU3 User Manual v1.11, axes alignment command — but see the note below on the
+numeric values.)
+
+The main GUI offers these presets beside the magnetometer option, visible only
+when xIMU3 is selected:
+
+| Mounting orientation | USB direction | `axes_alignment` | Value sent | `ahrs_axes_convention` |
+|---|---|---|---|---|
+| LHS-Horizontal | Backward | `+X-Z+Y` | `2` | `2` (NED) |
+| LHS-Vertical | Down | `+Y-Z-X` | `6` | `2` (NED) |
+| RHS-Horizontal | Backward | `+X+Z-Y` | `1` | `2` (NED) |
+| RHS-Vertical | Down | `-Y+Z-X` | `17` | `2` (NED) |
+
+**Note:** the numeric `axesAlignment` enum listed in the xIMU3 user manual / x-IMU3 App is
+incorrect for the firmware. The values above come from `_AXES_ALIGNMENT_VALUES` in
+`providers/ximu3_provider.py`, which was verified on hardware.
+
+In all cases the printed arrows face out of the head. Horizontal is the
+glasses-hanging mount; vertical is the temple/velcro mount. These definitions
+match the comment header in `providers/ximu3_provider.py`.
 
 ## Adding a new provider
 
