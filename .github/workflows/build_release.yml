@@ -60,13 +60,28 @@ jobs:
           pip install pyinstaller
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
+      - name: Download FaceLandmarker Model
+        shell: bash
+        run: |
+          mkdir -p models
+          curl --fail --location --retry 3 \
+            --output models/face_landmarker.task \
+            https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
+          python -c "import hashlib, pathlib; p = pathlib.Path('models/face_landmarker.task'); actual = hashlib.sha256(p.read_bytes()).hexdigest(); expected = '64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff'; assert actual == expected, f'FaceLandmarker model checksum mismatch: {actual}'"
+
       - name: Build Executable with PyInstaller
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            pyinstaller --onefile --add-data "config.json;." --name OpenHeadMouse main.py
+            pyinstaller --onefile \
+              --add-data "config.json;." \
+              --add-data "models/face_landmarker.task;models" \
+              --name OpenHeadMouse main.py
           else
-            pyinstaller --onefile --add-data "config.json:." --name OpenHeadMouse main.py
+            pyinstaller --onefile \
+              --add-data "config.json:." \
+              --add-data "models/face_landmarker.task:models" \
+              --name OpenHeadMouse main.py
           fi
 
       - name: Rename Output Binary

@@ -51,6 +51,15 @@ _CAMERA_TO_HEAD_FRAME = np.array(
 )
 
 
+def _resolve_model_path(configured_path: str) -> Path:
+    model_path = Path(configured_path)
+    if model_path.is_file() or model_path.is_absolute():
+        return model_path
+
+    bundled_path = Path(__file__).resolve().parent.parent / model_path
+    return bundled_path if bundled_path.is_file() else model_path
+
+
 def _rotation_matrix_to_quaternion(r: np.ndarray) -> np.ndarray:
     """Convert a 3x3 rotation matrix to a [w, x, y, z] unit quaternion.
 
@@ -121,7 +130,7 @@ class UniFaceProvider(BaseProvider):
         from mediapipe.tasks.python import vision
         from mediapipe.tasks.python.core.base_options import BaseOptions
 
-        model_path = Path(self.model_path)
+        model_path = _resolve_model_path(self.model_path)
         if not model_path.is_file():
             raise FileNotFoundError(
                 f"FaceLandmarker model not found at '{model_path}'. Download it from "

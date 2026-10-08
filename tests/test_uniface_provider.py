@@ -17,13 +17,34 @@ pure and hardware-independent:
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from providers import uniface_provider
 from providers.uniface_provider import (
     _CAMERA_TO_HEAD_FRAME,
+    _resolve_model_path,
     _rotation_matrix_to_quaternion,
     _transformation_matrix_to_head_quaternion,
 )
 
 RNG = np.random.default_rng(seed=7)
+
+
+def test_model_path_resolves_from_application_bundle(monkeypatch, tmp_path):
+    module_path = tmp_path / "providers" / "uniface_provider.py"
+    module_path.parent.mkdir()
+    bundled_model = tmp_path / "models" / "face_landmarker.task"
+    bundled_model.parent.mkdir()
+    bundled_model.touch()
+    monkeypatch.setattr(uniface_provider, "__file__", str(module_path))
+    monkeypatch.chdir(tmp_path / "providers")
+
+    assert _resolve_model_path("models/face_landmarker.task") == bundled_model
+
+
+def test_model_path_preserves_existing_custom_path(tmp_path):
+    custom_model = tmp_path / "custom.task"
+    custom_model.touch()
+
+    assert _resolve_model_path(str(custom_model)) == custom_model
 
 
 def _rotation_angle(r: np.ndarray) -> float:
