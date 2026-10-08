@@ -76,11 +76,15 @@ jobs:
             pyinstaller --onefile \
               --add-data "config.json;." \
               --add-data "models/face_landmarker.task;models" \
+              --hidden-import "mediapipe.tasks.c" \
+              --collect-binaries "mediapipe" \
               --name OpenHeadMouse main.py
           else
             pyinstaller --onefile \
               --add-data "config.json:." \
               --add-data "models/face_landmarker.task:models" \
+              --hidden-import "mediapipe.tasks.c" \
+              --collect-binaries "mediapipe" \
               --name OpenHeadMouse main.py
           fi
 
