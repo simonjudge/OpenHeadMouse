@@ -3,62 +3,243 @@ name: Build and Release Executables
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build (${{ matrix.os }})
+    name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            asset_name: OpenHeadMouse-windows-amd64.exe
-            exec_path: dist/OpenHeadMouse.exe
+            platform: Windows
+            binary_asset_name: OpenHeadMouse-windows-amd64.exe
+            binary_exec_path: dist/OpenHeadMouse.exe
+            installer_asset_name: OpenHeadMouse-windows-amd64-setup.exe
           - os: ubuntu-latest
-            asset_name: OpenHeadMouse-linux-amd64
-            exec_path: dist/OpenHeadMouse
+            platform: Linux
+            binary_asset_name: OpenHeadMouse-linux-amd64
+            binary_exec_path: dist/OpenHeadMouse
+            installer_asset_name: OpenHeadMouse-linux-amd64.deb
           - os: macos-latest
-            asset_name: OpenHeadMouse-macos-universal
-            exec_path: dist/OpenHeadMouse
+            platform: macOS
+            binary_asset_name: OpenHeadMouse-macos-universal
+            binary_exec_path: dist/OpenHeadMouse
+            installer_asset_name: OpenHeadMouse-macos-universal.dmg
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Derive Version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            RAW="${GITHUB_REF_NAME}"
+            CLEAN="${RAW#v}"
+          else
+            RAW="manual-${GITHUB_RUN_NUMBER}"
+            CLEAN="0.0.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "raw=$RAW" >> "$GITHUB_OUTPUT"
+          echo "clean=$CLEAN" >> "$GITHUB_OUTPUT"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: "3.12"
 
       - name: Install Dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-        shell: bash
 
       - name: Build Executable with PyInstaller
+        shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
             pyinstaller --onefile --add-data "config.json;." --name OpenHeadMouse main.py
           else
             pyinstaller --onefile --add-data "config.json:." --name OpenHeadMouse main.py
           fi
-        shell: bash
 
       - name: Rename Output Binary
-        run: |
-          mv ${{ matrix.exec_path }} dist/${{ matrix.asset_name }}
         shell: bash
+        run: |
+          mv "${{ matrix.binary_exec_path }}" "dist/${{ matrix.binary_asset_name }}"
 
-      - name: Upload Build Artifacts
+      - name: Build Windows Installer (Inno Setup)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          choco install innosetup --no-progress -y
+          @"
+          [Setup]
+          AppName=OpenHeadMouse
+          AppVersion=${{ steps.ver.outputs.clean }}
+          DefaultDirName={autopf}\OpenHeadMouse
+          DefaultGroupName=OpenHeadMouse
+          OutputDir=dist
+          OutputBaseFilename=OpenHeadMouse-windows-amd64-setup
+          Compression=lzma
+          SolidCompression=yes
+          WizardStyle=modern
+
+          [Files]
+          Source: "dist\${{ matrix.binary_asset_name }}"; DestDir: "{app}"; DestName: "OpenHeadMouse.exe"; Flags: ignoreversion
+
+          [Icons]
+          Name: "{group}\OpenHeadMouse"; Filename: "{app}\OpenHeadMouse.exe"
+          Name: "{autodesktop}\OpenHeadMouse"; Filename: "{app}\OpenHeadMouse.exe"
+          "@ | Set-Content installer.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Sign Windows Installer (optional)
+        if: runner.os == 'Windows'
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        shell: powershell
+        run: |
+          if (-not $env:WINDOWS_PFX_BASE64 -or -not $env:WINDOWS_PFX_PASSWORD) {
+            Write-Host "Signing secrets are not configured; skipping signing."
+            exit 0
+          }
+
+          $pfxPath = "$env:RUNNER_TEMP\codesign.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
+
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Select-Object -First 1).FullName
+          if (-not $signtool) { throw "signtool.exe not found" }
+
+          & $signtool sign /fd SHA256 /td SHA256 `
+            /f $pfxPath /p $env:WINDOWS_PFX_PASSWORD `
+            /tr http://timestamp.digicert.com `
+            "dist\${{ matrix.installer_asset_name }}"
+
+      - name: Build Linux .deb package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev build-essential
+          sudo gem install --no-document fpm
+
+          mkdir -p pkg/usr/local/bin
+          cp "dist/${{ matrix.binary_asset_name }}" pkg/usr/local/bin/OpenHeadMouse
+          chmod +x pkg/usr/local/bin/OpenHeadMouse
+
+          fpm -s dir -t deb \
+            -n openheadmouse \
+            -v "${{ steps.ver.outputs.clean }}" \
+            --architecture amd64 \
+            --description "OpenHeadMouse" \
+            -C pkg \
+            usr/local/bin/OpenHeadMouse
+
+          mv ./*.deb "dist/${{ matrix.installer_asset_name }}"
+
+      - name: Build macOS .app bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          APP_ROOT="dist/OpenHeadMouse.app"
+          mkdir -p "$APP_ROOT/Contents/MacOS"
+          mkdir -p "$APP_ROOT/Contents/Resources"
+
+          cp "dist/${{ matrix.binary_asset_name }}" "$APP_ROOT/Contents/MacOS/OpenHeadMouse"
+          chmod +x "$APP_ROOT/Contents/MacOS/OpenHeadMouse"
+
+          cat > "$APP_ROOT/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>OpenHeadMouse</string>
+            <key>CFBundleDisplayName</key><string>OpenHeadMouse</string>
+            <key>CFBundleIdentifier</key><string>io.github.simonjudge.openheadmouse</string>
+            <key>CFBundleVersion</key><string>${{ steps.ver.outputs.clean }}</string>
+            <key>CFBundleShortVersionString</key><string>${{ steps.ver.outputs.clean }}</string>
+            <key>CFBundleExecutable</key><string>OpenHeadMouse</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+      - name: Sign macOS .app bundle (optional)
+        if: ${{ runner.os == 'macOS' && secrets.APPLE_CERT_BASE64 != '' && secrets.APPLE_CERT_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
+        shell: bash
+        run: |
+          CERT_PATH="$RUNNER_TEMP/apple_cert.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          APP_PATH="dist/OpenHeadMouse.app"
+
+          echo "${{ secrets.APPLE_CERT_BASE64 }}" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "${{ secrets.APPLE_CERT_PASSWORD }}" -T /usr/bin/codesign -T /usr/bin/security
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+
+          /usr/bin/codesign --force --deep --options runtime --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$APP_PATH"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+      - name: Build macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew update
+          brew install create-dmg
+
+          mkdir -p dmg-root
+          cp -R "dist/OpenHeadMouse.app" "dmg-root/OpenHeadMouse.app"
+
+          create-dmg \
+            --volname "OpenHeadMouse" \
+            --window-size 640 420 \
+            --icon-size 100 \
+            --icon "OpenHeadMouse.app" 170 190 \
+            --app-drop-link 470 190 \
+            "dist/${{ matrix.installer_asset_name }}" \
+            "dmg-root"
+
+      - name: Notarize + staple macOS DMG (optional)
+        if: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
+        shell: bash
+        run: |
+          DMG_PATH="dist/${{ matrix.installer_asset_name }}"
+
+          xcrun notarytool submit "$DMG_PATH" \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --password "${{ secrets.APPLE_APP_PASSWORD }}" \
+            --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+            --wait
+
+          xcrun stapler staple "$DMG_PATH"
+
+      - name: Upload Binary Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset_name }}
-          path: dist/${{ matrix.asset_name }}
+          name: ${{ matrix.binary_asset_name }}
+          path: dist/${{ matrix.binary_asset_name }}
+          if-no-files-found: error
+
+      - name: Upload Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.installer_asset_name }}
+          path: dist/${{ matrix.installer_asset_name }}
+          if-no-files-found: error
 
   release:
     name: Create GitHub Release
@@ -77,6 +258,12 @@ jobs:
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release-assets/*
+          files: |
+            release-assets/OpenHeadMouse-windows-amd64.exe
+            release-assets/OpenHeadMouse-windows-amd64-setup.exe
+            release-assets/OpenHeadMouse-linux-amd64
+            release-assets/OpenHeadMouse-linux-amd64.deb
+            release-assets/OpenHeadMouse-macos-universal
+            release-assets/OpenHeadMouse-macos-universal.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
