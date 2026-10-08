@@ -60,3 +60,31 @@ def test_control_panel_calibration_toggle(qt_app):
     assert panel.calibration_enabled is True
     assert seen == [True]
     assert ControlPanel(calibration_enabled=True).calibration_enabled is True
+
+
+def test_control_panel_dwell_click_settings(qt_app):
+    from gui.control_panel import ControlPanel
+
+    panel = ControlPanel(
+        dwell_config={
+            "enabled": True,
+            "dwell_time_s": 1.5,
+            "movement_tolerance_px": 12,
+            "resume_time_s": 0.75,
+        }
+    )
+    assert panel.dwell_click_enabled is True
+    assert panel.dwell_settings == {
+        "dwell_time_s": 1.5,
+        "movement_tolerance_px": 12.0,
+        "resume_time_s": 0.75,
+    }
+
+    toggles = []
+    settings = []
+    panel.dwell_click_toggled.connect(toggles.append)
+    panel.dwell_settings_changed.connect(settings.append)
+    panel._dwell_check.setChecked(False)
+    panel._dwell_time_spin.setValue(2.0)
+    assert toggles == [False]
+    assert settings[-1]["dwell_time_s"] == 2.0

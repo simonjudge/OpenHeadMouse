@@ -11,7 +11,14 @@
   "ui": {
     "recording_enabled": true,
     "mouse_control_enabled": true,
-    "calibration_enabled": true
+    "calibration_enabled": true,
+    "dwell_click": {
+      "enabled": true,
+      "dwell_time_s": 1.6,
+      "movement_tolerance_px": 30.0,
+      "resume_time_s": 0.5,
+      "ring_color": "#ff0000"
+    }
   },
   "calibration": {
     "read_duration_s": 5.0,
@@ -30,7 +37,7 @@
       "wifi_ip_address": "192.168.1.1",
       "wifi_port_send": 9000,
       "wifi_port_receive": 8001,
-      "axes_alignment": "-Y+Z-X",
+      "axes_alignment": "+Y-Z-X",
       "ahrs_axes_convention": 2,
       "ahrs_ignore_magnetometer": true,
       "target_rate_hz": 200
@@ -40,32 +47,90 @@
       "udp_port": 5005
     }
   },
-  "dsp": {
-    "mode": "velocity",
-    "absolute": {
-      "kx": 75.0,
-      "ky": 60.0
+  "mouse_profiles": {
+    "uniface": {
+      "mode": "velocity",
+      "absolute": {
+        "kx": 90.0,
+        "ky": 90.0
+      },
+      "velocity": {
+        "kx": 50,
+        "ky": 50,
+        "gamma": 1.1,
+        "deadband_deg_s": 0.2
+      },
+      "one_euro_filter": {
+        "enabled": true,
+        "min_cutoff": 1.0,
+        "beta": 0.3,
+        "d_cutoff": 1.0
+      },
+      "auto_zero": {
+        "enabled": false,
+        "stationary_window_ms": 200,
+        "stationary_threshold_deg_s": 2.0
+      },
+      "yaw_drift_correction": {
+        "enabled": false,
+        "time_constant_s": 20.0
+      }
     },
-    "velocity": {
-      "kx": 85,
-      "ky": 77,
-      "gamma": 1.2,
-      "deadband_deg_s": 0.0
+    "ximu3": {
+      "mode": "velocity",
+      "absolute": {
+        "kx": 90.0,
+        "ky": 90.0
+      },
+      "velocity": {
+        "kx": 40,
+        "ky": 40,
+        "gamma": 1.2,
+        "deadband_deg_s": 0.0
+      },
+      "one_euro_filter": {
+        "enabled": true,
+        "min_cutoff": 2.0,
+        "beta": 0.5,
+        "d_cutoff": 1.0
+      },
+      "auto_zero": {
+        "enabled": false,
+        "stationary_window_ms": 200,
+        "stationary_threshold_deg_s": 2.0
+      },
+      "yaw_drift_correction": {
+        "enabled": false,
+        "time_constant_s": 20.0
+      }
     },
-    "one_euro_filter": {
-      "enabled": true,
-      "min_cutoff": 2.0,
-      "beta": 0.5,
-      "d_cutoff": 1.0
-    },
-    "auto_zero": {
-      "enabled": false,
-      "stationary_window_ms": 200,
-      "stationary_threshold_deg_s": 2.0
-    },
-    "yaw_drift_correction": {
-      "enabled": false,
-      "time_constant_s": 20.0
+    "airpods": {
+      "mode": "velocity",
+      "absolute": {
+        "kx": 90.0,
+        "ky": 90.0
+      },
+      "velocity": {
+        "kx": 50,
+        "ky": 50,
+        "gamma": 1.2,
+        "deadband_deg_s": 0.0
+      },
+      "one_euro_filter": {
+        "enabled": true,
+        "min_cutoff": 2.0,
+        "beta": 0.5,
+        "d_cutoff": 1.0
+      },
+      "auto_zero": {
+        "enabled": false,
+        "stationary_window_ms": 200,
+        "stationary_threshold_deg_s": 2.0
+      },
+      "yaw_drift_correction": {
+        "enabled": false,
+        "time_constant_s": 20.0
+      }
     }
   },
   "recorder": {

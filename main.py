@@ -10,6 +10,7 @@ tuning, recenter, and live telemetry.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import queue
@@ -29,6 +30,95 @@ CONFIG_PATH = Path(__file__).parent / "config.json"
 AIRPODS_HELPER_DIR = Path(__file__).parent / "providers" / "airpods" / "swift_src"
 AIRPODS_HELPER_PID_PATH = AIRPODS_HELPER_DIR / ".build" / "airpods-helper.pid"
 AIRPODS_HELPER_LOG_PATH = AIRPODS_HELPER_DIR / ".build" / "airpods-helper.log"
+
+
+def _windows_monitor_geometry(window_id: int | None = None) -> tuple[int, int, int, int] | None:
+    """Return native-pixel monitor bounds on Windows."""
+    if sys.platform != "win32":
+        return None
+
+    import ctypes
+    from ctypes import wintypes
+
+    class MonitorInfo(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("rcMonitor", wintypes.RECT),
+            ("rcWork", wintypes.RECT),
+            ("dwFlags", wintypes.DWORD),
+        ]
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    user32.MonitorFromWindow.restype = wintypes.HMONITOR
+    user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+    user32.MonitorFromPoint.restype = wintypes.HMONITOR
+    user32.GetMonitorInfoW.argtypes = [
+        wintypes.HMONITOR,
+        ctypes.POINTER(MonitorInfo),
+    ]
+    user32.GetMonitorInfoW.restype = wintypes.BOOL
+    user32.SetThreadDpiAwarenessContext.argtypes = [wintypes.HANDLE]
+    user32.SetThreadDpiAwarenessContext.restype = wintypes.HANDLE
+
+    previous_dpi_context = user32.SetThreadDpiAwarenessContext(wintypes.HANDLE(-4))
+    if not previous_dpi_context:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        if window_id is None:
+            monitor = user32.MonitorFromPoint(wintypes.POINT(0, 0), 1)
+        else:
+            monitor = user32.MonitorFromWindow(wintypes.HWND(window_id), 2)
+        if not monitor:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        info = MonitorInfo()
+        info.cbSize = ctypes.sizeof(info)
+        if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        if not user32.SetThreadDpiAwarenessContext(previous_dpi_context):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    bounds = info.rcMonitor
+    return (
+        bounds.right - bounds.left,
+        bounds.bottom - bounds.top,
+        bounds.left,
+        bounds.top,
+    )
+
+
+def _screen_geometry(screen, window_id: int | None = None) -> tuple[int, int, int, int]:
+    """Return geometry in the coordinate system used by OS cursor injection."""
+    native_geometry = _windows_monitor_geometry(window_id)
+    if native_geometry is not None:
+        return native_geometry
+
+    geometry = screen.geometry()
+    return geometry.width(), geometry.height(), geometry.left(), geometry.top()
+
+
+def ensure_mouse_profiles(config: dict) -> dict:
+    """Return per-provider DSP profiles, migrating the legacy shared profile."""
+    profiles = config.setdefault("mouse_profiles", {})
+    legacy_profile = config.pop("dsp", None)
+    provider_names = set(config.get("providers", {}))
+    provider_names.add(config.get("active_provider", "uniface"))
+
+    if legacy_profile is not None:
+        for provider_name in provider_names:
+            profiles.setdefault(provider_name, copy.deepcopy(legacy_profile))
+
+    if not profiles:
+        raise ValueError("Configuration must define 'mouse_profiles' or legacy 'dsp' settings")
+
+    template = profiles.get(config.get("active_provider", "uniface"))
+    if template is None:
+        template = next(iter(profiles.values()))
+    for provider_name in provider_names:
+        profiles.setdefault(provider_name, copy.deepcopy(template))
+    return profiles
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict:
@@ -99,6 +189,9 @@ class App:
 
         self._config = config
         self._config_path = Path(config_path) if config_path is not None else None
+        self._config_migrated = "dsp" in config
+        self._mouse_profiles = ensure_mouse_profiles(config)
+        self._active_provider_name = config.get("active_provider", "uniface")
         self._qm = qm
         self._provider = None
         self._airpods_helper_pid: int | None = None
@@ -128,15 +221,15 @@ class App:
         )
 
         screen = QGuiApplication.primaryScreen()
-        geometry = screen.geometry() if screen is not None else None
-        width = geometry.width() if geometry else 1920
-        height = geometry.height() if geometry else 1080
-        origin_x = geometry.left() if geometry else 0
-        origin_y = geometry.top() if geometry else 0
+        if screen is not None:
+            width, height, origin_x, origin_y = _screen_geometry(screen)
+        else:
+            width, height, origin_x, origin_y = 1920, 1080, 0, 0
         print(f"[Screen] Initial display: {width}x{height} at ({origin_x}, {origin_y})")
 
+        active_dsp_config = self._mouse_profile(self._active_provider_name)
         self.dsp = DSPEngine.from_config(
-            config["dsp"], screen_width=width, screen_height=height
+            active_dsp_config, screen_width=width, screen_height=height
         )
         self.dsp.set_screen_geometry(width, height, origin_x, origin_y)
         self.headmouse = HeadMouse(
@@ -146,17 +239,41 @@ class App:
             hotkey=config["hotkeys"]["toggle_tracking"],
             mouse_controller=mouse_controller,
         )
+        from dwell_click.engine import DwellSettings
+        from dwell_click.service import DwellClickService
+        from dwell_click.tray import DwellTray
+
+        dwell_config = config.get("ui", {}).get("dwell_click", {})
+        self._dwell_armed = bool(dwell_config.get("enabled", False))
+        self._mouse_control_enabled = bool(
+            config.get("ui", {}).get("mouse_control_enabled", True)
+        )
+        self._dwell_settings = DwellSettings(
+                dwell_time_s=float(dwell_config.get("dwell_time_s", 1.0)),
+                movement_tolerance_px=float(
+                    dwell_config.get("movement_tolerance_px", 10.0)
+                ),
+                resume_time_s=float(dwell_config.get("resume_time_s", 0.5)),
+                ring_color=dwell_config.get("ring_color", "#ff0000"),
+        )
+        self._dwell_click = DwellClickService(
+            self._dwell_settings,
+            mouse_controller=mouse_controller,
+        )
 
         self.window = HeadMouseWindow(
             initial_kx=self.dsp.kx,
             initial_ky=self.dsp.ky,
             hotkey=config["hotkeys"]["toggle_tracking"],
-            initial_dsp_config=config["dsp"],
+            initial_dsp_config=active_dsp_config,
             initial_provider=config.get("active_provider", "uniface"),
             initial_ui_config=config.get("ui", {}),
         )
-        self.headmouse.add_state_callback(lambda state: self.window.set_status(state.value))
+        self.headmouse.add_state_callback(
+            lambda state: self.window.tracking_state_changed.emit(state.value)
+        )
         self.window.set_status(self.headmouse.state.value)
+        self.headmouse.add_state_callback(lambda _state: self._sync_dwell_click())
 
         self.window.setup_panel.start_requested.connect(self._on_start_requested)
         self.window.setup_panel.stop_requested.connect(self._on_stop_requested)
@@ -184,6 +301,15 @@ class App:
         self.window.controls.recording_toggled.connect(self._on_recording_toggled)
         self.window.controls.mouse_control_toggled.connect(self._on_mouse_control_toggled)
         self.window.controls.calibration_toggled.connect(self._on_calibration_toggled)
+        self.window.controls.dwell_click_toggled.connect(self._on_dwell_click_toggled)
+        self.window.controls.dwell_settings_changed.connect(self._on_dwell_settings_changed)
+        self._dwell_tray = DwellTray(
+            self._dwell_click,
+            self._dwell_settings,
+            on_settings_changed=self._on_dwell_settings_changed,
+            on_toggled=self._on_dwell_tray_toggled,
+            parent=self.window,
+        )
 
         if auto_start_listeners:
             self.headmouse.start()
@@ -192,15 +318,22 @@ class App:
                     f"Hotkey unavailable: {self.headmouse.hotkey_error}"
                 )
 
+        if self.window.controls.dwell_click_enabled:
+            self._sync_dwell_click()
+
         self._timer = QTimer()
         self._timer.timeout.connect(self._poll)
         self._timer.start(int(1000 / poll_hz))
+        if self._config_migrated:
+            self._persist_config()
 
     def show(self) -> None:
         self.window.show()
 
     def shutdown(self) -> None:
         self._timer.stop()
+        self._dwell_tray.close()
+        self._dwell_click.stop()
         self._end_calibration()
         if self._provider is not None:
             self._provider.stop()
@@ -356,10 +489,9 @@ class App:
         if screen is None:
             raise RuntimeError("Could not determine the display containing the HeadMouse window")
 
-        geometry = screen.geometry()
-        self._tracking_screen_geometry = geometry
-        width, height = geometry.width(), geometry.height()
-        origin_x, origin_y = geometry.left(), geometry.top()
+        window_id = int(self.window.winId()) if sys.platform == "win32" else None
+        width, height, origin_x, origin_y = _screen_geometry(screen, window_id)
+        self._tracking_screen_geometry = screen.geometry()
         print(f"[Screen] Tracking display: {width}x{height} at ({origin_x}, {origin_y})")
 
         self.dsp.set_screen_geometry(width, height, origin_x, origin_y)
@@ -717,12 +849,12 @@ class App:
 
     def _on_kx_changed(self, value: float) -> None:
         self.dsp.kx = value
-        self._config.setdefault("dsp", {}).setdefault("absolute", {})["kx"] = value
+        self._mouse_profile().setdefault("absolute", {})["kx"] = value
         self._persist_config()
 
     def _on_ky_changed(self, value: float) -> None:
         self.dsp.ky = value
-        self._config.setdefault("dsp", {}).setdefault("absolute", {})["ky"] = value
+        self._mouse_profile().setdefault("absolute", {})["ky"] = value
         self._persist_config()
 
     def _on_dsp_config_changed(self, values: dict) -> None:
@@ -750,7 +882,7 @@ class App:
         self.dsp.set_filter_configs(one_euro, auto_zero, drift)
         self.dsp.reset(position=self.headmouse.cursor_position)
         self._last_target = None
-        dsp_config = self._config.setdefault("dsp", {})
+        dsp_config = self._mouse_profile()
         dsp_config["mode"] = values["mode"]
         dsp_config.setdefault("velocity", {}).update(
             {
@@ -775,8 +907,43 @@ class App:
         self._persist_config()
 
     def _on_provider_changed(self, provider_name: str) -> None:
+        self._active_provider_name = provider_name
         self._config["active_provider"] = provider_name
+        self._apply_mouse_profile(provider_name)
         self._persist_config()
+
+    def _mouse_profile(self, provider_name: str | None = None) -> dict:
+        provider_name = provider_name or self._active_provider_name
+        profile = self._mouse_profiles.get(provider_name)
+        if profile is None:
+            source = self._mouse_profiles.get(self._active_provider_name)
+            if source is None:
+                source = next(iter(self._mouse_profiles.values()))
+            profile = copy.deepcopy(source)
+            self._mouse_profiles[provider_name] = profile
+        return profile
+
+    def _apply_mouse_profile(self, provider_name: str) -> None:
+        from core.dsp_engine import DSPEngine
+
+        profile = self._mouse_profile(provider_name)
+        replacement = DSPEngine.from_config(
+            profile,
+            screen_width=self.dsp.screen_width,
+            screen_height=self.dsp.screen_height,
+        )
+        replacement.set_screen_geometry(
+            self.dsp.screen_width,
+            self.dsp.screen_height,
+            self.dsp.origin_x,
+            self.dsp.origin_y,
+        )
+        replacement.reset(position=self.headmouse.cursor_position)
+        self.dsp = replacement
+        self._last_target = None
+        self._last_sample = None
+        self._mouse_was_active = False
+        self.window.set_dsp_config(profile)
 
     def _on_recording_toggled(self, enabled: bool) -> None:
         self._config.setdefault("ui", {})["recording_enabled"] = enabled
@@ -784,10 +951,54 @@ class App:
 
     def _on_mouse_control_toggled(self, enabled: bool) -> None:
         self._config.setdefault("ui", {})["mouse_control_enabled"] = enabled
+        self._mouse_control_enabled = enabled
+        self._sync_dwell_click()
         self._persist_config()
 
     def _on_calibration_toggled(self, enabled: bool) -> None:
         self._config.setdefault("ui", {})["calibration_enabled"] = enabled
+        self._persist_config()
+
+    def _on_dwell_click_toggled(self, enabled: bool) -> None:
+        dwell_config = self._config.setdefault("ui", {}).setdefault("dwell_click", {})
+        dwell_config["enabled"] = enabled
+        self._dwell_armed = enabled
+        self._sync_dwell_click()
+        self._persist_config()
+
+    def _on_dwell_tray_toggled(self, enabled: bool) -> None:
+        dwell_config = self._config.setdefault("ui", {}).setdefault("dwell_click", {})
+        dwell_config["enabled"] = enabled
+        self._dwell_armed = enabled
+        self.window.controls.set_dwell_click_enabled(enabled)
+        self._sync_dwell_click()
+        self._persist_config()
+
+    def _sync_dwell_click(self) -> None:
+        """Dwell clicking follows mouse control: it runs only while the cursor is driven."""
+        from core.headmouse import TrackingState
+
+        should_run = (
+            self._dwell_armed
+            and self._mouse_control_enabled
+            and self.headmouse.state == TrackingState.ACTIVE
+        )
+        self._dwell_click.request_running(should_run)
+
+    def _on_dwell_settings_changed(self, values: dict) -> None:
+        dwell_config = self._config.setdefault("ui", {}).setdefault("dwell_click", {})
+        dwell_config.update(values)
+        from dwell_click.engine import DwellSettings
+
+        self._dwell_settings = DwellSettings(
+            dwell_time_s=values["dwell_time_s"],
+            movement_tolerance_px=values["movement_tolerance_px"],
+            resume_time_s=values["resume_time_s"],
+            ring_color=dwell_config.get("ring_color", "#ff0000"),
+        )
+        self._dwell_click.update_settings(self._dwell_settings)
+        self._dwell_tray.set_settings(self._dwell_settings)
+        self.window.controls.set_dwell_settings(values)
         self._persist_config()
 
     def _persist_config(self) -> None:

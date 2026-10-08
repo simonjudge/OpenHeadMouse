@@ -1,6 +1,7 @@
 """Deterministic GUI -> DSP -> fake OS cursor regression coverage."""
 
 import queue
+import copy
 from types import SimpleNamespace
 
 import numpy as np
@@ -18,14 +19,17 @@ class FakeMouse:
 @pytest.fixture
 def controller(qt_app, tmp_path):
     config = load_config()
-    config["dsp"]["mode"] = "absolute"
-    config["dsp"]["absolute"] = {"kx": 10, "ky": 10}
-    config["dsp"]["velocity"] = {"kx": 1, "ky": 1, "gamma": 1, "deadband_deg_s": 0}
-    config["dsp"]["one_euro_filter"] = {
+    dsp = copy.deepcopy(config["mouse_profiles"][config["active_provider"]])
+    config["dsp"] = dsp
+    config.pop("mouse_profiles")
+    dsp["mode"] = "absolute"
+    dsp["absolute"] = {"kx": 10, "ky": 10}
+    dsp["velocity"] = {"kx": 1, "ky": 1, "gamma": 1, "deadband_deg_s": 0}
+    dsp["one_euro_filter"] = {
         "enabled": False, "min_cutoff": 0.8, "beta": 0.2, "d_cutoff": 1.2,
     }
-    config["dsp"]["auto_zero"]["enabled"] = False
-    config["dsp"]["yaw_drift_correction"]["enabled"] = False
+    dsp["auto_zero"]["enabled"] = False
+    dsp["yaw_drift_correction"]["enabled"] = False
     config["recorder"]["output_dir"] = str(tmp_path)
     config.setdefault("ui", {})["calibration_enabled"] = False
     app = App(config, auto_start_listeners=False, mouse_controller=FakeMouse())

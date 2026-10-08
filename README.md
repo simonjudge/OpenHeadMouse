@@ -24,7 +24,33 @@ python main.py
 - `gui/` — PySide6 setup and DSP tuning UI
 - `session_viewer/` — standalone pyqtgraph session viewer (mesh + line-graph playback), opened from the main window's File menu; also replays Fitts sessions, optionally synchronised with a head recording (see below)
 - `fitts_law/` — standalone ISO 9241-411 Fitts' Law test suite (circular + edge-target tasks, pluggable stimuli, Random Path and Typing Test modes), opened from the main window's File menu
+- `dwell_click/` — standalone dwell-click engine, translucent progress overlay, and command-line launcher
 - `tests/` — unit tests
+
+### Dwell click
+
+Tick **Dwell Click** in the Subsystems panel to click automatically when the pointer remains
+inside the configured movement tolerance (default 10 pixels) for the dwell time (default 1
+second). A translucent red ring around the cursor fills clockwise as the dwell completes. After
+a click, the pointer must leave the activation area before another click can occur.
+
+Ticking the box only arms the feature. Dwell clicking starts when mouse control becomes active
+and stops whenever mouse control is switched off, paused by the toggle hotkey or corner
+failsafe, or suspended during initial calibration.
+
+If the pointer leaves an activation area and returns within the configurable resume time
+(default 0.5 seconds), progress continues from where it paused. Dwell time, movement tolerance,
+and resume time can be changed in the main window and are persisted in `config.json`.
+
+The module can also run independently of HeadMouse:
+
+```
+python -m dwell_click
+python -m dwell_click --dwell-time 1.5 --movement-tolerance 12 --resume-time 0.75
+```
+
+Both standalone mode and HeadMouse provide a cross-platform system-tray icon. Its menu starts
+or stops dwell clicking, opens the dwell-click settings dialog, and exits standalone mode.
 
 ### Coordinate frame and gain signs
 
@@ -39,9 +65,11 @@ for adding a new provider.
 
 The DSP configuration supports absolute mapping and velocity mapping. The optional One Euro
 filter applies adaptive smoothing in either mode. Velocity mode also supports deadband/gamma
-shaping, stationary auto-zero bias, and optional yaw-drift correction. The application uses Qt screen geometry so cursor
-clamping follows the display that contains the HeadMouse window, including displays
-with negative coordinate origins. Starting tracking centers the cursor on that display.
+shaping, stationary auto-zero bias, and optional yaw-drift correction. Cursor clamping
+follows the display that contains the HeadMouse window, including displays with negative
+coordinate origins. On Windows, native pixel bounds are used so display scaling does not
+shrink the usable cursor area. The bounds are refreshed and the cursor is centered on that
+display whenever tracking starts.
 
 ### Session files
 
@@ -86,9 +114,13 @@ without calibration keep the previous format. The session viewer shows this unde
 standard deviation during the capture.
 
 Main-window settings are saved to `config.json` as they change and restored at the next
-launch. This includes the selected provider, recording, mouse-control and calibration toggles, xIMU3
-magnetometer mode and mounting orientation, mapping mode and gains, velocity parameters, and filter options. When
-the application is launched with `--config`, settings are saved back to that selected file.
+launch. Mapping mode and gains, velocity parameters, adaptive smoothing, auto-zero, and yaw
+drift correction are stored separately for each input under `mouse_profiles`; selecting a
+provider immediately restores its complete movement profile. Legacy configurations with one
+top-level `dsp` section are migrated by copying that profile to every configured provider.
+The selected provider, recording, mouse-control and calibration toggles, and xIMU3
+magnetometer mode and mounting orientation remain global. When the application is launched
+with `--config`, settings are saved back to that selected file.
 
 ### xIMU3 mounting orientation
 

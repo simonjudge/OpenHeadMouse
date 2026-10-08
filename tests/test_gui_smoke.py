@@ -366,6 +366,34 @@ class FakeMouseController:
         self._position = value
 
 
+def test_start_uses_native_geometry_for_window_display(qt_app, monkeypatch):
+    from main import App, load_config
+
+    config = copy.deepcopy(load_config())
+    config.setdefault("ui", {})["calibration_enabled"] = False
+    app = App(config, auto_start_listeners=False, mouse_controller=FakeMouseController())
+    geometry_calls = []
+
+    def native_geometry(_screen, window_id=None):
+        geometry_calls.append(window_id)
+        return 1920, 1080, 1920, 0
+
+    monkeypatch.setattr("main._screen_geometry", native_geometry)
+    try:
+        app._on_start_requested("mock")
+        assert len(geometry_calls) == 1
+        assert app.dsp.screen_width == 1920
+        assert app.dsp.screen_height == 1080
+        assert app.dsp.origin_x == 1920
+        assert app.dsp.origin_y == 0
+        assert app.headmouse.screen_bounds.width == 1920
+        assert app.headmouse.screen_bounds.height == 1080
+        assert app.headmouse._mouse.position == (2880.0, 540.0)
+    finally:
+        app._on_stop_requested()
+        app.shutdown()
+
+
 def test_app_wires_mock_provider_through_to_headmouse(qt_app):
     from main import App, load_config
 
@@ -478,6 +506,7 @@ def test_main_gui_settings_persist_and_reload(qt_app, tmp_path):
 
     config_path = tmp_path / "config.json"
     config = copy.deepcopy(load_config())
+    original_dwell_config = copy.deepcopy(config["ui"]["dwell_click"])
     config_path.write_text(json.dumps(config))
 
     app = App(
@@ -514,26 +543,29 @@ def test_main_gui_settings_persist_and_reload(qt_app, tmp_path):
         "recording_enabled": False,
         "mouse_control_enabled": False,
         "calibration_enabled": True,
+        "dwell_click": original_dwell_config,
     }
     assert saved["providers"]["ximu3"]["ahrs_ignore_magnetometer"] is True
     assert saved["providers"]["ximu3"]["axes_alignment"] == "-Y+Z-X"
     assert saved["providers"]["ximu3"]["ahrs_axes_convention"] == 2
-    assert saved["dsp"]["absolute"] == {"kx": 21.0, "ky": -17.0}
-    assert saved["dsp"]["mode"] == "velocity"
-    assert saved["dsp"]["velocity"] == {
+    assert "dsp" not in saved
+    ximu3_profile = saved["mouse_profiles"]["ximu3"]
+    assert ximu3_profile["absolute"] == {"kx": 21.0, "ky": -17.0}
+    assert ximu3_profile["mode"] == "velocity"
+    assert ximu3_profile["velocity"] == {
         "kx": 2.0,
         "ky": 3.0,
         "gamma": 1.8,
         "deadband_deg_s": 4.5,
     }
-    assert saved["dsp"]["one_euro_filter"] == {
+    assert ximu3_profile["one_euro_filter"] == {
         "enabled": False,
         "min_cutoff": 0.4,
         "beta": 0.15,
         "d_cutoff": 1.0,
     }
-    assert saved["dsp"]["auto_zero"]["enabled"] is False
-    assert saved["dsp"]["yaw_drift_correction"]["enabled"] is True
+    assert ximu3_profile["auto_zero"]["enabled"] is False
+    assert ximu3_profile["yaw_drift_correction"]["enabled"] is True
 
     reloaded_app = App(
         load_config(config_path),

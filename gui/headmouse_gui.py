@@ -43,6 +43,7 @@ class HeadMouseWindow(QMainWindow):
     dsp_config_changed = Signal(dict)
     load_session_requested = Signal()
     fitts_test_requested = Signal()
+    tracking_state_changed = Signal(str)
 
     def __init__(
         self,
@@ -56,6 +57,7 @@ class HeadMouseWindow(QMainWindow):
     ):
         super().__init__(parent)
         self.setWindowTitle("HeadMouse")
+        self.tracking_state_changed.connect(self.set_status)
 
         self._create_menu()
 
@@ -66,6 +68,7 @@ class HeadMouseWindow(QMainWindow):
             recording_enabled=bool(ui_config.get("recording_enabled", True)),
             mouse_control_enabled=bool(ui_config.get("mouse_control_enabled", True)),
             calibration_enabled=bool(ui_config.get("calibration_enabled", False)),
+            dwell_config=ui_config.get("dwell_click", {}),
         )
         dsp_config = initial_dsp_config or {}
         velocity_config = dsp_config.get("velocity", {})
@@ -238,6 +241,45 @@ class HeadMouseWindow(QMainWindow):
         self._hotkey_label.setText(status)
         self._hotkey_label.setStyleSheet("color: #c62828; font-size: 10pt;")
 
+    def set_dsp_config(self, config: dict) -> None:
+        """Replace all movement controls without emitting live-edit signals."""
+        absolute = config.get("absolute", {})
+        velocity = config.get("velocity", {})
+        one_euro = config.get("one_euro_filter", {})
+        auto_zero = config.get("auto_zero", {})
+        drift = config.get("yaw_drift_correction", {})
+        controls = (
+            self._kx_spin,
+            self._ky_spin,
+            self._mode_combo,
+            self._velocity_kx_spin,
+            self._velocity_ky_spin,
+            self._gamma_spin,
+            self._deadband_spin,
+            self._one_euro_check,
+            self._filter_preset_combo,
+            self._auto_zero_check,
+            self._drift_check,
+        )
+        previous = [control.blockSignals(True) for control in controls]
+        try:
+            self._kx_spin.setValue(round(float(absolute.get("kx", 1.0))))
+            self._ky_spin.setValue(round(float(absolute.get("ky", 1.0))))
+            mode_index = self._mode_combo.findData(config.get("mode", "absolute"))
+            self._mode_combo.setCurrentIndex(max(mode_index, 0))
+            self._velocity_kx_spin.setValue(float(velocity.get("kx", 1.0)))
+            self._velocity_ky_spin.setValue(float(velocity.get("ky", 1.0)))
+            self._gamma_spin.setValue(float(velocity.get("gamma", 1.0)))
+            self._deadband_spin.setValue(float(velocity.get("deadband_deg_s", 0.0)))
+            self._one_euro_check.setChecked(bool(one_euro.get("enabled", False)))
+            self._select_filter_preset(one_euro)
+            self._auto_zero_check.setChecked(bool(auto_zero.get("enabled", False)))
+            self._drift_check.setChecked(bool(drift.get("enabled", False)))
+            self._update_mode_visibility()
+        finally:
+            for control, was_blocked in zip(controls, previous):
+                control.blockSignals(was_blocked)
+
     def update_telemetry(self, yaw_deg: float, pitch_deg: float, roll_deg: float) -> None:
         self.telemetry.update_angles(yaw_deg, pitch_deg, roll_deg)
 
@@ -280,6 +322,9 @@ class HeadMouseWindow(QMainWindow):
         self._velocity_options.setVisible(velocity_mode)
 
     def _select_filter_preset(self, config: dict) -> None:
+        custom_index = self._filter_preset_combo.findText("Custom (from config)")
+        if custom_index >= 0:
+            self._filter_preset_combo.removeItem(custom_index)
         target = {
             "min_cutoff": float(config.get("min_cutoff", 1.0)),
             "beta": float(config.get("beta", 0.3)),
