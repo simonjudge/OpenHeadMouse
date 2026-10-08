@@ -42,7 +42,7 @@ jobs:
 
       - name: Build Executable with PyInstaller
         run: |
-          pyinstaller --onefile --name myapp main.py
+          pyinstaller --onefile --name  OpenHeadMouse main.py
         shell: bash
 
       - name: Rename Output Binary
