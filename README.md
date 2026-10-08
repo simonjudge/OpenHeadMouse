@@ -122,6 +122,9 @@ The selected provider, recording, mouse-control and calibration toggles, and xIM
 magnetometer mode and mounting orientation remain global. When the application is launched
 with `--config`, settings are saved back to that selected file.
 
+Packaged builds initialize their per-user `config.json` from the bundled defaults on first
+launch, then save settings to the user's configuration directory.
+
 ### xIMU3 mounting orientation
 
 When xIMU3 is selected, the **Mounting** dropdown appears beside the magnetometer

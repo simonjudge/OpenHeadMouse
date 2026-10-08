@@ -3,6 +3,36 @@
 import copy
 
 
+def test_frozen_windows_config_uses_local_appdata(monkeypatch, tmp_path):
+    import main
+
+    monkeypatch.setattr(main.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(main.sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
+    assert main._default_config_path() == tmp_path / "OpenHeadMouse" / "config.json"
+
+
+def test_frozen_app_initializes_user_config_from_bundled_default(monkeypatch, tmp_path):
+    import main
+
+    bundled_config = tmp_path / "bundle" / "config.json"
+    bundled_config.parent.mkdir()
+    bundled_config.write_text('{"active_provider": "uniface"}')
+    user_config = tmp_path / "user" / "OpenHeadMouse" / "config.json"
+    monkeypatch.setattr(main, "_BUNDLED_CONFIG_PATH", bundled_config)
+    monkeypatch.setattr(main, "CONFIG_PATH", user_config)
+    monkeypatch.setattr(main.sys, "frozen", True, raising=False)
+
+    main._initialize_default_config(user_config)
+
+    assert user_config.read_text() == bundled_config.read_text()
+
+    user_config.write_text('{"active_provider": "ximu3"}')
+    main._initialize_default_config(user_config)
+    assert user_config.read_text() == '{"active_provider": "ximu3"}'
+
+
 class FakeMouse:
     position = (400.0, 400.0)
 

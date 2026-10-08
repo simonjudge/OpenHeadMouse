@@ -26,7 +26,25 @@ import numpy as np
 
 __version__ = "0.2.0"
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
+_BUNDLED_CONFIG_PATH = Path(__file__).parent / "config.json"
+
+
+def _default_config_path() -> Path:
+    if not getattr(sys, "frozen", False):
+        return _BUNDLED_CONFIG_PATH
+
+    if sys.platform == "win32":
+        config_root = Path(
+            os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local"
+        )
+    elif sys.platform == "darwin":
+        config_root = Path.home() / "Library" / "Application Support"
+    else:
+        config_root = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return config_root / "OpenHeadMouse" / "config.json"
+
+
+CONFIG_PATH = _default_config_path()
 AIRPODS_HELPER_DIR = Path(__file__).parent / "providers" / "airpods" / "swift_src"
 AIRPODS_HELPER_PID_PATH = AIRPODS_HELPER_DIR / ".build" / "airpods-helper.pid"
 AIRPODS_HELPER_LOG_PATH = AIRPODS_HELPER_DIR / ".build" / "airpods-helper.log"
@@ -124,6 +142,14 @@ def ensure_mouse_profiles(config: dict) -> dict:
 def load_config(path: Path = CONFIG_PATH) -> dict:
     with open(path) as f:
         return json.load(f)
+
+
+def _initialize_default_config(path: Path) -> None:
+    if not getattr(sys, "frozen", False) or path != CONFIG_PATH or path.exists():
+        return
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_BUNDLED_CONFIG_PATH.read_bytes())
 
 
 def make_provider(name: str, config: dict):
@@ -1164,12 +1190,14 @@ def main(argv=None) -> int:
     parser.add_argument("--config", default=str(CONFIG_PATH))
     args = parser.parse_args(argv)
 
-    config = load_config(Path(args.config))
+    config_path = Path(args.config)
+    _initialize_default_config(config_path)
+    config = load_config(config_path)
 
     from PySide6.QtWidgets import QApplication
 
     qt_app = QApplication(sys.argv[:1])
-    app = App(config, config_path=Path(args.config))
+    app = App(config, config_path=config_path)
     app.show()
     return qt_app.exec()
 
