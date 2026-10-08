@@ -100,29 +100,6 @@ jobs:
           "@ | Set-Content installer.iss
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 
-      - name: Sign Windows Installer (optional)
-        if: runner.os == 'Windows'
-        env:
-          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
-          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
-        shell: powershell
-        run: |
-          if (-not $env:WINDOWS_PFX_BASE64 -or -not $env:WINDOWS_PFX_PASSWORD) {
-            Write-Host "Signing secrets are not configured; skipping signing."
-            exit 0
-          }
-
-          $pfxPath = "$env:RUNNER_TEMP\codesign.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
-
-          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Select-Object -First 1).FullName
-          if (-not $signtool) { throw "signtool.exe not found" }
-
-          & $signtool sign /fd SHA256 /td SHA256 `
-            /f $pfxPath /p $env:WINDOWS_PFX_PASSWORD `
-            /tr http://timestamp.digicert.com `
-            "dist\${{ matrix.installer_asset_name }}"
-
       - name: Build Linux .deb package
         if: runner.os == 'Linux'
         shell: bash
@@ -174,26 +151,6 @@ jobs:
           </plist>
           PLIST
 
-      - name: Sign macOS .app bundle (optional)
-        if: ${{ runner.os == 'macOS' && secrets.APPLE_CERT_BASE64 != '' && secrets.APPLE_CERT_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
-        shell: bash
-        run: |
-          CERT_PATH="$RUNNER_TEMP/apple_cert.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
-          APP_PATH="dist/OpenHeadMouse.app"
-
-          echo "${{ secrets.APPLE_CERT_BASE64 }}" | base64 --decode > "$CERT_PATH"
-
-          security create-keychain -p "" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "${{ secrets.APPLE_CERT_PASSWORD }}" -T /usr/bin/codesign -T /usr/bin/security
-          security list-keychains -d user -s "$KEYCHAIN_PATH"
-          security default-keychain -d user -s "$KEYCHAIN_PATH"
-
-          /usr/bin/codesign --force --deep --options runtime --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$APP_PATH"
-          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-
       - name: Build macOS DMG
         if: runner.os == 'macOS'
         shell: bash
@@ -212,20 +169,6 @@ jobs:
             --app-drop-link 470 190 \
             "dist/${{ matrix.installer_asset_name }}" \
             "dmg-root"
-
-      - name: Notarize + staple macOS DMG (optional)
-        if: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
-        shell: bash
-        run: |
-          DMG_PATH="dist/${{ matrix.installer_asset_name }}"
-
-          xcrun notarytool submit "$DMG_PATH" \
-            --apple-id "${{ secrets.APPLE_ID }}" \
-            --password "${{ secrets.APPLE_APP_PASSWORD }}" \
-            --team-id "${{ secrets.APPLE_TEAM_ID }}" \
-            --wait
-
-          xcrun stapler staple "$DMG_PATH"
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v4
@@ -266,4 +209,4 @@ jobs:
             release-assets/OpenHeadMouse-macos-universal
             release-assets/OpenHeadMouse-macos-universal.dmg
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
