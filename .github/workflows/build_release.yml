@@ -15,14 +15,14 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            asset_name: myapp-windows-amd64.exe
-            exec_path: dist/myapp.exe
+            asset_name: OpenHeadMouse-windows-amd64.exe
+            exec_path: dist/OpenHeadMouse.exe
           - os: ubuntu-latest
-            asset_name: myapp-linux-amd64
-            exec_path: dist/myapp
+            asset_name: OpenHeadMouse-linux-amd64
+            exec_path: dist/OpenHeadMouse
           - os: macos-latest
-            asset_name: myapp-macos-universal
-            exec_path: dist/myapp
+            asset_name: OpenHeadMouse-macos-universal
+            exec_path: dist/OpenHeadMouse
 
     steps:
       - name: Checkout Repository
