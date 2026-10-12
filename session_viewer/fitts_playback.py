@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from fitts_law.results import FittsResultsLogger, FittsStats, TrialResult
 from session_viewer.playback_clock import PlaybackClock, PlaybackTransport
+from session_viewer.pretest_stats import format_pretest_summary_html, summarise_pretest
 
 _DEFAULT_FITTS_DIR = project_root / "fitts_sessions"
 
@@ -189,6 +190,8 @@ class FittsPlaybackWindow(QMainWindow):
         self.speed_range = [0.0, 1.0]
         self.dist_range = [0.0, 1.0]
         self.synced = False
+        self._head_samples: list = []
+        self.pretest_summary: dict = {}
 
         self._own_clock = PlaybackClock(self)
         self.clock = self._own_clock
@@ -272,6 +275,16 @@ class FittsPlaybackWindow(QMainWindow):
         stats_layout.addSpacing(10)
         right_layout.addWidget(stats_widget)
 
+        self.pretest_box = QGroupBox("Initial Pose & Range of Movement")
+        pretest_layout = QVBoxLayout(self.pretest_box)
+        self.pretest_label = QLabel("No pre-test data recorded.")
+        self.pretest_label.setStyleSheet("font-size: 11px; font-family: monospace;")
+        self.pretest_label.setWordWrap(True)
+        self.pretest_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        pretest_layout.addWidget(self.pretest_label)
+        self.pretest_box.setVisible(False)
+        right_layout.addWidget(self.pretest_box)
+
         self.raw_data_widget = QLabel("No Fitts session loaded.<br>Use File → Open Fitts Session… to load one.")
         self.raw_data_widget.setStyleSheet(_PANEL_STYLE)
         self.raw_data_widget.setWordWrap(True)
@@ -341,7 +354,17 @@ class FittsPlaybackWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load Fitts session:\n\n{e}")
             return
+        self._head_samples = []
         self.load_fitts_session(logger.trials, logger.metadata, Path(filepath).stem)
+
+    def set_head_session_samples(self, samples) -> None:
+        """Supply the head-movement samples recorded alongside this Fitts session.
+
+        Their ``metadata["task_phase"]`` labels add head-pose statistics to the
+        pre-test summary; the Fitts file alone only yields cursor statistics.
+        """
+        self._head_samples = list(samples or [])
+        self._refresh_pretest_summary()
 
     def load_fitts_session(self, trials: list[TrialResult], metadata: dict | None = None, name: str = "Fitts") -> None:
         """Load (or replace) the Fitts session being replayed (standalone playback)."""
@@ -369,6 +392,7 @@ class FittsPlaybackWindow(QMainWindow):
         self._graph_zoom = 1.0
         self._apply_graph_zoom()
         self._refresh_summary()
+        self._refresh_pretest_summary()
         self.transport.set_enabled(True)
         self.attach_clock(self._own_clock, synced=False)
         self.clock.set_range(float(self._starts[0]), float(self._ends.max()))
@@ -491,6 +515,13 @@ class FittsPlaybackWindow(QMainWindow):
             f"<b>ME:</b> {_fmt(acc['me_px'], '.1f', ' px')}<br>"
             f"<b>MO:</b> {_fmt(acc['mo_px'], '+.1f', ' px')}"
         )
+
+    def _refresh_pretest_summary(self) -> None:
+        """Initial rest position / range of movement stats for the loaded session."""
+        summary = summarise_pretest(self.metadata, self._head_samples)
+        self.pretest_summary = summary
+        self.pretest_box.setVisible(bool(summary["available"]))
+        self.pretest_label.setText(format_pretest_summary_html(summary))
 
     # ------------------------------------------------------------------
     # Playback

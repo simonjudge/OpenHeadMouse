@@ -103,9 +103,10 @@ def test_calibration_blocks_movement_then_recenters_and_saves(qt_app, make_app, 
     centre = app.headmouse.cursor_position
 
     _pump(qt_app, 0.3)
-    # During calibration the cursor must not move and no movement data is recorded.
+    # During calibration the cursor must not move, but every head sample is
+    # now retained and labelled so the complete rest task can be analysed.
     assert app.headmouse.cursor_position == centre
-    assert app._recorder.sample_count == 0
+    assert app._recorder.sample_count > 0
 
     _pump(qt_app, 2.0, until=lambda: not app._calibrating)
     assert not app._calibrating
@@ -125,6 +126,12 @@ def test_calibration_blocks_movement_then_recenters_and_saves(qt_app, make_app, 
     data = json.loads(files[0].read_text())
     assert data["calibration"]["sample_count"] == calibration["sample_count"]
     assert len(data["calibration"]["samples"]) == calibration["sample_count"]
+    phases = {
+        sample["metadata"]["task_phase"]
+        for sample in data["samples"]
+    }
+    assert "headmouse_initial_calibration.move" in phases
+    assert "headmouse_initial_calibration.hold" in phases
     assert any(
         e["event_type"] == "recenter" and e["data"].get("source") == "calibration"
         for e in data["events"]
@@ -294,3 +301,50 @@ def test_ximu_usb_selection_survives_invalid_direct_wifi_config(qt_app, make_app
     QTimer.singleShot(0, select_usb)
     app._on_start_requested("ximu3")
     assert app._provider.connection_type == "usb"
+
+
+def test_start_head_tracking_waits_for_calibration_to_finish(qt_app, make_app):
+    app = make_app()
+    app._on_start_requested("mock")
+    assert app._calibrating
+
+    ready = []
+    assert app.start_head_tracking(ready.append) is True
+    _pump(qt_app, 0.2)
+    assert ready == []  # still calibrating
+
+    _pump(qt_app, 2.0, until=lambda: not app._calibrating)
+    _pump(qt_app, 0.1, until=lambda: bool(ready))
+    assert ready == [True]
+    assert app.headmouse.state.value == "active"
+
+    # Recording is enabled, so head data is being captured for the test run.
+    _pump(qt_app, 0.2, until=lambda: app._recorder.sample_count > 0)
+    assert app._recorder.sample_count > 0
+
+
+def test_start_head_tracking_waits_for_first_sample_when_provider_just_started(
+    qt_app, make_app
+):
+    app = make_app()
+    app.window.controls._calibration_check.setChecked(False)
+    app._on_start_requested("mock")
+    assert not app._calibrating
+
+    ready = []
+    assert app.start_head_tracking(ready.append) is True
+    assert ready == []
+
+    _pump(qt_app, 0.2, until=lambda: bool(ready))
+    assert ready == [True]
+
+
+def test_start_head_tracking_reports_failure_when_tracking_is_stopped(qt_app, make_app):
+    app = make_app()
+    app._on_start_requested("mock")
+
+    ready = []
+    app.start_head_tracking(ready.append)
+    app._on_stop_requested()
+
+    assert ready == [False]

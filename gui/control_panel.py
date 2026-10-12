@@ -9,6 +9,9 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -23,6 +26,13 @@ class ControlPanel(QWidget):
     calibration_toggled = Signal(bool)
     dwell_click_toggled = Signal(bool)
     dwell_settings_changed = Signal(dict)
+    recordings_dir_change_requested = Signal()
+
+    _NO_RECORDINGS_DIR_TEXT = "Not set - you'll be asked when recording starts"
+    _RECORDINGS_DIR_TOOLTIP = (
+        "Head-movement sessions and Fitts' Law results are saved under this "
+        "folder, in its 'sessions' and 'fitts_sessions' subfolders."
+    )
 
     def __init__(
         self,
@@ -31,6 +41,7 @@ class ControlPanel(QWidget):
         mouse_control_enabled: bool = True,
         calibration_enabled: bool = False,
         dwell_config: dict | None = None,
+        recordings_dir=None,
     ):
         super().__init__(parent)
         dwell_config = dwell_config or {}
@@ -100,8 +111,21 @@ class ControlPanel(QWidget):
         dwell_form.addRow("Movement tolerance", self._movement_tolerance_spin)
         dwell_form.addRow("Resume time", self._resume_time_spin)
 
+        self._recordings_dir_label = QLabel()
+        self._recordings_dir_label.setWordWrap(True)
+        self._recordings_dir_button = QPushButton("Change...")
+        self._recordings_dir_button.clicked.connect(
+            self.recordings_dir_change_requested
+        )
+        recordings_box = QGroupBox("Recordings Folder")
+        recordings_row = QHBoxLayout(recordings_box)
+        recordings_row.addWidget(self._recordings_dir_label, stretch=1)
+        recordings_row.addWidget(self._recordings_dir_button)
+        self.set_recordings_dir(recordings_dir)
+
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(box)
+        main_layout.addWidget(recordings_box)
         main_layout.addWidget(dwell_box)
 
     @property
@@ -128,6 +152,18 @@ class ControlPanel(QWidget):
             "resume_time_s": self._resume_time_spin.value(),
         }
 
+    @property
+    def recordings_dir_text(self) -> str:
+        return self._recordings_dir_label.text()
+
+    def set_recordings_dir(self, base_dir) -> None:
+        """Show the folder head sessions and Fitts results are written under."""
+        if base_dir is None:
+            self._recordings_dir_label.setText(self._NO_RECORDINGS_DIR_TEXT)
+        else:
+            self._recordings_dir_label.setText(str(base_dir))
+        self._recordings_dir_label.setToolTip(self._RECORDINGS_DIR_TOOLTIP)
+
     def _emit_dwell_settings(self) -> None:
         self.dwell_settings_changed.emit(self.dwell_settings)
 
@@ -140,6 +176,14 @@ class ControlPanel(QWidget):
             blocked = control.blockSignals(True)
             control.setValue(value)
             control.blockSignals(blocked)
+
+    def set_mouse_control_enabled(self, enabled: bool) -> None:
+        """Set the Mouse Control toggle, emitting so the change is persisted."""
+        self._mouse_check.setChecked(enabled)
+
+    def set_recording_enabled(self, enabled: bool) -> None:
+        """Set the Recording toggle, emitting so the change is persisted."""
+        self._record_check.setChecked(enabled)
 
     def set_dwell_click_enabled(self, enabled: bool) -> None:
         blocked = self._dwell_check.blockSignals(True)

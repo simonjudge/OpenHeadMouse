@@ -71,6 +71,29 @@ coordinate origins. On Windows, native pixel bounds are used so display scaling 
 shrink the usable cursor area. The bounds are refreshed and the cursor is centered on that
 display whenever tracking starts.
 
+### Recordings folder
+
+Everything this app records is written under one base folder, so a study's data stays
+together:
+
+```
+<recordings folder>/sessions/        head-movement session files
+<recordings folder>/fitts_sessions/  Fitts' Law result files
+```
+
+Set it from the main HeadMouse window with **Recordings Folder → Change...**, or
+**File → Set Recordings Folder...**. The choice is saved in `config.json` as
+`recorder.base_dir` and is shared with the Fitts' Law test window.
+
+If no folder has been chosen, you are asked for one the first time something is actually
+recorded: when **Recording** is switched on, when a provider is started with **Recording**
+already on, or when a Fitts test is started with **Record head movement** ticked. This also
+applies to the Fitts window run standalone (`python fitts_law/fitts_test.py`), which asks for
+the folder itself and saves the answer to `config.json` and to its own
+`fitts_law/fitts_settings.json`, so it is only asked once either way. Cancelling the prompt
+falls back to the `recorder.output_dir` default (`sessions/`), and you'll be asked again next
+time.
+
 ### Session files
 
 Each Start → Stop run of a provider is saved as its own session file when **Recording** is on.
@@ -196,21 +219,77 @@ offsets. With both disabled, only the configured deadband suppresses small movem
 These estimates cannot distinguish sensor drift from deliberately very slow movement:
 disable them for unrestricted fine motion. They do not recenter Absolute mode.
 
+### Recording head movement during a Fitts test
+
+The Fitts window's setup page has a **Record Head Movement** option and two start buttons:
+
+- **Record Head Movement** records head movement alongside the Fitts data, using the tracker,
+  **Initial Calibration** and **Recording** settings of the main HeadMouse window. It turns
+  **Recording** on so the head session is saved. The head session and the Fitts session can then
+  be replayed together with **Open Synchronised Playback…**.
+- **Start Test** runs the test with whatever is already driving the OS cursor (head mouse,
+  trackpad, eye gaze, switch, etc). The test window itself stays agnostic to the input device.
+  With **Record Head Movement** ticked, it also brings the head tracker up but switches
+  **Mouse Control** *off*, so head movement is recorded while the access method being measured
+  keeps the cursor. This is how head movement is captured during, say, an eye-gaze or switch run.
+- **Start with HeadMouse** (to the right of it) records head movement *and* drives the cursor with
+  it. It starts the chosen provider exactly as the setup panel's **Start** button would, ticking
+  **Record Head Movement** and switching **Mouse Control** on. If initial calibration is enabled,
+  the calibration overlay runs first and the trials only begin once the neutral pose has been
+  captured and tracking is live. If the tracker is already running, the test starts straight away.
+  The button also sets **Access method** to HeadMouse, and is disabled when the Fitts window is run
+  standalone (`python fitts_law/fitts_test.py`), where there is no HeadMouse app to drive.
+
+Either way the head recording covers the whole run, so its samples can be labelled by phase (see
+below). `metadata.record_head_movement` in the Fitts file records which mode was used.
+
+When **Record Head Movement** is ticked, the setup page also offers two optional tasks before the
+pointing trials (they are hidden otherwise):
+
+- **Initial Rest Position (Calibration)** gives the participant the configured move/read time
+  to adopt a comfortable neutral pose, then records it for the configured hold time. It uses the
+  same neutral-pose calculation as the main HeadMouse calibration. If HeadMouse is running, its
+  cursor is paused during the task and the held pose recentres it before the next task.
+- **Range Of Movement Task** asks for maximum comfortable movement in this order: left, right,
+  up, down. For each direction a red band marks the corresponding screen edge. The participant
+  gets the configured move time to reach it and the configured hold time to maintain it.
+
+**Time to move/read instructions** and **Time to hold/record position** are shared by both tasks.
+Press Esc to cancel a pre-test sequence and return to setup.
+
+All provider samples are retained during calibration, range-of-movement and Fitts trials (the
+cursor still uses only the newest sample per GUI update). In head-session JSON/CSV each sample's
+`metadata.task_phase` identifies its section, for example
+`initial_rest.hold`, `range_of_movement.left.move`, or `fitts_test`. Head-session `task_phase`
+events mark the same boundaries. The Fitts JSON `metadata` contains:
+
+- `pretest_configuration` — enabled tasks and configured move/hold durations;
+- `pretest_phases` — ordered phase labels, task/direction/segment, shared-host-clock start/end
+  times, and cursor trajectories captured during each phase;
+- `fitts_task` — the `fitts_test` phase label, shared-host-clock boundaries, and completion flag.
+
+These labels allow the neutral-rest, range-of-movement and pointing data to be extracted without
+inferring boundaries from timing. The held neutral samples also remain in the head session's
+top-level `calibration` section for existing calibration analysis.
+
 ### Fitts playback and synchronised playback
 
-The session viewer's File menu has two Fitts options:
+The session viewer's File menu has three ways to open a recording:
 
-- **Open Fitts Session…** opens a Fitts playback window on its own. The left side shows a scaled
-  drawing of the test screen. It shows the current target (diameter W), the start point, the
-  dashed task axis, the cursor trail up to the playhead, the cursor, and click markers (green for
-  a hit, red for a miss). Earlier trials of the same condition are drawn faded. Below the drawing
-  are graphs of cursor speed and distance to target, with a playhead and vertical lines at each
-  trial's start (green, dashed) and click (purple, dotted).
-- **Open Synchronised Playback…** asks for a head-movement session and then a Fitts session. The
-  two windows are then driven by one shared playback clock, so Play, the slider or the speed
-  control in either window moves both. Only the Fitts test period is played back. Head data
-  recorded before or after the test is not shown, and head statistics cover only that period.
-  Times in both windows are measured from the start of the test.
+- **Open HeadMouse Session…** (`Ctrl+O`) opens a head-movement recording on its own.
+- **Open Synchronised Playback…** (`Ctrl+Shift+O`) asks for a head-movement session and then a
+  Fitts session. The two windows are then driven by one shared playback clock, so Play, the slider
+  or the speed control in either window moves both. Only the Fitts test period is played back.
+  Head data recorded before or after the test is not shown, and head statistics cover only that
+  period. Times in both windows are measured from the start of the test.
+- **Open Fitts Test Only…** (`Ctrl+F`) opens a Fitts playback window on its own, with no head
+  recording. The left side shows a scaled drawing of the test screen. It shows the current target
+  (diameter W), the start point, the dashed task axis, the cursor trail up to the playhead, the
+  cursor, and click markers (green for a hit, red for a miss). Earlier trials of the same condition
+  are drawn faded. Below the drawing are graphs of cursor speed and distance to target, with a
+  playhead and vertical lines at each trial's start (green, dashed) and click (purple, dotted).
+
+All three are also on the viewer's toolbar.
 
 The right side of the Fitts window uses the same layout as the head viewer. The **summary** shows:
 
@@ -226,6 +305,23 @@ The right side of the Fitts window uses the same layout as the head viewer. The 
 
 The summary can exclude the first N repetitions of each condition. **Live Data** shows the current
 trial and its measures, up to the playhead.
+
+#### Initial pose and range of movement summary
+
+When the run included the pre-test tasks, an **Initial Pose & Range of Movement** box appears below
+the summary (it is hidden for sessions without that data). It is built from
+`metadata["pretest_phases"]` in the Fitts file, so it is available in **Open Fitts Test Only…** too:
+
+- **Initial head pose** — cursor drift during `initial_rest.hold` (σx, σy and the largest deviation
+  from the mean position), the hold duration and the number of cursor points.
+- **Range of movement** — the extreme cursor position reached in each `range_of_movement.*.hold`
+  phase, plus the overall horizontal and vertical cursor ranges in px.
+
+In **Open Synchronised Playback…**, the head session's samples are passed to the Fitts window as
+well. Their `metadata.task_phase` labels add head-pose statistics: mean and standard deviation of
+yaw, pitch and roll at rest, the mean angle held in each direction with its offset from the rest
+pose, and the resulting yaw (left↔right) and pitch (up↔down) ranges in degrees. The pre-test
+samples are used even though playback itself is trimmed to the Fitts test period.
 
 The same pair of windows can be opened straight from the Fitts test. When a run finishes, its
 results page has an **Open Synchronised Playback…** button (also in that window's File menu,

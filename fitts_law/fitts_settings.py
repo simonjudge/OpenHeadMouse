@@ -19,6 +19,14 @@ DEFAULT_SETTINGS = {
     "typing_key_size": "Consistent",
     "typing_word_count": 8,
     "typing_reassign_widths": False,
+    "record_head_movement": False,
+    "initial_rest_enabled": False,
+    "range_of_movement_enabled": False,
+    "pretest_move_duration_s": 5.0,
+    "pretest_hold_duration_s": 5.0,
+    # Mirrors config.json's recorder.base_dir so a standalone run (no
+    # HeadMouse window) still only asks for the folder once.
+    "recordings_base_dir": None,
 }
 
 

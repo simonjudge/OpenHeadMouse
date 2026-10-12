@@ -250,3 +250,75 @@ def test_typing_mode_groups_results_into_one_row_per_word(qt_app):
     # distinct occurrences, since condition_label embeds the word index).
     num_words = len({s["repetition_index"] for s in canvas._specs})
     assert window._results_table.rowCount() == num_words + 1
+
+def test_start_with_headmouse_button_is_disabled_without_a_host_app(qt_app):
+    window = FittsTestWindow()
+
+    assert window._start_headmouse_button.isEnabled() is False
+
+
+def test_start_with_headmouse_starts_the_test_once_tracking_is_ready(qt_app):
+    window = FittsTestWindow()
+    window._mode_combo.setCurrentText(MODE_ISO_STANDARD)
+    window._amplitudes_edit.setText("100")
+    window._widths_edit.setText("50")
+    window._repetitions_spin.setValue(1)
+    window._num_targets_combo.setCurrentText("9")
+
+    pending = {}
+
+    def start_provider(on_ready, mouse_control=True):
+        pending["on_ready"] = on_ready  # calibration still running
+        pending["mouse_control"] = mouse_control
+        return True
+
+    window.set_head_start_provider(start_provider)
+    assert window._start_headmouse_button.isEnabled() is True
+
+    window._on_start_with_headmouse_clicked()
+
+    # Nothing starts until the head tracker reports it is ready.
+    assert window._canvas is None
+    assert window._start_headmouse_button.isEnabled() is False
+    assert window._access_method_combo.currentText() == "HeadMouse"
+    # Driving the cursor with the head records it too.
+    assert pending["mouse_control"] is True
+    assert window._record_head_checkbox.isChecked() is True
+
+    pending["on_ready"](True)
+
+    assert window._canvas is not None
+    assert window._stack.currentWidget() is window._canvas
+    assert window._start_headmouse_button.isEnabled() is True
+    assert window._logger.metadata["record_head_movement"] is True
+
+
+def test_start_with_headmouse_does_not_start_the_test_if_tracking_fails(qt_app, monkeypatch):
+    window = FittsTestWindow()
+    warnings = []
+    monkeypatch.setattr(
+        "fitts_law.fitts_test.QMessageBox.warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+
+    def start_provider(on_ready, mouse_control=True):
+        on_ready(False)  # user cancelled calibration
+        return True
+
+    window.set_head_start_provider(start_provider)
+    window._on_start_with_headmouse_clicked()
+
+    assert window._canvas is None
+    assert len(warnings) == 1
+    assert window._start_headmouse_button.isEnabled() is True
+
+
+def test_start_with_headmouse_re_enables_buttons_when_the_provider_refuses(qt_app):
+    window = FittsTestWindow()
+    window.set_head_start_provider(lambda on_ready, mouse_control=True: False)
+
+    window._on_start_with_headmouse_clicked()
+
+    assert window._canvas is None
+    assert window._start_headmouse_button.isEnabled() is True
+    assert window._start_button.isEnabled() is True

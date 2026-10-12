@@ -2,10 +2,10 @@
 
 Uses PyQtGraph for fast, responsive line charts and pyqtgraph.opengl for native,
 flicker-free 3D mesh rendering. Opens as a standalone window with no session
-loaded; use File > Open Session (or the toolbar button) to load a recording.
-File > Open Fitts Session opens a Fitts' Law trial playback window, and
-File > Open Synchronised Playback opens a head session plus a Fitts session
-recorded at the same time, driven by one shared playback clock.
+loaded; use File > Open HeadMouse Session (or the toolbar button) to load a
+recording. File > Open Fitts Test Only opens a Fitts' Law trial playback window
+on its own, and File > Open Synchronised Playback opens a head session plus a
+Fitts session recorded at the same time, driven by one shared playback clock.
 
 Call: visualize_session_native(recorded_samples=None, session_name, recorder)
 """
@@ -249,11 +249,12 @@ class SessionVisualizerWindow(QMainWindow):
 
     def _create_menu_and_toolbar(self):
         """Create the File menu and toolbar buttons for opening session files."""
-        open_action = QAction("Open Session...", self)
+        open_action = QAction("Open HeadMouse Session...", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self._on_open_session)
 
-        open_fitts_action = QAction("Open Fitts Session...", self)
+        open_fitts_action = QAction("Open Fitts Test Only...", self)
+        open_fitts_action.setShortcut("Ctrl+F")
         open_fitts_action.triggered.connect(self._on_open_fitts_session)
 
         open_sync_action = QAction("Open Synchronised Playback...", self)
@@ -262,13 +263,14 @@ class SessionVisualizerWindow(QMainWindow):
 
         file_menu = self.menuBar().addMenu("File")
         file_menu.addAction(open_action)
-        file_menu.addAction(open_fitts_action)
         file_menu.addAction(open_sync_action)
+        file_menu.addAction(open_fitts_action)
 
         toolbar = QToolBar("Main")
         toolbar.setMovable(False)
         toolbar.addAction(open_action)
         toolbar.addAction(open_sync_action)
+        toolbar.addAction(open_fitts_action)
         self.addToolBar(toolbar)
 
     def _create_controls_box(self) -> QWidget:
@@ -502,8 +504,8 @@ class SessionVisualizerWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to load session:\n\n{e}")
 
     def _on_open_fitts_session(self):
-        """File > Open Fitts Session: standalone (unsynchronised) Fitts playback."""
-        filepath = self._pick_fitts_session_file()
+        """File > Open Fitts Test Only: standalone (unsynchronised) Fitts playback."""
+        filepath = self._pick_fitts_session_file("Open Fitts Test Session File")
         if filepath is None:
             return
         try:
@@ -514,11 +516,13 @@ class SessionVisualizerWindow(QMainWindow):
             return
         self._open_fitts_window(logger, filepath.stem)
 
-    def _open_fitts_window(self, logger: FittsResultsLogger, name: str):
+    def _open_fitts_window(self, logger: FittsResultsLogger, name: str, head_samples: list | None = None):
         from session_viewer.fitts_playback import FittsPlaybackWindow
 
         window = FittsPlaybackWindow()
         window.load_fitts_session(logger.trials, logger.metadata, name)
+        if head_samples:
+            window.set_head_session_samples(head_samples)
         window.show()
         self._fitts_windows = [w for w in self._fitts_windows if w.isVisible()] + [window]
         return window
@@ -569,10 +573,10 @@ class SessionVisualizerWindow(QMainWindow):
                 f"{result.reason}\n\nOpen the Fitts session for playback on its own?",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
             )
-            return self._open_fitts_window(logger, fitts_name) if answer == QMessageBox.Yes else None
+            return self._open_fitts_window(logger, fitts_name, samples) if answer == QMessageBox.Yes else None
 
         self.load_session(trimmed, f"Session - {head_name}", recorder=recorder, time_origin_host=t0)
-        fitts_window = self._open_fitts_window(logger, fitts_name)
+        fitts_window = self._open_fitts_window(logger, fitts_name, samples)
         shared = PlaybackClock(self)
         self._attach_clock(shared, self._host_frame_times)
         fitts_window.attach_clock(shared, synced=True)

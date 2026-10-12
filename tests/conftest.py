@@ -14,3 +14,37 @@ def qt_app():
     app = QApplication.instance() or QApplication([])
     yield app
 
+
+@pytest.fixture(autouse=True)
+def isolated_fitts_settings(tmp_path, monkeypatch):
+    """Keep the Fitts settings a test saves out of the repository's own file."""
+    from fitts_law import fitts_settings
+
+    monkeypatch.setattr(
+        fitts_settings, "_SETTINGS_PATH", tmp_path / "fitts_settings" / "fitts_settings.json"
+    )
+
+
+@pytest.fixture(autouse=True)
+def isolated_recordings_dir(tmp_path, monkeypatch):
+    """Never read (or record into) the developer's real recordings folder.
+
+    Yields the un-stubbed folder chooser, for the tests that cover it.
+    """
+    from types import SimpleNamespace
+
+    from core import recording_paths
+
+    monkeypatch.setattr(
+        recording_paths,
+        "default_config_path",
+        lambda: tmp_path / "recordings_config" / "config.json",
+    )
+    # A real folder chooser is modal and would hang the suite, so it is
+    # stubbed out as "cancelled" unless a test replaces it.
+    real_prompt = recording_paths.prompt_for_base_dir
+    monkeypatch.setattr(
+        recording_paths, "prompt_for_base_dir", lambda parent=None, reason="": None
+    )
+    return SimpleNamespace(real_prompt=real_prompt)
+

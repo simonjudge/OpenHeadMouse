@@ -9,5 +9,11 @@
   "icon": "\ud83d\ude00",
   "typing_key_size": "Consistent key size",
   "typing_word_count": 3,
-  "typing_reassign_widths": false
+  "typing_reassign_widths": false,
+  "record_head_movement": true,
+  "initial_rest_enabled": true,
+  "range_of_movement_enabled": true,
+  "pretest_move_duration_s": 2.0,
+  "pretest_hold_duration_s": 4.0,
+  "recordings_base_dir": null
 }

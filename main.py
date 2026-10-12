@@ -24,6 +24,8 @@ from pathlib import Path
 
 import numpy as np
 
+from core import recording_paths
+
 __version__ = "0.2.0"
 
 _BUNDLED_CONFIG_PATH = Path(__file__).parent / "config.json"
@@ -216,6 +218,7 @@ class App:
         self._config = config
         self._config_path = Path(config_path) if config_path is not None else None
         self._config_migrated = "dsp" in config
+        self._recordings_base_dir = recording_paths.base_dir_from_config(config)
         self._mouse_profiles = ensure_mouse_profiles(config)
         self._active_provider_name = config.get("active_provider", "uniface")
         self._qm = qm
@@ -238,11 +241,15 @@ class App:
         self._ximu_was_streaming = False
         self._ximu_status = None
         self._ximu_wifi_provider = False
+        self._tracking_ready_callbacks: list = []
+        self._fitts_recording_phase: str | None = None
+        self._fitts_calibration_buffer: list = []
+        self._fitts_rest_calibrating = False
 
         from core.recorder import Recorder
 
         self._recorder = Recorder(
-            output_dir=config["recorder"]["output_dir"],
+            output_dir=self._head_sessions_dir(),
             format=config["recorder"]["format"],
         )
 
@@ -324,6 +331,11 @@ class App:
         self.window.dsp_config_changed.connect(self._on_dsp_config_changed)
         self.window.load_session_requested.connect(self._on_load_session_requested)
         self.window.fitts_test_requested.connect(self._on_fitts_test_requested)
+        self.window.recordings_folder_requested.connect(self._on_choose_recordings_dir)
+        self.window.controls.recordings_dir_change_requested.connect(
+            self._on_choose_recordings_dir
+        )
+        self.window.controls.set_recordings_dir(self._recordings_base_dir)
         self.window.controls.recording_toggled.connect(self._on_recording_toggled)
         self.window.controls.mouse_control_toggled.connect(self._on_mouse_control_toggled)
         self.window.controls.calibration_toggled.connect(self._on_calibration_toggled)
@@ -355,7 +367,6 @@ class App:
 
     def show(self) -> None:
         self.window.show()
-
     def shutdown(self) -> None:
         self._timer.stop()
         self._dwell_tray.close()
@@ -367,7 +378,62 @@ class App:
         self._stop_airpods_helper()
         self.headmouse.stop()
 
+    # -- recordings folder --------------------------------------------------
+
+    def _head_sessions_dir(self) -> Path:
+        """Where head-movement sessions are saved right now."""
+        if self._recordings_base_dir is not None:
+            return recording_paths.head_sessions_dir(self._recordings_base_dir)
+        return Path(self._config["recorder"]["output_dir"])
+
+    def ensure_recordings_base_dir(self, prompt: bool = True) -> Path | None:
+        """The base folder for recordings, asking for one the first time.
+
+        Returns None only when the user declines to choose one, in which case
+        the legacy ``recorder.output_dir`` default is used instead.
+        """
+        if self._recordings_base_dir is not None:
+            return self._recordings_base_dir
+        if not prompt:
+            return None
+
+        chosen = recording_paths.prompt_for_base_dir(
+            self.window, "needed before anything can be recorded"
+        )
+        if chosen is None:
+            print("[HeadMouse] No recordings folder chosen; using the default folder")
+            return None
+        self.set_recordings_base_dir(chosen)
+        return chosen
+
+    def set_recordings_base_dir(self, base_dir) -> None:
+        """Save the base folder and point this run's recordings at it."""
+        base_dir = Path(base_dir)
+        self._recordings_base_dir = base_dir
+        self._config.setdefault("recorder", {})["base_dir"] = str(base_dir)
+        self._recorder.output_dir = recording_paths.head_sessions_dir(base_dir)
+        self.window.controls.set_recordings_dir(base_dir)
+        if self._config_path is not None:
+            self._persist_config()
+        else:
+            # No config file was loaded from disk (packaged first run, or an
+            # embedded App), so write the folder to the shared default config
+            # instead of asking for it again next time.
+            recording_paths.save_base_dir(base_dir)
+        print(f"[HeadMouse] Recordings folder set to {base_dir}")
+
+    def _on_choose_recordings_dir(self) -> None:
+        chosen = recording_paths.prompt_for_base_dir(
+            self.window, "head sessions and Fitts results are saved here"
+        )
+        if chosen is not None:
+            self.set_recordings_base_dir(chosen)
+
     def _on_start_requested(self, provider_name: str) -> None:
+        if self.window.controls.recording_enabled:
+            # Ask before the provider starts, so the first session of a run
+            # cannot be written to the wrong place.
+            self.ensure_recordings_base_dir()
         try:
             # Special handling for xIMU3: show device discovery dialog
             if provider_name == "ximu3":
@@ -533,6 +599,9 @@ class App:
 
     def _on_stop_requested(self):
         self._end_calibration()
+        if self._fitts_recording_phase is not None:
+            self.set_fitts_recording_phase(None, completed=False)
+        self._notify_tracking_ready(False)
         self.headmouse.set_tracking_state(False)
         if self._provider is not None:
             try:
@@ -560,6 +629,95 @@ class App:
         self._recorder.clear()
         return filepath
 
+    # -- external tracking control -----------------------------------------
+
+    def start_head_tracking(
+        self,
+        on_ready=None,
+        *,
+        mouse_control: bool = True,
+        recording: bool = True,
+    ) -> bool:
+        """Make sure the selected head tracker is running, then call on_ready.
+
+        Starts the provider currently chosen in the setup panel if it isn't
+        already running, honouring the same Initial Calibration setting as the
+        Start button. `mouse_control` sets the Mouse Control toggle, so a
+        caller that only wants head movement recorded (the Fitts test's
+        "Record Head Movement" option) can keep the cursor on its own input
+        device; `recording` turns Recording on so the head session is saved.
+        `on_ready` is called with True once tracking is live (after any
+        calibration and after the selected provider has delivered its first
+        sample, including xIMU3 over Wi-Fi reaching its streaming state) or
+        with False if the start was cancelled or the tracking was stopped
+        before it became ready.
+
+        Returns False if the provider could not be started at all.
+        """
+        if on_ready is not None:
+            self._tracking_ready_callbacks.append(on_ready)
+
+        if recording and not self.window.controls.recording_enabled:
+            # Without this the tracker would run but nothing would be saved.
+            self.window.controls.set_recording_enabled(True)
+            print("[HeadMouse] Recording enabled so head movement is saved")
+        if recording:
+            self.ensure_recordings_base_dir()
+
+        if self.window.controls.mouse_control_enabled != mouse_control:
+            # Without this the tracker would run but nothing would move the
+            # cursor - or, for a record-only run, head movement would fight
+            # the input device actually being tested.
+            self.window.controls.set_mouse_control_enabled(mouse_control)
+            print(
+                "[HeadMouse] Mouse control enabled so head movement can drive the cursor"
+                if mouse_control
+                else "[HeadMouse] Mouse control disabled; head movement is only recorded"
+            )
+
+        if self._provider is None:
+            self.window.setup_panel.request_start()
+            if self._provider is None:  # cancelled or failed to connect
+                # The setup panel has already reported why; just drop the
+                # callback and let the caller handle the failed return.
+                self._tracking_ready_callbacks = [
+                    cb for cb in self._tracking_ready_callbacks if cb is not on_ready
+                ]
+                return False
+
+        self._flush_tracking_ready()
+        if self.window.controls.recording_enabled:
+            print("[HeadMouse] Head-movement recording is active for this run")
+        else:
+            print("[HeadMouse] Recording is disabled; no head session will be saved")
+        return True
+
+    def _tracking_is_ready(self) -> bool:
+        from core.headmouse import TrackingState
+        from providers.base_provider import ProviderState
+
+        return (
+            self._provider is not None
+            and self._provider.state
+            in (ProviderState.RUNNING, ProviderState.TRACKING_LOST)
+            and self._last_sample is not None
+            and not self._calibrating
+            and not self._ximu_waiting_to_start
+            and self.headmouse.state == TrackingState.ACTIVE
+        )
+
+    def _flush_tracking_ready(self) -> None:
+        if self._tracking_ready_callbacks and self._tracking_is_ready():
+            self._notify_tracking_ready(True)
+
+    def _notify_tracking_ready(self, started: bool) -> None:
+        callbacks, self._tracking_ready_callbacks = self._tracking_ready_callbacks, []
+        for callback in callbacks:
+            try:
+                callback(started)
+            except Exception as exc:  # a caller's failure must not kill the poll loop
+                print(f"[HeadMouse] tracking-ready callback failed: {exc}")
+
     def stop_tracking_and_save(self):
         """Stop a running provider and save its recording; returns the file path.
 
@@ -571,6 +729,79 @@ class App:
         if was_running:
             self.window.setup_panel.reset_to_stopped()
         return filepath
+
+    def set_fitts_recording_phase(
+        self,
+        phase: str | None,
+        completed: bool = True,
+    ) -> None:
+        """Label live head samples with the current Fitts/pre-test phase.
+
+        Transitions are also saved as events. Ending ``initial_rest.hold``
+        applies the held pose as the HeadMouse neutral calibration.
+        """
+        if self._provider is None:
+            self._fitts_recording_phase = None
+            return
+        if phase == self._fitts_recording_phase:
+            return
+
+        pending = self._drain_all()
+        if pending:
+            self._record_provider_samples(pending, self._fitts_recording_phase)
+            self._last_sample = pending[-1]
+
+        previous = self._fitts_recording_phase
+        if previous is not None:
+            self._record_task_phase_event(
+                previous,
+                "end" if completed else "cancel",
+            )
+
+        if previous == "initial_rest.hold" and completed:
+            self._finish_fitts_rest_calibration()
+        elif previous == "initial_rest.hold":
+            self._fitts_calibration_buffer = []
+            self._fitts_rest_calibrating = False
+            self.headmouse.set_tracking_state(True)
+        elif previous == "initial_rest.move" and not completed:
+            self._fitts_calibration_buffer = []
+            self._fitts_rest_calibrating = False
+            self.headmouse.set_tracking_state(True)
+
+        self._fitts_recording_phase = phase
+        if phase == "initial_rest.move":
+            self._fitts_calibration_buffer = []
+            self._fitts_rest_calibrating = True
+            self.headmouse.set_tracking_state(False)
+        if phase is not None:
+            self._record_task_phase_event(phase, "start")
+
+    def _record_task_phase_event(self, phase: str, action: str) -> None:
+        timestamp = (
+            self._last_sample.timestamp
+            if self._last_sample is not None
+            else time.monotonic()
+        )
+        self._recorder.record_event(
+            timestamp,
+            "task_phase",
+            {"phase": phase, "action": action},
+        )
+
+    def _finish_fitts_rest_calibration(self) -> None:
+        buffer = self._fitts_calibration_buffer
+        self._fitts_calibration_buffer = []
+        self._fitts_rest_calibrating = False
+        self._apply_calibration_samples(
+            buffer,
+            duration_s=None,
+            source="fitts_initial_rest",
+            empty_warning=(
+                "No head-tracking data was received while the initial rest "
+                "position was held, so tracking has resumed without recentring."
+            ),
+        )
 
     def _airpods_terminal_script(self) -> str:
         if sys.platform != "darwin":
@@ -759,7 +990,7 @@ class App:
             )
 
     def _on_recenter(self) -> None:
-        if self._calibrating:
+        if self._calibrating or self._fitts_rest_calibrating:
             return
         latest = self._drain_latest() or self._last_sample
         if latest is not None:
@@ -812,9 +1043,9 @@ class App:
             overlay.deleteLater()
 
     def _on_calibration_capture_started(self) -> None:
-        # Discard anything queued during the read period so only the
-        # held-still countdown contributes to the neutral pose.
-        self._drain_all()
+        # Save any queued read-period samples before switching labels. Only
+        # the held-still samples contribute to the neutral pose.
+        self._collect_calibration_samples()
         self._calibration_buffer = []
         self._calibration_capturing = True
 
@@ -826,15 +1057,31 @@ class App:
         capture_duration = self._calibration_overlay.capture_duration_s if self._calibration_overlay else None
         self._end_calibration()
 
+        self._apply_calibration_samples(
+            buffer,
+            duration_s=capture_duration,
+            source="calibration",
+            empty_warning=(
+                "No head-tracking data was received during calibration, so the "
+                "neutral pose could not be captured. Tracking has started without recentring."
+            ),
+        )
+
+    def _apply_calibration_samples(
+        self,
+        buffer: list,
+        *,
+        duration_s: float | None,
+        source: str,
+        empty_warning: str,
+    ) -> None:
+        """Apply a held neutral pose for both normal and Fitts calibration."""
         self.dsp.reset(position=self.headmouse.cursor_position)
         self._mouse_was_active = False
         self.headmouse.set_tracking_state(True)
 
         if not buffer:
-            self._show_calibration_warning(
-                "No head-tracking data was received during calibration, so the "
-                "neutral pose could not be captured. Tracking has started without recentring."
-            )
+            self._show_calibration_warning(empty_warning)
             return
 
         neutral = self._qm.mean_quaternion(sample.quaternion for sample in buffer)
@@ -842,11 +1089,11 @@ class App:
             self._recorder.set_calibration(
                 [(sample.timestamp, sample.quaternion) for sample in buffer],
                 neutral,
-                duration_s=capture_duration,
+                duration_s=duration_s,
             )
         self._last_sample = buffer[-1]
-        self._recenter_to(neutral, buffer[-1].timestamp, source="calibration")
-        print(f"✓ Calibration captured from {len(buffer)} samples")
+        self._recenter_to(neutral, buffer[-1].timestamp, source=source)
+        print(f"✓ Calibration ({source}) captured from {len(buffer)} samples")
 
     def _on_calibration_cancelled(self) -> None:
         if not self._calibrating:
@@ -870,8 +1117,34 @@ class App:
             self._last_sample = samples[-1]
             yaw_deg, pitch_deg, roll_deg = self.dsp.relative_euler_deg(samples[-1].quaternion)
             self.window.update_telemetry(yaw_deg, pitch_deg, roll_deg)
+            phase = (
+                "headmouse_initial_calibration.hold"
+                if self._calibration_capturing
+                else "headmouse_initial_calibration.move"
+            )
+            self._record_provider_samples(samples, phase)
         if self._calibration_capturing:
             self._calibration_buffer.extend(samples)
+
+    def _record_provider_samples(
+        self,
+        samples: list,
+        phase: str | None = None,
+    ) -> None:
+        """Record every provider sample, preserving metadata and phase labels."""
+        if phase == "initial_rest.hold":
+            self._fitts_calibration_buffer.extend(samples)
+        if not self.window.controls.recording_enabled:
+            return
+        for sample in samples:
+            metadata = dict(getattr(sample, "raw_metadata", None) or {})
+            if phase is not None:
+                metadata["task_phase"] = phase
+            self._recorder.record_sample(
+                sample.timestamp,
+                sample.quaternion,
+                raw_metadata=metadata,
+            )
 
     def _on_kx_changed(self, value: float) -> None:
         self.dsp.kx = value
@@ -973,6 +1246,8 @@ class App:
 
     def _on_recording_toggled(self, enabled: bool) -> None:
         self._config.setdefault("ui", {})["recording_enabled"] = enabled
+        if enabled:
+            self.ensure_recordings_base_dir()
         self._persist_config()
 
     def _on_mouse_control_toggled(self, enabled: bool) -> None:
@@ -1079,6 +1354,13 @@ class App:
 
         self._fitts_test_window = launch_fitts_test()
         self._fitts_test_window.set_head_session_provider(self.stop_tracking_and_save)
+        self._fitts_test_window.set_head_start_provider(self.start_head_tracking)
+        self._fitts_test_window.set_recordings_dir_provider(
+            self.ensure_recordings_base_dir
+        )
+        self._fitts_test_window.set_head_phase_provider(
+            self.set_fitts_recording_phase
+        )
 
     def _drain_latest(self):
         """Pop every currently-queued sample and return only the newest one from the live provider."""
@@ -1146,28 +1428,27 @@ class App:
             self._collect_calibration_samples()
             return
 
+        self._flush_tracking_ready()
+
         mouse_active = (
             self.window.controls.mouse_control_enabled
             and self.headmouse.state == TrackingState.ACTIVE
+            and not self._fitts_rest_calibrating
         )
         if mouse_active != self._mouse_was_active:
             self.dsp.reset(position=self.headmouse.cursor_position)
             self._mouse_was_active = mouse_active
-        sample = self._drain_latest()
-        if sample is None:
+        samples = self._drain_all()
+        if not samples:
             return
+        sample = samples[-1]
         self._last_sample = sample
 
         yaw_deg, pitch_deg, roll_deg = self.dsp.relative_euler_deg(sample.quaternion)
         self.window.update_telemetry(yaw_deg, pitch_deg, roll_deg)
 
-        # Record if enabled
-        if self.window.controls.recording_enabled:
-            self._recorder.record_sample(
-                sample.timestamp,
-                sample.quaternion,
-                raw_metadata=sample.raw_metadata,
-            )
+        self._record_provider_samples(samples, self._fitts_recording_phase)
+        self._flush_tracking_ready()
 
         # Update cursor position if mouse control is enabled
         if mouse_active:

@@ -43,6 +43,7 @@ class HeadMouseWindow(QMainWindow):
     dsp_config_changed = Signal(dict)
     load_session_requested = Signal()
     fitts_test_requested = Signal()
+    recordings_folder_requested = Signal()
     tracking_state_changed = Signal(str)
 
     def __init__(
@@ -228,9 +229,18 @@ class HeadMouseWindow(QMainWindow):
         open_fitts_action = QAction("Open Fitts' Law Test...", self)
         open_fitts_action.triggered.connect(self.fitts_test_requested)
 
+        recordings_folder_action = QAction("Set Recordings Folder...", self)
+        recordings_folder_action.setToolTip(
+            "Choose the folder that head-movement sessions and Fitts' Law "
+            "results are saved under."
+        )
+        recordings_folder_action.triggered.connect(self.recordings_folder_requested)
+
         file_menu = self.menuBar().addMenu("File")
         file_menu.addAction(open_visualizer_action)
         file_menu.addAction(open_fitts_action)
+        file_menu.addSeparator()
+        file_menu.addAction(recordings_folder_action)
 
     def set_status(self, state_name: str) -> None:
         color = _STATE_COLORS.get(state_name, "#000000")

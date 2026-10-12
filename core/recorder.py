@@ -3,7 +3,8 @@
 Optional initial-calibration data (the user's at-rest head pose captured
 before tracking starts) is stored separately from movement samples: under a
 top-level ``calibration`` key in JSON, or as ``phase == "calibration"`` rows
-in CSV.
+in CSV. Complete calibration and task streams may additionally use
+``metadata.task_phase`` to identify each sample's experimental phase.
 
 Subscribes to a provider's output queue in a background thread, accumulates
 samples, and on stop() writes a timestamped session file (JSON or CSV format,

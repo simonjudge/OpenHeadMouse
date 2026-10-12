@@ -143,6 +143,15 @@ class SetupPanel(QWidget):
         self._provider_combo.setEnabled(True)
         self.stop_requested.emit()
 
+    def request_start(self) -> None:
+        """Start the selected provider exactly as clicking Start would.
+
+        Used by other windows (e.g. the Fitts' Law test) that need the head
+        tracker running with the user's current provider/settings.
+        """
+        if self._start_button.isEnabled():
+            self._on_start_clicked()
+
     def reset_to_stopped(self) -> None:
         """Reset UI to stopped state after a failed start attempt."""
         self._start_button.setEnabled(True)

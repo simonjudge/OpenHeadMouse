@@ -7,6 +7,9 @@ fitts_sessions/
 *.egg-info/
 .DS_Store
 
+build/
+dist/
+
 # Downloaded ML/mesh assets (fetched automatically or per README instructions)
 models/
 
@@ -14,3 +17,4 @@ models/
 .build/
 xcuserdata/
 *.xcuserstate
+OpenHeadMouse.spec
