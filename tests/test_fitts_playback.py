@@ -13,6 +13,14 @@ from fitts_law.results import FittsResultsLogger, FittsStats, TrialResult
 from session_viewer.playback_clock import check_sync
 
 
+def _plain_text(label):
+    from PySide6.QtGui import QTextDocument
+
+    document = QTextDocument()
+    document.setHtml(label.text())
+    return document.toPlainText()
+
+
 def _trial(trajectory, start=(0.0, 0.0), target=(100.0, 0.0), click=(100.0, 0.0), width=20.0,
            start_time=10.0, mt=1.0, host_start=None, rep=0, index=0):
     return TrialResult(
@@ -202,8 +210,8 @@ def test_fitts_playback_window_standalone(qt_app):
         assert "Throughput:" in window.stats_label.text()
         assert "TAC:" in window.stats_label.text()
         window.clock.seek(1001.55)
-        live = window.raw_data_widget.text()
-        assert "Trial:</b> 2 / 3" in live
+        live = _plain_text(window.raw_data_widget)
+        assert "Trial: 2 / 3" in live
         assert "in progress" in live
         window.clock.seek(window.clock.t_max)
         assert "HIT" in window.raw_data_widget.text()
@@ -230,10 +238,10 @@ def test_synchronised_playback_shares_one_clock(qt_app):
         # Seeking from the Fitts window moves the head viewer too.
         fitts_window.transport._on_slider_moved(550)  # 0.55 s after t_min
         assert viewer.frame_data[viewer.current_frame_index]['time_rel'] == pytest.approx(0.5)
-        assert "Trial:</b> 1 / 3" in fitts_window.raw_data_widget.text()
+        assert "Trial: 1 / 3" in _plain_text(fitts_window.raw_data_widget)
 
         viewer.clock.seek(1002.95)
-        assert "Trial:</b> 3 / 3" in fitts_window.raw_data_widget.text()
+        assert "Trial: 3 / 3" in _plain_text(fitts_window.raw_data_widget)
         assert "Head recording has ended" in viewer.raw_data_widget.text()
 
         # Opening a new head session on its own unlinks it.

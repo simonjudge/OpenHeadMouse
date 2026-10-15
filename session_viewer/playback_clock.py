@@ -195,7 +195,7 @@ class SyncCheck:
         return max(self.head_range[1], self.fitts_range[1])
 
 
-def check_sync(head_samples: list, fitts_trials: list) -> SyncCheck:
+def check_sync(head_samples: list, fitts_trials: list, metadata: dict | None = None) -> SyncCheck:
     """Check that a head-movement recording and a Fitts session share the host clock and overlap.
 
     Both files must carry `host_time` stamps (head samples) and
@@ -204,8 +204,11 @@ def check_sync(head_samples: list, fitts_trials: list) -> SyncCheck:
     """
     if not head_samples:
         return SyncCheck(False, "The head-movement session has no samples.")
-    if not fitts_trials:
-        return SyncCheck(False, "The Fitts session has no trials.")
+    from session_viewer.pretest_stats import pretest_time_range
+
+    head_task_range = pretest_time_range(metadata)
+    if not fitts_trials and head_task_range is None:
+        return SyncCheck(False, "The Fitts session has no trials or timed head-movement tasks.")
     if any(getattr(s, "host_time", None) is None for s in head_samples):
         return SyncCheck(
             False,
@@ -219,7 +222,13 @@ def check_sync(head_samples: list, fitts_trials: list) -> SyncCheck:
             "It was recorded before synchronised playback was supported.",
         )
     head_range = (min(s.host_time for s in head_samples), max(s.host_time for s in head_samples))
-    fitts_range = (min(t.start_host_time for t in fitts_trials), max(t.end_host_time for t in fitts_trials))
+    # The Fitts range spans the head-movement exercise (if any) and the trials.
+    spans = [head_task_range] if head_task_range is not None else []
+    if fitts_trials:
+        spans.append((
+            min(t.start_host_time for t in fitts_trials), max(t.end_host_time for t in fitts_trials)
+        ))
+    fitts_range = (min(s for s, _ in spans), max(e for _, e in spans))
     if head_range[1] < fitts_range[0] or fitts_range[1] < head_range[0]:
         gap = max(fitts_range[0] - head_range[1], head_range[0] - fitts_range[1])
         return SyncCheck(

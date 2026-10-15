@@ -36,8 +36,13 @@ from PySide6.QtWidgets import (
 )
 
 from fitts_law.results import FittsResultsLogger, FittsStats, TrialResult
+from gui.window_actions import add_close_action
+from session_viewer.measure_help import MeasureLabel
 from session_viewer.playback_clock import PlaybackClock, PlaybackTransport
-from session_viewer.pretest_stats import format_pretest_summary_html, summarise_pretest
+from session_viewer.head_session_lookup import find_head_session_for_fitts
+from session_viewer.pretest_stats import (
+    format_pretest_summary_html, phase_description, pretest_records, pretest_time_range, summarise_pretest,
+)
 
 _DEFAULT_FITTS_DIR = project_root / "fitts_sessions"
 
@@ -67,6 +72,7 @@ class FittsScreenCanvas(QWidget):
         self.path = np.zeros((0, 2))
         self.cursor: tuple[float, float] | None = None
         self.clicked = False
+        self.phase_text = ""
 
     def set_session(self, trials: list[TrialResult], screen_size: tuple[float, float]) -> None:
         self.trials = trials
@@ -75,6 +81,7 @@ class FittsScreenCanvas(QWidget):
         self.path = np.zeros((0, 2))
         self.cursor = None
         self.clicked = False
+        self.phase_text = ""
         self.update()
 
     def set_state(self, trial_index: int, path: np.ndarray, cursor, clicked: bool) -> None:
@@ -124,6 +131,16 @@ class FittsScreenCanvas(QWidget):
         painter.drawRect(QRectF(ox, oy, sw * scale, sh * scale))
 
         if not self.trials or self.trial_index < 0:
+            painter.setPen(QColor("#333333"))
+            painter.drawText(
+                QRectF(ox, oy, sw * scale, sh * scale), Qt.AlignCenter, self.phase_text
+            )
+            if len(self.path) > 1:
+                painter.setPen(QPen(QColor("#ff7f0e"), 2))
+                painter.drawPath(self._polyline(self.path))
+            if self.cursor is not None:
+                painter.setBrush(QColor("#d62728"))
+                painter.drawEllipse(self._pt(self.cursor), 4, 4)
             painter.end()
             return
 
@@ -192,7 +209,8 @@ class FittsPlaybackWindow(QMainWindow):
         self.synced = False
         self._head_samples: list = []
         self.pretest_summary: dict = {}
-
+        self._head_task_range: tuple[float, float] | None = None
+        self._play_range: tuple[float, float] = (0.0, 0.0)
         self._own_clock = PlaybackClock(self)
         self.clock = self._own_clock
         self.clock.time_changed.connect(self._on_clock_time)
@@ -209,11 +227,13 @@ class FittsPlaybackWindow(QMainWindow):
         open_action = QAction("Open Fitts Session...", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self._on_open_fitts_session)
-        self.menuBar().addMenu("File").addAction(open_action)
+        file_menu = self.menuBar().addMenu("File")
+        file_menu.addAction(open_action)
         toolbar = QToolBar("Main")
         toolbar.setMovable(False)
         toolbar.addAction(open_action)
         self.addToolBar(toolbar)
+        self._close_action = add_close_action(self, file_menu)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -264,11 +284,15 @@ class FittsPlaybackWindow(QMainWindow):
         exclude_row.addWidget(QLabel("Exclude first N repetitions:"))
         self.exclude_spin = QSpinBox()
         self.exclude_spin.setRange(0, 100)
+        self.exclude_spin.setToolTip(
+            "Exclude the first N repetitions of each condition from summary statistics, "
+            "for example to omit practice trials. Playback retains all trials."
+        )
         self.exclude_spin.valueChanged.connect(self._refresh_summary)
         exclude_row.addWidget(self.exclude_spin)
         exclude_row.addStretch(1)
         stats_layout.addLayout(exclude_row)
-        self.stats_label = QLabel("No Fitts session loaded.")
+        self.stats_label = MeasureLabel("No Fitts session loaded.")
         self.stats_label.setStyleSheet("font-size: 11px; font-family: monospace;")
         self.stats_label.setWordWrap(True)
         stats_layout.addWidget(self.stats_label)
@@ -277,7 +301,7 @@ class FittsPlaybackWindow(QMainWindow):
 
         self.pretest_box = QGroupBox("Initial Pose & Range of Movement")
         pretest_layout = QVBoxLayout(self.pretest_box)
-        self.pretest_label = QLabel("No pre-test data recorded.")
+        self.pretest_label = MeasureLabel("No pre-test data recorded.")
         self.pretest_label.setStyleSheet("font-size: 11px; font-family: monospace;")
         self.pretest_label.setWordWrap(True)
         self.pretest_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -285,7 +309,7 @@ class FittsPlaybackWindow(QMainWindow):
         self.pretest_box.setVisible(False)
         right_layout.addWidget(self.pretest_box)
 
-        self.raw_data_widget = QLabel("No Fitts session loaded.<br>Use File → Open Fitts Session… to load one.")
+        self.raw_data_widget = MeasureLabel("No Fitts session loaded.<br>Use File → Open Fitts Session… to load one.")
         self.raw_data_widget.setStyleSheet(_PANEL_STYLE)
         self.raw_data_widget.setWordWrap(True)
         self.raw_data_widget.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -351,11 +375,15 @@ class FittsPlaybackWindow(QMainWindow):
         try:
             logger = FittsResultsLogger()
             logger.load(filepath)
+            self._head_samples = []
+            self.load_fitts_session(logger.trials, logger.metadata, Path(filepath).stem)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load Fitts session:\n\n{e}")
             return
-        self._head_samples = []
-        self.load_fitts_session(logger.trials, logger.metadata, Path(filepath).stem)
+        match = find_head_session_for_fitts(filepath, logger.metadata, logger.trials)
+        if match:
+            self.set_head_session_samples(match[2])
+            self.statusBar().showMessage(f"Head-pose statistics from {match[0].name}")
 
     def set_head_session_samples(self, samples) -> None:
         """Supply the head-movement samples recorded alongside this Fitts session.
@@ -368,8 +396,9 @@ class FittsPlaybackWindow(QMainWindow):
 
     def load_fitts_session(self, trials: list[TrialResult], metadata: dict | None = None, name: str = "Fitts") -> None:
         """Load (or replace) the Fitts session being replayed (standalone playback)."""
-        if not trials:
-            raise ValueError("The Fitts session has no trials")
+        head_range = pretest_time_range(metadata)
+        if not trials and head_range is None:
+            raise ValueError("The Fitts session has no trials or timed head-movement tasks")
         self.setWindowTitle(f"Fitts Playback - {name}")
         self.trials = sorted(trials, key=lambda t: (t.start_time, t.trial_index))
         self.metadata = metadata or {}
@@ -385,17 +414,26 @@ class FittsPlaybackWindow(QMainWindow):
         else:
             self._starts = np.array([t.start_time for t in self.trials], dtype=float)
             self._ends = np.array([t.end_time for t in self.trials], dtype=float)
-        self._time_origin = float(self._starts[0])
+            head_range = None  # head-task times are host times; they can't share this axis
+        self._head_task_range = head_range
+        spans = [head_range] if head_range is not None else []
+        if self.trials:
+            spans.append((float(self._starts[0]), float(self._ends.max())))
+        self._play_range = (min(s for s, _ in spans), max(e for _, e in spans))
+        self._time_origin = self._play_range[0]
         self._prepare_series()
         self._draw_trial_markers()
         self.canvas.set_session(self.trials, self._screen_size())
+        self.graphs_widget.setVisible(bool(self.trials))
+        self._trial_marker_legend.setVisible(bool(self.trials))
+        self.exclude_spin.setEnabled(bool(self.trials))
         self._graph_zoom = 1.0
         self._apply_graph_zoom()
         self._refresh_summary()
         self._refresh_pretest_summary()
         self.transport.set_enabled(True)
         self.attach_clock(self._own_clock, synced=False)
-        self.clock.set_range(float(self._starts[0]), float(self._ends.max()))
+        self.clock.set_range(*self._play_range)
 
     def attach_clock(self, clock: PlaybackClock, synced: bool = False) -> None:
         """Drive this window from `clock` (a shared clock when synchronised)."""
@@ -423,6 +461,8 @@ class FittsPlaybackWindow(QMainWindow):
             for p in t.trajectory or []:
                 xs.append(p[1])
                 ys.append(p[2])
+        if not xs:
+            return 1920.0, 1080.0
         return max(max(xs) + 20.0, 100.0), max(max(ys) + 20.0, 100.0)
 
     def _prepare_series(self) -> None:
@@ -457,7 +497,8 @@ class FittsPlaybackWindow(QMainWindow):
             lo, hi = (float(finite.min()), float(finite.max())) if len(finite) else (0.0, 1.0)
             pad = (hi - lo) * 0.03 if hi > lo else 1.0
             rng[0], rng[1] = lo - pad, hi + pad
-        self.speed_plot.setXRange(0.0, float(self._ends.max() - self._time_origin), padding=0)
+        end = self._play_range[1]
+        self.speed_plot.setXRange(0.0, max(end - self._time_origin, 0.001), padding=0)
 
     def _draw_trial_markers(self) -> None:
         """Vertical lines on both graphs marking each trial's start and its click."""
@@ -483,6 +524,10 @@ class FittsPlaybackWindow(QMainWindow):
 
     def _refresh_summary(self) -> None:
         if not self.trials:
+            self.stats_label.setText(
+                "<b>HeadMovement only</b><br>No mouse trials were recorded.<br>"
+                "Pointing measures do not apply to this session."
+            )
             return
         trials = self._filtered_trials()
         if not trials:
@@ -528,7 +573,9 @@ class FittsPlaybackWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_clock_time(self, t: float) -> None:
-        if not self.trials:
+        if not self.trials or (self._head_task_range is not None and t < self._starts[0]):
+            if self._head_task_range is not None:
+                self._show_head_task(t)
             return
         x = t - self._time_origin
         self.speed_line.setPos(x)
@@ -572,7 +619,8 @@ class FittsPlaybackWindow(QMainWindow):
         note_html = f"<span style='color:#b35900'><b>{note}</b></span><br>" if note else ""
         self.raw_data_widget.setText(
             note_html +
-            f"<b>Time:</b> {x:.3f}s<br><br>"
+            f"<b>Time:</b> {x:.3f}s<br>"
+            f"<b>Task:</b> {phase_description('fitts_test')}<br><br>"
             f"<b>Trial:</b> {idx + 1} / {len(self.trials)}<br>"
             f"<b>Block:</b> {trial.block_type}<br>"
             f"<b>Condition:</b> {trial.condition_label}<br>"
@@ -591,6 +639,51 @@ class FittsPlaybackWindow(QMainWindow):
             f"ME: {_fmt(m.get('me_px'), '.1f', ' px')}<br>"
             f"MO: {_fmt(m.get('mo_px'), '+.1f', ' px')}"
         )
+
+    def _show_head_task(self, t: float) -> None:
+        records = pretest_records(self.metadata)
+        current = next(
+            (record for record in reversed(records)
+             if record.get("start_host_time") is not None and record["start_host_time"] <= t),
+            records[0],
+        )
+        after_exercise = self._head_task_range is not None and t > self._head_task_range[1]
+        points = [] if after_exercise else [
+            point for point in current.get("cursor_trajectory", [])
+            if point["host_time"] <= t
+        ]
+        if after_exercise:
+            phase = None
+            description = "Head-movement exercise finished - waiting for the mouse task to start"
+        else:
+            phase = current.get("phase", "HeadMovement")
+            description = phase_description(phase)
+            if current.get("cancelled"):
+                description += " (cancelled)"
+        self.canvas.phase_text = description
+        self.canvas.set_state(
+            -1, np.array([[p["x_px"], p["y_px"]] for p in points]).reshape(-1, 2),
+            (points[-1]["x_px"], points[-1]["y_px"]) if points else None, False,
+        )
+        x = t - self._time_origin
+        self.speed_line.setPos(x)
+        self.dist_line.setPos(x)
+        footer = (
+            f"Mouse task starts in {self._starts[0] - t:.1f}s." if self.trials
+            else "No mouse task in this recording."
+        )
+        phase_html = f"<b>Phase:</b> {phase}<br>" if phase else ""
+        self.raw_data_widget.setText(
+            f"<b>Time:</b> {x:.3f}s<br>"
+            f"<b>Task:</b> {description}<br>"
+            + phase_html +
+            f"<b>Cursor points:</b> {len(points)}<br><br>"
+            + footer
+        )
+
+    def closeEvent(self, event) -> None:
+        self.clock.pause()
+        super().closeEvent(event)
 
 
 if __name__ == "__main__":

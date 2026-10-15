@@ -32,6 +32,37 @@ def pretest_records(metadata: dict | None) -> list[dict]:
     return [record for record in phases if isinstance(record, dict)]
 
 
+def pretest_time_range(metadata: dict | None) -> tuple[float, float] | None:
+    """Playable host-clock extent of completed or cancelled head-task phases."""
+    ranges = [
+        (float(record["start_host_time"]), float(record["end_host_time"]))
+        for record in pretest_records(metadata)
+        if record.get("start_host_time") is not None
+        and record.get("end_host_time") is not None
+    ]
+    ranges = [(start, end) for start, end in ranges if math.isfinite(start) and math.isfinite(end) and end >= start]
+    return (min(start for start, _ in ranges), max(end for _, end in ranges)) if ranges else None
+
+
+def phase_description(phase: str | None) -> str:
+    """Human-readable description of a recorded task phase label."""
+    if not phase:
+        return "Not in a test task"
+    if phase == "fitts_test":
+        return "Fitts mouse task - pointing at and clicking targets"
+    parts = phase.split(".")
+    if parts[0] == "initial_rest":
+        if parts[-1] == "move":
+            return "Initial head position - moving into a comfortable neutral position"
+        return "Initial head position - holding still in the neutral position"
+    if parts[0] == "range_of_movement" and len(parts) == 3:
+        direction = parts[1].upper()
+        if parts[2] == "move":
+            return f"Range of movement - moving head as far {direction} as is comfortable"
+        return f"Range of movement - holding head at furthest {direction} position"
+    return phase
+
+
 def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
 

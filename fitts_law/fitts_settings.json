@@ -11,9 +11,11 @@
   "typing_word_count": 3,
   "typing_reassign_widths": false,
   "record_head_movement": true,
-  "initial_rest_enabled": true,
-  "range_of_movement_enabled": true,
+  "task_selection": "HeadMovement and Mouse Task",
+  "start_mode": "Start with dwell click",
   "pretest_move_duration_s": 2.0,
-  "pretest_hold_duration_s": 4.0,
-  "recordings_base_dir": null
+  "pretest_hold_duration_s": 3.0,
+  "recordings_base_dir": null,
+  "initial_rest_enabled": true,
+  "range_of_movement_enabled": true
 }

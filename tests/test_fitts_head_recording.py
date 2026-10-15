@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.headmouse import TrackingState
-from fitts_law.fitts_test import MODE_ISO_STANDARD, FittsTestWindow
+from fitts_law.fitts_test import MODE_ISO_STANDARD, TASK_COMBINED, TASK_MOUSE_ONLY, FittsTestWindow
 from gui.control_panel import ControlPanel
 from main import App
 from providers.base_provider import ProviderState
@@ -30,31 +30,30 @@ def _set_checked_without_saving(checkbox, checked: bool) -> None:
 
 # -- setup page ------------------------------------------------------------
 
-def test_pretest_options_are_only_shown_when_head_movement_is_recorded(qt_app):
+def test_pretest_timings_are_only_shown_when_head_tasks_are_selected(qt_app):
     window = FittsTestWindow()
     try:
         window._setup_page.show()
-        window._record_head_checkbox.setChecked(False)
+        window._task_combo.setCurrentText(TASK_MOUSE_ONLY)
         for field in window._pretest_fields:
             assert field.isVisibleTo(window._setup_page) is False
             label = window._form.labelForField(field)
             if label is not None:
                 assert label.isVisibleTo(window._setup_page) is False
 
-        window._record_head_checkbox.setChecked(True)
+        window._task_combo.setCurrentText(TASK_COMBINED)
         for field in window._pretest_fields:
             assert field.isVisibleTo(window._setup_page) is True
     finally:
         window.close()
 
 
-def test_hidden_pretest_options_do_not_run(qt_app):
+def test_mouse_only_does_not_run_head_tasks(qt_app):
     window = FittsTestWindow()
     try:
         _configure_small_test(window)
         _set_checked_without_saving(window._record_head_checkbox, False)
-        _set_checked_without_saving(window._initial_rest_checkbox, True)
-        _set_checked_without_saving(window._range_of_movement_checkbox, True)
+        window._task_combo.setCurrentText(TASK_MOUSE_ONLY)
 
         window._on_start_clicked()
 
@@ -75,8 +74,7 @@ def test_start_test_records_head_movement_without_mouse_control(qt_app):
     try:
         _configure_small_test(window)
         _set_checked_without_saving(window._record_head_checkbox, True)
-        _set_checked_without_saving(window._initial_rest_checkbox, False)
-        _set_checked_without_saving(window._range_of_movement_checkbox, False)
+        window._task_combo.setCurrentText(TASK_MOUSE_ONLY)
         window._access_method_combo.setCurrentText("EyeGaze")
 
         calls = {}
@@ -160,8 +158,7 @@ def test_start_test_runs_standalone_when_no_head_app_is_hosting(qt_app):
     try:
         _configure_small_test(window)
         _set_checked_without_saving(window._record_head_checkbox, True)
-        _set_checked_without_saving(window._initial_rest_checkbox, True)
-        _set_checked_without_saving(window._range_of_movement_checkbox, False)
+        window._task_combo.setCurrentText(TASK_COMBINED)
 
         window._on_start_clicked()
 

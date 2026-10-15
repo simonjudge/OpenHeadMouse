@@ -9,7 +9,7 @@ from session_viewer.pretest_stats import (
     format_pretest_summary_html,
     summarise_pretest,
 )
-from tests.test_fitts_playback import _fitts_trials
+from tests.test_fitts_playback import _fitts_trials, _plain_text
 
 
 def _rest_records(move_t=100.0):
@@ -162,7 +162,7 @@ def test_fitts_playback_shows_pretest_summary(qt_app, tmp_path):
         assert "Yaw range" not in window.pretest_label.text()
 
         window.set_head_session_samples(_head_samples(tmp_path))
-        assert "Yaw range: 40.00°" in window.pretest_label.text()
+        assert "Yaw range: 40.00°" in _plain_text(window.pretest_label)
     finally:
         window.close()
 
@@ -185,11 +185,12 @@ def test_session_viewer_offers_three_open_options(qt_app):
 
     window = SessionVisualizerWindow()
     try:
-        items = [a.text() for a in window.menuBar().actions()[0].menu().actions()]
+        items = [a.text() for a in window.menuBar().actions()[0].menu().actions() if not a.isSeparator()]
         assert items == [
             "Open HeadMouse Session...",
             "Open Synchronised Playback...",
             "Open Fitts Test Only...",
+            "Close",
         ]
         toolbar = window.findChild(QToolBar)
         assert "Open Fitts Test Only..." in [a.text() for a in toolbar.actions()]

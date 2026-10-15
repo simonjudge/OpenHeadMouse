@@ -268,8 +268,6 @@ def test_fitts_asks_for_the_folder_when_recording_head_movement(qt_app, tmp_path
     try:
         _configure_small_test(window)
         _set_checked_without_saving(window._record_head_checkbox, True)
-        _set_checked_without_saving(window._initial_rest_checkbox, False)
-        _set_checked_without_saving(window._range_of_movement_checkbox, False)
         prompts = []
 
         def provider(prompt=True):
@@ -327,8 +325,6 @@ def test_standalone_fitts_asks_for_the_folder_and_remembers_it(qt_app, tmp_path,
     try:
         _configure_small_test(window)
         _set_checked_without_saving(window._record_head_checkbox, True)
-        _set_checked_without_saving(window._initial_rest_checkbox, False)
-        _set_checked_without_saving(window._range_of_movement_checkbox, False)
         # Building the window only reads the folder; it must not ask.
         assert prompts == []
 
@@ -372,8 +368,6 @@ def test_standalone_fitts_reuses_its_own_setting_when_config_is_unavailable(
     try:
         _configure_small_test(window)
         _set_checked_without_saving(window._record_head_checkbox, True)
-        _set_checked_without_saving(window._initial_rest_checkbox, False)
-        _set_checked_without_saving(window._range_of_movement_checkbox, False)
 
         window._on_start_clicked()
 
@@ -406,8 +400,6 @@ def test_standalone_fitts_still_runs_when_the_prompt_is_cancelled(qt_app, monkey
     try:
         _configure_small_test(window)
         _set_checked_without_saving(window._record_head_checkbox, True)
-        _set_checked_without_saving(window._initial_rest_checkbox, False)
-        _set_checked_without_saving(window._range_of_movement_checkbox, False)
         default_dir = window._logger.output_dir
 
         window._on_start_clicked()
@@ -456,8 +448,6 @@ def test_standalone_fitts_reads_the_shared_folder_without_asking(
 
         _configure_small_test(window)
         _set_checked_without_saving(window._record_head_checkbox, True)
-        _set_checked_without_saving(window._initial_rest_checkbox, False)
-        _set_checked_without_saving(window._range_of_movement_checkbox, False)
         window._on_start_clicked()
 
         assert window._logger.output_dir == tmp_path / "study" / "fitts_sessions"

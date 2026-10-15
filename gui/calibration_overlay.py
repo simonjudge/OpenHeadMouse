@@ -13,7 +13,7 @@ import time
 
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QPushButton, QWidget
 
 CALIBRATION_MESSAGE = (
     "Please put your head in a neutral position and do not move your head for {seconds:g} seconds"
@@ -43,6 +43,9 @@ class CalibrationOverlay(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setCursor(Qt.BlankCursor)
         self.setWindowTitle("HeadMouse Calibration")
+        self._close_button = QPushButton("Close", self)
+        self._close_button.setCursor(Qt.ArrowCursor)
+        self._close_button.clicked.connect(self.close)
 
         self.read_duration_s = float(read_duration_s)
         self.capture_duration_s = float(capture_duration_s)
@@ -107,6 +110,18 @@ class CalibrationOverlay(QWidget):
             self.cancelled.emit()
             return
         super().keyPressEvent(event)
+
+    def resizeEvent(self, event) -> None:
+        self._close_button.setGeometry(self.width() - 100, 12, 88, 32)
+        super().resizeEvent(event)
+
+    def closeEvent(self, event) -> None:
+        cancelled = self._phase != self.PHASE_DONE
+        self._timer.stop()
+        self._phase = self.PHASE_DONE
+        super().closeEvent(event)
+        if cancelled:
+            self.cancelled.emit()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)

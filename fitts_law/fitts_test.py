@@ -5,7 +5,7 @@ HeadMouse window's File menu (see main.py's _on_fitts_test_requested).
 Deliberately has zero coupling to core/headmouse.py - it only reacts to
 ordinary Qt mouse events on its own canvas, agnostic to whatever is actually
 driving the OS cursor (head tracking, a trackpad, a switch, etc).
-The "Start with HeadMouse" button and the "Record Head Movement" option keep
+The "Start with HeadMouse" mode and the "Record Head Movement" option keep
 that separation: the host application registers a callable
 (set_head_start_provider) that starts its own tracker, with or without letting
 it drive the cursor.
@@ -26,6 +26,7 @@ if str(project_root) not in sys.path:
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -50,6 +51,7 @@ from PySide6.QtWidgets import (
 
 from core.clock import host_time
 from core import recording_paths
+from gui.window_actions import add_close_action
 from fitts_law.conditions import (
     build_condition_set,
     generate_circle_positions,
@@ -69,6 +71,14 @@ MODE_TYPING = "Typing Test"
 
 KEY_SIZE_CONSISTENT = "Consistent key size"
 KEY_SIZE_RANDOM = "Random key size"
+
+TASK_COMBINED = "HeadMovement and Mouse Task"
+TASK_HEAD_ONLY = "HeadMovement only"
+TASK_MOUSE_ONLY = "Mouse Task only"
+
+START_NORMAL = "Start test"
+START_DWELL = "Start with dwell click"
+START_HEADMOUSE = "Start with HeadMouse"
 
 
 def _parse_number_list(text: str) -> list[float]:
@@ -291,7 +301,8 @@ class FittsTestWindow(QMainWindow):
         "calibration and recording settings of the HeadMouse window.\n"
         "Start Test records head movement without driving the cursor, so the "
         "test is done with the access method being measured; Start with "
-        "HeadMouse records it and drives the cursor with the head."
+        "HeadMouse records it and drives the cursor with the head.\n"
+        "Selecting HeadMovement tasks also requests head recording."
     )
 
     def __init__(self, parent=None):
@@ -322,6 +333,13 @@ class FittsTestWindow(QMainWindow):
         self._recordings_dir_provider = None
         self._waiting_for_headmouse = False
         self._head_tracking_started = False
+        self._dwell_provider = None
+        self._dwell_service = None
+        self._test_dwell_active = False
+        self._mouse_task_provider = None
+        self._host_run_active = False
+        self._saved_head_path: Path | None = None
+        self._finishing_run = False
         self._pretest_overlay: PreTestTaskOverlay | None = None
         self._pending_test: tuple[str, list[dict], Stimulus | None] | None = None
         self._playback_windows: list = []  # keep references so Qt/PySide doesn't GC them
@@ -372,6 +390,61 @@ class FittsTestWindow(QMainWindow):
     def set_head_phase_provider(self, provider) -> None:
         """Register ``provider(phase, completed=True)`` for head-data labels."""
         self._head_phase_provider = provider
+
+    def set_dwell_provider(self, provider) -> None:
+        """Register ``provider(active: bool)`` for temporary test dwell clicking."""
+        self._dwell_provider = provider
+
+    def set_mouse_task_provider(self, provider) -> None:
+        """Register ``provider(active: bool | None)`` to gate host dwell clicking."""
+        self._mouse_task_provider = provider
+
+    def _set_mouse_task_active(self, active: bool | None) -> None:
+        if self._mouse_task_provider is not None:
+            self._mouse_task_provider(active)
+
+    def _stop_run_input(self) -> None:
+        if not self._host_run_active:
+            return
+        self._set_mouse_task_active(False)
+        self._stop_test_dwell()
+        self._host_run_active = False
+        self._head_tracking_started = False
+        try:
+            if self._head_session_provider is not None:
+                path = self._head_session_provider()
+                if path is not None:
+                    self._saved_head_path = Path(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Could not stop recording", str(exc))
+        finally:
+            self._set_mouse_task_active(None)
+
+    def _stop_test_dwell(self) -> None:
+        if not self._test_dwell_active:
+            return
+        if self._dwell_provider is not None:
+            self._dwell_provider(False)
+        elif self._dwell_service is not None:
+            self._dwell_service.stop()
+        self._test_dwell_active = False
+
+    def _start_test_dwell(self) -> None:
+        if self._start_mode_combo.currentText() != START_DWELL:
+            return
+        try:
+            if self._dwell_provider is not None:
+                self._dwell_provider(True)
+            else:
+                from dwell_click.service import DwellClickService
+
+                if self._dwell_service is None:
+                    self._dwell_service = DwellClickService(parent=self)
+                self._dwell_service.start()
+            self._test_dwell_active = True
+        except (OSError, RuntimeError, ImportError) as exc:
+            self._on_back_to_setup_clicked()
+            QMessageBox.critical(self, "Could not start dwell clicking", str(exc))
 
     def set_recordings_dir_provider(self, provider) -> None:
         """Register ``provider(prompt: bool) -> Path | None`` for the base folder.
@@ -433,14 +506,18 @@ class FittsTestWindow(QMainWindow):
         recording_paths.save_base_dir(base_dir)
 
     def _update_headmouse_button_state(self) -> None:
-        button = getattr(self, "_start_headmouse_button", None)
-        if button is None:
+        if not hasattr(self, "_start_mode_combo"):
             return
         available = self._head_start_provider is not None
-        button.setEnabled(available and not self._waiting_for_headmouse)
+        item = self._start_mode_combo.model().item(2)
+        item.setEnabled(available)
+        self._start_mode_combo.setEnabled(not self._waiting_for_headmouse)
         start_button = getattr(self, "_start_button", None)
         if start_button is not None:
-            start_button.setEnabled(not self._waiting_for_headmouse)
+            start_button.setEnabled(
+                not self._waiting_for_headmouse
+                and (available or self._start_mode_combo.currentText() != START_HEADMOUSE)
+            )
         record_head = getattr(self, "_record_head_checkbox", None)
         if record_head is not None:
             record_head.setToolTip(
@@ -449,11 +526,6 @@ class FittsTestWindow(QMainWindow):
                 else self._RECORD_HEAD_TOOLTIP + "\n\nUnavailable here: open this window "
                 "from the HeadMouse app (File > Fitts' Law Test) to record head movement. "
                 "The pre-test tasks still record the cursor into the Fitts session file."
-            )
-        if not available:
-            button.setToolTip(
-                "Only available when this window is opened from the HeadMouse app "
-                "(File > Fitts' Law Test)"
             )
 
     def _create_menu(self) -> None:
@@ -474,6 +546,7 @@ class FittsTestWindow(QMainWindow):
         file_menu.addAction(save_action)
         file_menu.addSeparator()
         file_menu.addAction(self._sync_action)
+        self._close_action = add_close_action(self, file_menu)
 
     # -- Setup page ----------------------------------------------------
 
@@ -491,8 +564,8 @@ class FittsTestWindow(QMainWindow):
         self._settings.set("typing_word_count", self._typing_word_count_spin.value())
         self._settings.set("typing_reassign_widths", self._typing_reassign_widths_checkbox.isChecked())
         self._settings.set("record_head_movement", self._record_head_checkbox.isChecked())
-        self._settings.set("initial_rest_enabled", self._initial_rest_checkbox.isChecked())
-        self._settings.set("range_of_movement_enabled", self._range_of_movement_checkbox.isChecked())
+        self._settings.set("task_selection", self._task_combo.currentText())
+        self._settings.set("start_mode", self._start_mode_combo.currentText())
         self._settings.set("pretest_move_duration_s", self._pretest_move_duration_spin.value())
         self._settings.set("pretest_hold_duration_s", self._pretest_hold_duration_spin.value())
         self._settings.save()
@@ -502,6 +575,14 @@ class FittsTestWindow(QMainWindow):
         layout = QVBoxLayout(page)
 
         form = QFormLayout()
+        self._task_combo = QComboBox()
+        self._task_combo.addItems([TASK_COMBINED, TASK_HEAD_ONLY, TASK_MOUSE_ONLY])
+        self._task_combo.setCurrentText(self._settings.get("task_selection", TASK_MOUSE_ONLY))
+        self._task_combo.setToolTip(
+            "HeadMovement includes both the initial rest position and range-of-movement "
+            "tasks, and records the head tracker when launched from HeadMouse."
+        )
+        form.addRow("Tasks", self._task_combo)
         self._mode_combo = QComboBox()
         self._mode_combo.addItems([MODE_ISO_STANDARD, MODE_ISO_EDGE, MODE_TYPING])
         self._mode_combo.setCurrentText(self._settings.get("mode", MODE_ISO_STANDARD))
@@ -578,33 +659,6 @@ class FittsTestWindow(QMainWindow):
         )
         form.addRow("Head movement", self._record_head_checkbox)
 
-        self._initial_rest_checkbox = QCheckBox(
-            "Initial Rest Position (Calibration)"
-        )
-        self._initial_rest_checkbox.setChecked(
-            self._settings.get("initial_rest_enabled", False)
-        )
-        self._initial_rest_checkbox.setToolTip(
-            "Record a neutral rest pose before the Fitts trials. When HeadMouse "
-            "is running, the held pose also becomes its neutral calibration."
-        )
-        self._initial_rest_checkbox.stateChanged.connect(
-            lambda _: self._save_settings()
-        )
-        form.addRow("Pre-test tasks", self._initial_rest_checkbox)
-
-        self._range_of_movement_checkbox = QCheckBox("Range Of Movement Task")
-        self._range_of_movement_checkbox.setChecked(
-            self._settings.get("range_of_movement_enabled", False)
-        )
-        self._range_of_movement_checkbox.setToolTip(
-            "Record maximum comfortable left, right, up and down head movement."
-        )
-        self._range_of_movement_checkbox.stateChanged.connect(
-            lambda _: self._save_settings()
-        )
-        form.addRow("", self._range_of_movement_checkbox)
-
         self._pretest_move_duration_spin = QDoubleSpinBox()
         self._pretest_move_duration_spin.setRange(0.1, 60.0)
         self._pretest_move_duration_spin.setDecimals(1)
@@ -656,10 +710,7 @@ class FittsTestWindow(QMainWindow):
         self._iso_and_typing_fields = [self._widths_edit]
         self._typing_only_fields = [self._typing_key_size_combo, self._typing_word_count_spin, self._typing_reassign_widths_checkbox]
         self._non_typing_fields = [self._stimulus_combo]
-        # Pre-test tasks only make sense while head movement is being recorded.
         self._pretest_fields = [
-            self._initial_rest_checkbox,
-            self._range_of_movement_checkbox,
             self._pretest_move_duration_spin,
             self._pretest_hold_duration_spin,
         ]
@@ -671,28 +722,30 @@ class FittsTestWindow(QMainWindow):
 
         start_button = QPushButton("Start Test")
         start_button.setToolTip(
-            "Start the test with whatever input device is already driving the cursor. "
-            "With Record Head Movement ticked, head movement is also recorded, but it "
-            "does not drive the cursor."
+            "Start the selected tasks using the start mode chosen on the right."
         )
         start_button.clicked.connect(self._on_start_clicked)
         self._start_button = start_button
 
-        self._start_headmouse_button = QPushButton("Start with HeadMouse")
-        self._start_headmouse_button.setToolTip(
-            "Start the head tracker selected in the HeadMouse window (running its initial "
-            "calibration and recording head movement), then begin the test with the head "
-            "mouse driving the cursor"
+        self._start_mode_combo = QComboBox()
+        self._start_mode_combo.addItems([START_NORMAL, START_DWELL, START_HEADMOUSE])
+        self._start_mode_combo.setCurrentText(self._settings.get("start_mode", START_NORMAL))
+        self._start_mode_combo.setToolTip(
+            "Use the current cursor input, add dwell clicking, or start HeadMouse "
+            "using the main GUI settings (including its dwell-click setting)."
         )
-        self._start_headmouse_button.clicked.connect(self._on_start_with_headmouse_clicked)
+        self._start_mode_combo.currentTextChanged.connect(lambda _: self._save_settings())
+        self._start_mode_combo.currentTextChanged.connect(lambda _: self._update_headmouse_button_state())
         self._update_headmouse_button_state()
 
         start_row = QHBoxLayout()
         start_row.addWidget(start_button)
-        start_row.addWidget(self._start_headmouse_button)
+        start_row.addWidget(self._start_mode_combo)
         layout.addLayout(start_row)
         layout.addStretch()
 
+        self._task_combo.currentTextChanged.connect(lambda _: self._save_settings())
+        self._task_combo.currentTextChanged.connect(lambda _: self._update_pretest_visibility())
         self._update_mode_visibility(self._mode_combo.currentText())
         self._update_pretest_visibility()
         self._update_access_method_visibility(self._access_method_combo.currentText())
@@ -707,19 +760,22 @@ class FittsTestWindow(QMainWindow):
                 label.setVisible(visible)
 
     def _update_mode_visibility(self, mode: str) -> None:
-        is_iso = mode in (MODE_ISO_STANDARD, MODE_ISO_EDGE)
-        is_typing = mode == MODE_TYPING
+        mouse_task = self._task_combo.currentText() != TASK_HEAD_ONLY
+        is_iso = mouse_task and mode in (MODE_ISO_STANDARD, MODE_ISO_EDGE)
+        is_typing = mouse_task and mode == MODE_TYPING
 
         self._set_fields_visible(self._iso_only_fields, is_iso)
         self._set_fields_visible(self._iso_and_typing_fields, is_iso or is_typing)
         self._set_fields_visible(self._typing_only_fields, is_typing)
         self._set_fields_visible(self._non_typing_fields, is_iso)
+        self._update_stimulus_visibility(self._stimulus_combo.currentText())
 
     def _update_pretest_visibility(self) -> None:
-        """The pre-test tasks are offered only when head movement is recorded."""
         self._set_fields_visible(
-            self._pretest_fields, self._record_head_checkbox.isChecked()
+            self._pretest_fields, self._task_combo.currentText() != TASK_MOUSE_ONLY
         )
+        self._set_fields_visible([self._mode_combo], self._task_combo.currentText() != TASK_HEAD_ONLY)
+        self._update_mode_visibility(self._mode_combo.currentText())
 
     def _update_access_method_visibility(self, access_method: str) -> None:
         is_other = access_method == "Other"
@@ -729,7 +785,11 @@ class FittsTestWindow(QMainWindow):
             label.setVisible(is_other)
 
     def _update_stimulus_visibility(self, stimulus: str) -> None:
-        is_icon = stimulus == "Icon"
+        is_icon = (
+            stimulus == "Icon"
+            and self._task_combo.currentText() != TASK_HEAD_ONLY
+            and self._mode_combo.currentText() != MODE_TYPING
+        )
         self._icon_combo.setVisible(is_icon)
         label = self._form.labelForField(self._icon_combo)
         if label is not None:
@@ -759,15 +819,17 @@ class FittsTestWindow(QMainWindow):
                 "Open this window from the HeadMouse app (File > Fitts' Law Test) to start "
                 "the head tracker from here.",
             )
+            self._stop_run_input()
             return
 
         self._access_method_combo.setCurrentText("HeadMouse")
         # Driving the cursor with the head always records it too.
         self._record_head_checkbox.setChecked(True)
-        self._start_headmouse_button.setText("Starting HeadMouse...")
+        self._start_button.setText("Starting HeadMouse...")
         self._head_tracking_started = True
         if not self._request_head_tracking(mouse_control=True):
             self._head_tracking_started = False
+            self._stop_run_input()
 
     def _request_head_tracking(self, *, mouse_control: bool) -> bool:
         """Ask the host app to bring head tracking up; True while we wait for it.
@@ -796,15 +858,17 @@ class FittsTestWindow(QMainWindow):
 
     def _reset_headmouse_button(self) -> None:
         self._waiting_for_headmouse = False
-        self._start_headmouse_button.setText("Start with HeadMouse")
         self._start_button.setText("Start Test")
         self._update_headmouse_button_state()
 
     def _on_headmouse_ready(self, started: bool) -> None:
         """Called back once head tracking (and any calibration) is live."""
+        if not self._waiting_for_headmouse:
+            return
         self._reset_headmouse_button()
         if not started:
             self._head_tracking_started = False
+            self._stop_run_input()
             QMessageBox.warning(
                 self,
                 "HeadMouse not started",
@@ -817,8 +881,22 @@ class FittsTestWindow(QMainWindow):
         self._on_start_clicked()
 
     def _on_start_clicked(self) -> None:
+        if self._waiting_for_headmouse:
+            return
+        if not self._host_run_active:
+            self._host_run_active = True
+            self._saved_head_path = None
+            self._set_mouse_task_active(False)
         if (
-            self._record_head_checkbox.isChecked()
+            self._start_mode_combo.currentText() == START_HEADMOUSE
+            and not self._head_tracking_started
+        ):
+            self._on_start_with_headmouse_clicked()
+            return
+        includes_head = self._task_combo.currentText() != TASK_MOUSE_ONLY
+        mouse_task = self._task_combo.currentText() != TASK_HEAD_ONLY
+        if (
+            (self._record_head_checkbox.isChecked() or includes_head)
             and self._head_start_provider is not None
             and not self._head_tracking_started
         ):
@@ -827,19 +905,21 @@ class FittsTestWindow(QMainWindow):
             self._head_tracking_started = True
             if not self._request_head_tracking(mouse_control=False):
                 self._head_tracking_started = False
+                self._stop_run_input()
             return
 
         mode = self._mode_combo.currentText()
         self._screen_w, self._screen_h = self._current_screen_geometry()
         stimulus = None
-        if mode != MODE_TYPING:
+        if mouse_task and mode != MODE_TYPING:
             stimulus = self._resolve_stimulus()
             if stimulus is None:
+                self._stop_run_input()
                 return  # user cancelled the image picker
 
         self._logger = FittsResultsLogger()
         access_method = self._access_method_combo.currentText()
-        record_head = self._record_head_checkbox.isChecked()
+        record_head = self._record_head_checkbox.isChecked() or includes_head
         # Recording head movement needs somewhere to save it, so this is the
         # point at which the folder is asked for if it hasn't been chosen.
         self._apply_results_dir(prompt=record_head)
@@ -848,6 +928,8 @@ class FittsTestWindow(QMainWindow):
         self._use_head_phase_provider = record_head
         self._logger.metadata["access_method"] = access_method
         self._logger.metadata["record_head_movement"] = record_head
+        self._logger.metadata["task_selection"] = self._task_combo.currentText()
+        self._logger.metadata["start_mode"] = self._start_mode_combo.currentText()
         if access_method == "Other":
             self._logger.metadata["access_method_other"] = self._access_method_other_edit.text() or None
         self._logger.metadata["notes"] = self._session_notes_edit.toPlainText() or None
@@ -858,20 +940,19 @@ class FittsTestWindow(QMainWindow):
         self._exclude_repetitions_spin.blockSignals(False)
 
         try:
-            if mode == MODE_TYPING:
+            if not mouse_task:
+                trial_specs = []
+            elif mode == MODE_TYPING:
                 trial_specs = self._build_typing_specs()
             else:
                 trial_specs = self._build_iso_specs(include_edge=(mode == MODE_ISO_EDGE))
         except ValueError as exc:
+            self._stop_run_input()
             QMessageBox.warning(self, "Invalid setup", str(exc))
             return
 
-        # Hidden pre-test options must not take effect: they are only offered
-        # (and only meaningful) while head movement is being recorded.
-        include_initial_rest = record_head and self._initial_rest_checkbox.isChecked()
-        include_range_of_movement = (
-            record_head and self._range_of_movement_checkbox.isChecked()
-        )
+        include_initial_rest = includes_head
+        include_range_of_movement = includes_head
         stages = build_pretest_stages(
             include_initial_rest,
             include_range_of_movement,
@@ -935,10 +1016,16 @@ class FittsTestWindow(QMainWindow):
                 self._pretest_overlay.records
             )
         self._remove_pretest_overlay()
-        self._start_trial_canvas()
+        if self._pending_test is not None and not self._pending_test[1]:
+            self._pending_test = None
+            self._on_all_trials_completed()
+        else:
+            self._start_trial_canvas()
 
-    def _on_pretest_cancelled(self) -> None:
+    def _on_pretest_cancelled(self, *, restore_setup: bool = True) -> None:
+        self._stop_test_dwell()
         if self._pretest_overlay is not None:
+            self._pretest_overlay.stop(cancelled=True)
             self._logger.metadata["pretest_phases"] = list(
                 self._pretest_overlay.records
             )
@@ -952,8 +1039,10 @@ class FittsTestWindow(QMainWindow):
                 QMessageBox.warning(self, "Head recording error", str(exc))
         self._remove_pretest_overlay()
         self._pending_test = None
-        self.showNormal()
-        self._stack.setCurrentWidget(self._setup_page)
+        self._stop_run_input()
+        if restore_setup:
+            self.showNormal()
+            self._stack.setCurrentWidget(self._setup_page)
 
     def _remove_pretest_overlay(self) -> None:
         overlay = self._pretest_overlay
@@ -988,6 +1077,8 @@ class FittsTestWindow(QMainWindow):
         ):
             self._head_phase_provider("fitts_test", True)
         self.showFullScreen()
+        self._set_mouse_task_active(True)
+        self._start_test_dwell()
 
     def _build_iso_specs(self, include_edge: bool) -> list[dict]:
         num_targets = int(self._num_targets_combo.currentText())
@@ -1129,13 +1220,28 @@ class FittsTestWindow(QMainWindow):
         self._logger.add_trial(result)
 
     def _on_all_trials_completed(self) -> None:
+        self._set_mouse_task_active(False)
+        self._stop_test_dwell()
         self._end_fitts_task(True)
-        if self._logger.trials:
-            self._saved_path = self._logger.save()
-            print(f"[Fitts] Raw trial data auto-saved to {self._saved_path}")
         self._populate_results_page()
-        self.showNormal()
         self._stack.setCurrentWidget(self._results_page)
+        app = QApplication.instance()
+        quit_on_close = app.quitOnLastWindowClosed()
+        app.setQuitOnLastWindowClosed(False)
+        self._finishing_run = True
+        try:
+            # Standalone runs must stay alive while save-recovery dialogs are open.
+            self.close()
+            self._saved_path = self._save_results_with_retry()
+            if self._saved_path is None:
+                self.showNormal()
+            else:
+                print(f"[Fitts] Raw trial data auto-saved to {self._saved_path}")
+        finally:
+            self._finishing_run = False
+            app.setQuitOnLastWindowClosed(quit_on_close)
+        if quit_on_close and not any(w.isVisible() for w in app.topLevelWidgets()):
+            app.quit()
 
     # -- Results page ------------------------------------------------------
 
@@ -1182,11 +1288,15 @@ class FittsTestWindow(QMainWindow):
         return page
 
     def _on_back_to_setup_clicked(self) -> None:
+        if self._host_run_active:
+            self._set_mouse_task_active(False)
+        self._stop_test_dwell()
         self._end_fitts_task(False)
+        self._stop_run_input()
         self._remove_pretest_overlay()
         self._pending_test = None
         # The next run re-applies the recording/mouse-control settings for
-        # whichever start button is used.
+        # whichever start mode is used.
         self._head_tracking_started = False
         self.showNormal()
         self._stack.setCurrentWidget(self._setup_page)
@@ -1253,8 +1363,37 @@ class FittsTestWindow(QMainWindow):
         filepath, _ = QFileDialog.getSaveFileName(self, "Save Fitts' Law results", default_name, "JSON (*.json)")
         if not filepath:
             return
-        self._saved_path = self._logger.save(filepath)
-        QMessageBox.information(self, "Saved", f"Results saved to {self._saved_path}")
+        self._saved_path = self._save_results_with_retry(filepath)
+        if self._saved_path is not None:
+            QMessageBox.information(self, "Saved", f"Results saved to {self._saved_path}")
+
+    def _save_results_with_retry(self, filepath: str | Path | None = None) -> Path | None:
+        if self._saved_head_path is not None:
+            self._logger.metadata["head_session_file"] = str(self._saved_head_path)
+        while True:
+            try:
+                return self._logger.save(filepath)
+            except OSError as exc:
+                QMessageBox.warning(
+                    self, "Could not save results",
+                    f"Results could not be saved:\n\n{exc}\n\nSelect another folder to retry.",
+                )
+                folder = QFileDialog.getExistingDirectory(
+                    self, "Choose a folder for Fitts results", str(Path.home())
+                )
+                if not folder:
+                    QMessageBox.warning(
+                        self, "Results not saved",
+                        "The results are still in this window. Use File > Save Results As "
+                        "to save them before closing it.",
+                    )
+                    return None
+                filename = (
+                    Path(filepath).name if filepath is not None
+                    else f"fitts_session_{int(time.time())}.json"
+                )
+                self._logger.output_dir = Path(folder)
+                filepath = Path(folder) / filename
 
     def _on_open_results(self) -> None:
         filepath, _ = QFileDialog.getOpenFileName(
@@ -1274,15 +1413,19 @@ class FittsTestWindow(QMainWindow):
 
     def _fitts_session_path(self) -> Path | None:
         """Path of the current trials on disk, saving them first if needed."""
-        if not self._logger.trials:
-            QMessageBox.warning(self, "No trials", "Run or open a Fitts session first.")
+        if not self._logger.trials and not self._logger.metadata.get("pretest_phases"):
+            QMessageBox.warning(self, "No session", "Run or open a Fitts session first.")
             return None
         if self._saved_path is None or not Path(self._saved_path).exists():
-            self._saved_path = self._logger.save()
+            self._saved_path = self._save_results_with_retry()
+        if self._saved_path is None:
+            return None
         return Path(self._saved_path)
 
     def _head_session_path(self) -> Path | None:
         """Stop the host app's recording and use it, or ask for a session file."""
+        if self._saved_head_path is not None:
+            return self._saved_head_path
         if self._head_session_provider is not None:
             try:
                 path = self._head_session_provider()
@@ -1321,6 +1464,30 @@ class FittsTestWindow(QMainWindow):
             self._on_back_to_setup_clicked()
             return
         super().keyPressEvent(event)
+
+    def closeEvent(self, event) -> None:
+        was_active = self._host_run_active
+        self.hide()
+        if self._host_run_active:
+            self._set_mouse_task_active(False)
+        self._stop_test_dwell()
+        self._end_fitts_task(False)
+        if self._pretest_overlay is not None:
+            self._on_pretest_cancelled(restore_setup=False)
+        self._pending_test = None
+        self._head_tracking_started = False
+        self._reset_headmouse_button()
+        super().closeEvent(event)
+        self._stop_run_input()
+        if was_active and not self._finishing_run and (
+            self._logger.trials or self._logger.metadata.get("pretest_phases")
+        ):
+            self._saved_path = self._save_results_with_retry()
+            if self._saved_path is None:
+                event.ignore()
+                self._populate_results_page()
+                self._stack.setCurrentWidget(self._results_page)
+                self.showNormal()
 
 
 def launch_fitts_test() -> FittsTestWindow:

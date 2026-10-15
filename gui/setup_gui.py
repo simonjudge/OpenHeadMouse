@@ -42,6 +42,9 @@ class SetupPanel(QWidget):
         self._start_button = QPushButton("Start")
         self._stop_button = QPushButton("Stop")
         self._stop_button.setEnabled(False)
+        self._close_button = QPushButton("Close")
+        self._close_button.setToolTip("Close the HeadMouse setup window")
+        self._close_button.clicked.connect(lambda: self.window().close())
 
         self._start_button.clicked.connect(self._on_start_clicked)
         self._stop_button.clicked.connect(self._on_stop_clicked)
@@ -65,6 +68,7 @@ class SetupPanel(QWidget):
         selection_row.addWidget(self._provider_combo)
         selection_row.addWidget(self._start_button)
         selection_row.addWidget(self._stop_button)
+        selection_row.addWidget(self._close_button)
 
         box = QGroupBox("Input Provider")
         box_layout = QVBoxLayout(box)

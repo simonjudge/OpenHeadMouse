@@ -31,9 +31,12 @@ import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 
 from core.recorder import Recorder
+from gui.window_actions import add_close_action
 from core.session_stats import SessionStats
 from fitts_law.results import FittsResultsLogger
 from session_viewer.playback_clock import PlaybackClock, PlaybackTransport, check_sync
+from session_viewer.pretest_stats import phase_description
+from session_viewer.head_session_lookup import find_head_session_for_fitts
 from core import quaternion_math as qm
 from session_viewer.mesh_visualizer import (
     calculate_neutral_quaternion, download_mediapipe_model,
@@ -157,6 +160,7 @@ class SessionVisualizerWindow(QMainWindow):
                 'yaw_rel_deg': float(yaw_deg_label),
                 'pitch_rel_deg': float(pitch_deg_label),
                 'roll_rel_deg': float(roll_deg_label),
+                'task_phase': (getattr(sample, 'metadata', None) or {}).get('task_phase'),
             })
 
         return frame_data
@@ -272,6 +276,7 @@ class SessionVisualizerWindow(QMainWindow):
         toolbar.addAction(open_sync_action)
         toolbar.addAction(open_fitts_action)
         self.addToolBar(toolbar)
+        self._close_action = add_close_action(self, file_menu)
 
     def _create_controls_box(self) -> QWidget:
         """Bottom-right box: graph Y-axis zoom buttons + playback speed control."""
@@ -423,7 +428,21 @@ class SessionVisualizerWindow(QMainWindow):
         """Show the at-rest pose from the initial calibration, if recorded."""
         calibration = getattr(self.recorder, "calibration", None) if self.recorder is not None else None
         if not calibration or not calibration.get("sample_count"):
-            self.calibration_label.setText("No calibration data in this session.")
+            angles = np.degrees(qm.to_euler_zyx(self.neutral_q))
+            rest = any(
+                (getattr(sample, "metadata", None) or {}).get("task_phase") == "initial_rest.hold"
+                for sample in self.recorded_samples
+            )
+            source = "Initial rest position" if rest else "First samples (up to 30 within 1 second)"
+            if any(
+                event.get("event_type") == "recenter"
+                for event in getattr(self.recorder, "_events", [])
+            ):
+                source = "Recorded recenter pose"
+            self.calibration_label.setText(
+                f"Reference: {source}<br>"
+                f"Yaw: {angles[0]:+.2f}°, Pitch: {angles[1]:+.2f}°, Roll: {angles[2]:+.2f}°"
+            )
             return
         rows = []
         for axis in ("yaw", "pitch", "roll"):
@@ -514,7 +533,15 @@ class SessionVisualizerWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load Fitts session:\n\n{e}")
             return
-        self._open_fitts_window(logger, filepath.stem)
+        # Head-pose statistics for the exercise need the head recording made alongside.
+        match = find_head_session_for_fitts(filepath, logger.metadata, logger.trials)
+        try:
+            window = self._open_fitts_window(logger, filepath.stem, match[2] if match else None)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load Fitts session:\n\n{e}")
+            return
+        if match:
+            window.statusBar().showMessage(f"Head-pose statistics from {match[0].name}")
 
     def _open_fitts_window(self, logger: FittsResultsLogger, name: str, head_samples: list | None = None):
         from session_viewer.fitts_playback import FittsPlaybackWindow
@@ -555,9 +582,9 @@ class SessionVisualizerWindow(QMainWindow):
         Returns the Fitts playback window (linked, or standalone if the user
         chose to open it on its own after a refused sync), or None.
         """
-        result = check_sync(samples, logger.trials)
+        result = check_sync(samples, logger.trials, logger.metadata)
         if result.ok:
-            # Only the Fitts test period is shown when synchronised.
+            # The head-movement exercise and the Fitts trials are both shown.
             t0, t1 = result.fitts_range
             trimmed = [s for s in samples if t0 <= s.host_time <= t1]
             if len(trimmed) < 2:
@@ -575,7 +602,10 @@ class SessionVisualizerWindow(QMainWindow):
             )
             return self._open_fitts_window(logger, fitts_name, samples) if answer == QMessageBox.Yes else None
 
-        self.load_session(trimmed, f"Session - {head_name}", recorder=recorder, time_origin_host=t0)
+        self.load_session(
+            trimmed, f"Session - {head_name}", recorder=recorder,
+            time_origin_host=t0, reference_samples=samples,
+        )
         fitts_window = self._open_fitts_window(logger, fitts_name, samples)
         shared = PlaybackClock(self)
         self._attach_clock(shared, self._host_frame_times)
@@ -603,7 +633,7 @@ class SessionVisualizerWindow(QMainWindow):
             self._attach_clock(self._own_clock, self._frame_times)
 
     def load_session(self, recorded_samples: list, session_name: str = "Head Movement", recorder=None,
-                     time_origin_host: float | None = None):
+                     time_origin_host: float | None = None, reference_samples=None):
         """Load (or replace) the session being visualized (standalone playback)."""
         self._unlink()
         self.setWindowTitle(f"Session Visualizer - {session_name}")
@@ -612,7 +642,9 @@ class SessionVisualizerWindow(QMainWindow):
         self.current_frame_index = 0
         self._graph_zoom = 1.0
 
-        self.neutral_q = calculate_neutral_quaternion(recorded_samples, recorder=recorder)
+        self.neutral_q = calculate_neutral_quaternion(
+            recorded_samples, recorder=recorder, reference_samples=reference_samples
+        )
         time_rel, self._host_frame_times = self._sample_times(time_origin_host)
         self.frame_data = self._prepare_frame_data(time_rel)
         self.timestamps = [f['time_rel'] for f in self.frame_data]
@@ -703,9 +735,15 @@ class SessionVisualizerWindow(QMainWindow):
         # Update raw/live data display
         q = frame['quaternion']
         note_html = f"<span style='color:#b35900'><b>{note}</b></span><br>" if note else ""
+        phase = frame.get('task_phase')
+        task_html = (
+            f"<b>Task:</b> {phase_description(phase)}<br>"
+            if phase or self._linked_fitts_window is not None else ""
+        )
         raw_html = (
             note_html +
-            f"<b>Time:</b> {frame['time_rel']:.3f}s<br><br>"
+            f"<b>Time:</b> {frame['time_rel']:.3f}s<br>"
+            + task_html + "<br>"
             f"<b>Quaternion:</b><br>"
             f"[{q[0]:.4f}, {q[1]:.4f}, {q[2]:.4f}, {q[3]:.4f}]<br><br>"
             f"<b>Absolute:</b><br>"
@@ -721,6 +759,10 @@ class SessionVisualizerWindow(QMainWindow):
             f"Acceleration: {self.accelerations[frame_index]:.1f}°/s²"
         )
         self.raw_data_widget.setText(raw_html)
+
+    def closeEvent(self, event) -> None:
+        self.clock.pause()
+        super().closeEvent(event)
 
 
 def tile_side_by_side(left_window, right_window, screen=None) -> None:

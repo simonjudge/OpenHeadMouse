@@ -57,6 +57,7 @@ class HeadMouseWindow(QMainWindow):
         parent=None,
     ):
         super().__init__(parent)
+        self._close_handler = None
         self.setWindowTitle("HeadMouse")
         self.tracking_state_changed.connect(self.set_status)
 
@@ -223,6 +224,8 @@ class HeadMouseWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _create_menu(self) -> None:
+        from gui.window_actions import add_close_action
+
         open_visualizer_action = QAction("Open Session Viewer...", self)
         open_visualizer_action.triggered.connect(self.load_session_requested)
 
@@ -241,11 +244,22 @@ class HeadMouseWindow(QMainWindow):
         file_menu.addAction(open_fitts_action)
         file_menu.addSeparator()
         file_menu.addAction(recordings_folder_action)
+        self._close_action = add_close_action(self, file_menu)
 
     def set_status(self, state_name: str) -> None:
         color = _STATE_COLORS.get(state_name, "#000000")
         self._status_label.setText(state_name.upper())
         self._status_label.setStyleSheet(f"font-weight: bold; color: {color};")
+
+    def set_close_handler(self, handler) -> None:
+        """Register a cleanup callback; returning False keeps the window open."""
+        self._close_handler = handler
+
+    def closeEvent(self, event) -> None:
+        if self._close_handler is not None and self._close_handler() is False:
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def set_hotkey_status(self, status: str) -> None:
         self._hotkey_label.setText(status)

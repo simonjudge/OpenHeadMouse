@@ -8,6 +8,7 @@ from PySide6.QtGui import QMouseEvent
 from fitts_law.fitts_test import (
     MODE_ISO_STANDARD,
     MODE_TYPING,
+    START_HEADMOUSE,
     FittsTestWindow,
 )
 from fitts_law.results import FittsResultsLogger, TrialResult
@@ -89,7 +90,7 @@ def test_click_off_target_registers_a_miss(qt_app):
     assert window._logger.trials[0].hit is False
 
 
-def test_completing_all_trials_shows_results_page(qt_app):
+def test_completing_all_trials_closes_window_and_prepares_results(qt_app):
     window = FittsTestWindow()
     window._mode_combo.setCurrentText(MODE_ISO_STANDARD)
     window._amplitudes_edit.setText("100")
@@ -103,6 +104,7 @@ def test_completing_all_trials_shows_results_page(qt_app):
         _click_at(canvas, *spec["target_pos"])
 
     assert window._stack.currentWidget() is window._results_page
+    assert not window.isVisible()
     assert window._results_table.rowCount() == 2  # 1 "Overall" row + 1 condition row
 
 
@@ -251,10 +253,10 @@ def test_typing_mode_groups_results_into_one_row_per_word(qt_app):
     num_words = len({s["repetition_index"] for s in canvas._specs})
     assert window._results_table.rowCount() == num_words + 1
 
-def test_start_with_headmouse_button_is_disabled_without_a_host_app(qt_app):
+def test_start_with_headmouse_option_is_disabled_without_a_host_app(qt_app):
     window = FittsTestWindow()
 
-    assert window._start_headmouse_button.isEnabled() is False
+    assert window._start_mode_combo.model().item(2).isEnabled() is False
 
 
 def test_start_with_headmouse_starts_the_test_once_tracking_is_ready(qt_app):
@@ -273,13 +275,14 @@ def test_start_with_headmouse_starts_the_test_once_tracking_is_ready(qt_app):
         return True
 
     window.set_head_start_provider(start_provider)
-    assert window._start_headmouse_button.isEnabled() is True
+    assert window._start_mode_combo.model().item(2).isEnabled() is True
+    window._start_mode_combo.setCurrentText(START_HEADMOUSE)
 
-    window._on_start_with_headmouse_clicked()
+    window._start_button.click()
 
     # Nothing starts until the head tracker reports it is ready.
     assert window._canvas is None
-    assert window._start_headmouse_button.isEnabled() is False
+    assert window._start_mode_combo.isEnabled() is False
     assert window._access_method_combo.currentText() == "HeadMouse"
     # Driving the cursor with the head records it too.
     assert pending["mouse_control"] is True
@@ -289,7 +292,7 @@ def test_start_with_headmouse_starts_the_test_once_tracking_is_ready(qt_app):
 
     assert window._canvas is not None
     assert window._stack.currentWidget() is window._canvas
-    assert window._start_headmouse_button.isEnabled() is True
+    assert window._start_mode_combo.isEnabled() is True
     assert window._logger.metadata["record_head_movement"] is True
 
 
@@ -310,7 +313,7 @@ def test_start_with_headmouse_does_not_start_the_test_if_tracking_fails(qt_app, 
 
     assert window._canvas is None
     assert len(warnings) == 1
-    assert window._start_headmouse_button.isEnabled() is True
+    assert window._start_mode_combo.isEnabled() is True
 
 
 def test_start_with_headmouse_re_enables_buttons_when_the_provider_refuses(qt_app):
@@ -320,5 +323,5 @@ def test_start_with_headmouse_re_enables_buttons_when_the_provider_refuses(qt_ap
     window._on_start_with_headmouse_clicked()
 
     assert window._canvas is None
-    assert window._start_headmouse_button.isEnabled() is True
+    assert window._start_mode_combo.isEnabled() is True
     assert window._start_button.isEnabled() is True

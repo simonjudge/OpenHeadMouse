@@ -58,12 +58,12 @@
         "kx": 50,
         "ky": 50,
         "gamma": 1.1,
-        "deadband_deg_s": 0.2
+        "deadband_deg_s": 0.15
       },
       "one_euro_filter": {
         "enabled": true,
-        "min_cutoff": 1.0,
-        "beta": 0.3,
+        "min_cutoff": 2.0,
+        "beta": 0.5,
         "d_cutoff": 1.0
       },
       "auto_zero": {
@@ -134,7 +134,7 @@
     }
   },
   "recorder": {
-    "base_dir": "C:\\Users\\judges\\Documents\\sessions",
+    "base_dir": "C:\\Users\\judges.BDGH\\Documents\\sessions",
     "output_dir": "sessions/",
     "format": "json"
   }

@@ -12,7 +12,7 @@ from PySide6.QtGui import QMouseEvent
 from core import quaternion_math as qm
 from core.headmouse import TrackingState
 from core.recorder import Recorder
-from fitts_law.fitts_test import MODE_ISO_STANDARD, FittsTestWindow
+from fitts_law.fitts_test import MODE_ISO_STANDARD, TASK_COMBINED, FittsTestWindow
 from fitts_law.pretest import PreTestTaskOverlay, build_pretest_stages
 from main import App
 from providers.base_provider import ProviderSample
@@ -91,6 +91,7 @@ def test_pretest_overlay_records_phase_boundaries_and_cursor_trajectory(qt_app):
         build_pretest_stages(True, False, 2.0, 3.0),
         clock=clock,
         host_clock=host_clock,
+        cursor_position=lambda: None,
     )
     phases = []
     completed = []
@@ -120,11 +121,34 @@ def test_pretest_overlay_records_phase_boundaries_and_cursor_trajectory(qt_app):
     assert overlay.records[1]["end_host_time"] == 1005.0
 
 
+def test_pretest_overlay_polls_cursor_each_tick(qt_app):
+    from PySide6.QtCore import QPointF
+
+    clock = FakeClock(10.0)
+    host_clock = FakeClock(1000.0)
+    position = QPointF(10.0, 20.0)
+    overlay = PreTestTaskOverlay(
+        build_pretest_stages(True, False, 2.0, 3.0),
+        clock=clock, host_clock=host_clock, cursor_position=lambda: position,
+    )
+    overlay.start()
+    overlay.stop()
+    host_clock.now = 1000.5
+    overlay._tick()
+    position = QPointF(15.0, 25.0)
+    host_clock.now = 1001.0
+    overlay._tick()
+
+    assert overlay.records[0]["cursor_trajectory"] == [
+        {"host_time": 1000.5, "x_px": 10.0, "y_px": 20.0},
+        {"host_time": 1001.0, "x_px": 15.0, "y_px": 25.0},
+    ]
+
+
 def test_fitts_pretest_runs_before_trials_and_labels_fitts_task(qt_app):
     window = FittsTestWindow()
     _configure_small_test(window)
-    _set_checked_without_saving(window._initial_rest_checkbox, True)
-    _set_checked_without_saving(window._range_of_movement_checkbox, False)
+    window._task_combo.setCurrentText(TASK_COMBINED)
     phases = []
     window.set_head_phase_provider(
         lambda phase, completed=True: phases.append((phase, completed))
@@ -141,14 +165,15 @@ def test_fitts_pretest_runs_before_trials_and_labels_fitts_task(qt_app):
     overlay._phase_start -= overlay.current_stage["duration_s"]
     overlay._tick()
     assert phases[-1] == ("initial_rest.hold", True)
-    overlay._phase_start -= overlay.current_stage["duration_s"]
-    overlay._tick()
+    while window._pretest_overlay is not None:
+        overlay._phase_start -= overlay.current_stage["duration_s"]
+        overlay._tick()
 
     assert window._pretest_overlay is None
     assert window._canvas is not None
     assert phases[-2:] == [(None, True), ("fitts_test", True)]
     metadata = window._logger.metadata
-    assert [record["phase"] for record in metadata["pretest_phases"]] == [
+    assert [record["phase"] for record in metadata["pretest_phases"]][:2] == [
         "initial_rest.move",
         "initial_rest.hold",
     ]
@@ -163,8 +188,7 @@ def test_fitts_pretest_runs_before_trials_and_labels_fitts_task(qt_app):
 def test_pretest_metadata_is_saved_with_fitts_results(qt_app, tmp_path):
     window = FittsTestWindow()
     _configure_small_test(window)
-    _set_checked_without_saving(window._initial_rest_checkbox, False)
-    _set_checked_without_saving(window._range_of_movement_checkbox, True)
+    window._task_combo.setCurrentText(TASK_COMBINED)
     window._on_start_clicked()
     overlay = window._pretest_overlay
     overlay.stop()
@@ -178,8 +202,8 @@ def test_pretest_metadata_is_saved_with_fitts_results(qt_app, tmp_path):
     path = window._logger.save(tmp_path / "pretest.json")
     data = json.loads(path.read_text())
     records = data["metadata"]["pretest_phases"]
-    assert len(records) == 8
-    assert records[0]["phase"] == "range_of_movement.left.move"
+    assert len(records) == 10
+    assert records[0]["phase"] == "initial_rest.move"
     assert records[-1]["phase"] == "range_of_movement.down.hold"
     assert data["metadata"]["fitts_task"]["phase"] == "fitts_test"
 

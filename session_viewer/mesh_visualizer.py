@@ -102,15 +102,17 @@ def head_rotation_to_mesh_frame(r_head: np.ndarray) -> np.ndarray:
     return _MESH_TO_HEAD_FRAME.T @ np.asarray(r_head, dtype=float) @ _MESH_TO_HEAD_FRAME
 
 
-def calculate_neutral_quaternion(recorded_samples: list, recorder=None) -> np.ndarray:
+def calculate_neutral_quaternion(recorded_samples: list, recorder=None, reference_samples=None) -> np.ndarray:
     """Calculate neutral (reference) quaternion for visualization.
 
     Priority:
     1. Use quaternion from a 'recenter' event if available (from recorder._events):
        the last one at or before the first sample (the pose in effect when the
        shown data starts), else the first one
-    2. Otherwise calculate mean quaternion (in same hemisphere)
-    3. Default to identity if no samples
+    2. Use the saved calibration quaternion (including Fitts initial rest).
+    3. Average phase-labelled initial-rest hold samples.
+    4. Average at most the first 30 samples within the first second of use.
+    5. Default to identity only for an empty session.
 
     Args:
         recorded_samples: List of RecordedSample objects
@@ -133,17 +135,38 @@ def calculate_neutral_quaternion(recorded_samples: list, recorder=None) -> np.nd
                 if before:
                     chosen = max(before, key=lambda e: e[key])
             q = np.array(chosen['data']['quaternion'], dtype=np.float64)
+            if q.shape != (4,) or not np.all(np.isfinite(q)) or np.linalg.norm(q) == 0:
+                raise ValueError("The session recenter event contains an invalid neutral quaternion")
             return q / np.linalg.norm(q)
 
-    if not recorded_samples:
+    calibration = getattr(recorder, "calibration", None)
+    if calibration and calibration.get("neutral_quaternion") is not None:
+        q = np.asarray(calibration["neutral_quaternion"], dtype=float)
+        if q.shape != (4,) or not np.all(np.isfinite(q)) or np.linalg.norm(q) == 0:
+            raise ValueError("The session calibration contains an invalid neutral quaternion")
+        return q / np.linalg.norm(q)
+
+    calibration_samples = getattr(recorder, "calibration_samples", None)
+    if calibration_samples:
+        from core.quaternion_math import mean_quaternion
+
+        return mean_quaternion(sample.quaternion for sample in calibration_samples)
+
+    source_samples = reference_samples if reference_samples is not None else recorded_samples
+    if not source_samples:
         return np.array([1.0, 0.0, 0.0, 0.0])  # Identity quaternion
 
     from core.quaternion_math import mean_quaternion
 
-    return mean_quaternion(
-        sample.quaternion if isinstance(sample.quaternion, np.ndarray) else np.array(sample.quaternion)
-        for sample in recorded_samples
-    )
+    rest = [
+        sample for sample in source_samples
+        if (getattr(sample, "metadata", None) or {}).get("task_phase") == "initial_rest.hold"
+    ]
+    reference = rest or [
+        sample for sample in source_samples[:30]
+        if 0 <= sample.timestamp - source_samples[0].timestamp <= 1.0
+    ]
+    return mean_quaternion(sample.quaternion for sample in reference)
 
 
 def rotation_from_euler(yaw: float, pitch: float, roll: float, degrees: bool = True) -> np.ndarray:
@@ -161,5 +184,3 @@ def rotation_from_euler(yaw: float, pitch: float, roll: float, degrees: bool = T
     Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
     Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
     return Rz @ Ry @ Rx
-
-

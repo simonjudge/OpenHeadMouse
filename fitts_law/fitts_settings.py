@@ -20,8 +20,8 @@ DEFAULT_SETTINGS = {
     "typing_word_count": 8,
     "typing_reassign_widths": False,
     "record_head_movement": False,
-    "initial_rest_enabled": False,
-    "range_of_movement_enabled": False,
+    "task_selection": "Mouse Task only",
+    "start_mode": "Start test",
     "pretest_move_duration_s": 5.0,
     "pretest_hold_duration_s": 5.0,
     # Mirrors config.json's recorder.base_dir so a standalone run (no
@@ -41,6 +41,13 @@ class FittsSettings:
             try:
                 with open(_SETTINGS_PATH) as f:
                     loaded = json.load(f)
+                if "task_selection" not in loaded:
+                    loaded["task_selection"] = (
+                        "HeadMovement and Mouse Task"
+                        if loaded.get("initial_rest_enabled")
+                        or loaded.get("range_of_movement_enabled")
+                        else "Mouse Task only"
+                    )
                 # Merge with defaults to handle new settings added later
                 return {**DEFAULT_SETTINGS, **loaded}
             except (json.JSONDecodeError, IOError):

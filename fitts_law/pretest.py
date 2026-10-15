@@ -6,7 +6,7 @@ import math
 import time
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from core.clock import host_time
@@ -75,6 +75,7 @@ class PreTestTaskOverlay(QWidget):
         clock=time.monotonic,
         host_clock=host_time,
         parent=None,
+        cursor_position=None,
     ):
         super().__init__(parent)
         if not stages:
@@ -82,6 +83,9 @@ class PreTestTaskOverlay(QWidget):
         self._stages = [dict(stage) for stage in stages]
         self._clock = clock
         self._host_clock = host_clock
+        # Polled every tick: mouse-move events are not reliably delivered while
+        # HeadMouse (or another access method) moves the hidden cursor.
+        self._cursor_position = cursor_position or (lambda: self.mapFromGlobal(QCursor.pos()))
         self._index = -1
         self._phase_start = 0.0
         self.records: list[dict] = []
@@ -105,8 +109,11 @@ class PreTestTaskOverlay(QWidget):
         self._timer.start()
         self.setFocus()
 
-    def stop(self) -> None:
+    def stop(self, *, cancelled: bool = False) -> None:
         self._timer.stop()
+        if cancelled and self.records and self.records[-1]["end_host_time"] is None:
+            self.records[-1]["end_host_time"] = self._host_clock()
+            self.records[-1]["cancelled"] = True
 
     def _start_stage(self, index: int) -> None:
         self._index = index
@@ -127,6 +134,9 @@ class PreTestTaskOverlay(QWidget):
         stage = self.current_stage
         if stage is None:
             return
+        position = self._cursor_position()
+        if position is not None:
+            self._record_cursor(position.x(), position.y())
         if self._clock() - self._phase_start < stage["duration_s"]:
             self.update()
             return
@@ -144,20 +154,16 @@ class PreTestTaskOverlay(QWidget):
         if self.current_stage is None:
             return
         position = event.position()
+        self._record_cursor(position.x(), position.y())
+
+    def _record_cursor(self, x: float, y: float) -> None:
         self.records[-1]["cursor_trajectory"].append(
-            {
-                "host_time": self._host_clock(),
-                "x_px": position.x(),
-                "y_px": position.y(),
-            }
+            {"host_time": self._host_clock(), "x_px": float(x), "y_px": float(y)}
         )
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape:
-            self._timer.stop()
-            if self.records and self.records[-1]["end_host_time"] is None:
-                self.records[-1]["end_host_time"] = self._host_clock()
-                self.records[-1]["cancelled"] = True
+            self.stop(cancelled=True)
             self.cancelled.emit()
             return
         super().keyPressEvent(event)

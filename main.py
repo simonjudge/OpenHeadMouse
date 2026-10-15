@@ -231,6 +231,8 @@ class App:
         self._mouse_was_active = False
         self._session_viewer_window = None  # keep a reference so Qt/PySide doesn't GC it
         self._fitts_test_window = None  # keep a reference so Qt/PySide doesn't GC it
+        self._fitts_dwell_active = False
+        self._fitts_mouse_task_active: bool | None = None
         self._tracking_screen_geometry = None
         self._calibration_overlay = None
         self._calibrating = False
@@ -331,6 +333,7 @@ class App:
         self.window.dsp_config_changed.connect(self._on_dsp_config_changed)
         self.window.load_session_requested.connect(self._on_load_session_requested)
         self.window.fitts_test_requested.connect(self._on_fitts_test_requested)
+        self.window.set_close_handler(self._close_main_window)
         self.window.recordings_folder_requested.connect(self._on_choose_recordings_dir)
         self.window.controls.recordings_dir_change_requested.connect(
             self._on_choose_recordings_dir
@@ -377,6 +380,22 @@ class App:
             self._provider = None
         self._stop_airpods_helper()
         self.headmouse.stop()
+
+    def _close_main_window(self) -> bool:
+        from PySide6.QtWidgets import QMessageBox
+
+        if self._fitts_test_window is not None and self._fitts_test_window._host_run_active:
+            if not self._fitts_test_window.close():
+                return False
+        try:
+            self.stop_tracking_and_save()
+        except (OSError, RuntimeError) as exc:
+            QMessageBox.critical(self.window, "Could not close HeadMouse", str(exc))
+            return False
+        if self._provider is not None:
+            return False
+        self.shutdown()
+        return True
 
     # -- recordings folder --------------------------------------------------
 
@@ -721,8 +740,8 @@ class App:
     def stop_tracking_and_save(self):
         """Stop a running provider and save its recording; returns the file path.
 
-        Used by the Fitts window when it opens synchronised playback: the head
-        session has to be stopped and written out before it can be replayed.
+        Used by the Fitts window at the end of a run and, if still needed,
+        before opening synchronised playback.
         """
         was_running = self._provider is not None
         filepath = self._on_stop_requested()
@@ -1276,15 +1295,34 @@ class App:
         self._persist_config()
 
     def _sync_dwell_click(self) -> None:
-        """Dwell clicking follows mouse control: it runs only while the cursor is driven."""
+        """Dwell follows head mouse control, or a temporary Fitts dwell request."""
         from core.headmouse import TrackingState
 
         should_run = (
-            self._dwell_armed
-            and self._mouse_control_enabled
-            and self.headmouse.state == TrackingState.ACTIVE
+            getattr(self, "_fitts_mouse_task_active", None) is not False
+            and (
+                getattr(self, "_fitts_dwell_active", False)
+                or (
+                    self._dwell_armed
+                    and self._mouse_control_enabled
+                    and self.headmouse.state == TrackingState.ACTIVE
+                )
+            )
         )
         self._dwell_click.request_running(should_run)
+
+    def set_fitts_dwell_active(self, active: bool) -> None:
+        """Temporarily allow dwell clicks for a Fitts run with any cursor input."""
+        self._fitts_dwell_active = active
+        self._sync_dwell_click()
+
+    def set_fitts_mouse_task_active(self, active: bool | None) -> None:
+        """Suppress all dwell clicking outside a Fitts run's mouse task.
+
+        None returns dwell control to the normal HeadMouse lifecycle.
+        """
+        self._fitts_mouse_task_active = active
+        self._sync_dwell_click()
 
     def _on_dwell_settings_changed(self, values: dict) -> None:
         dwell_config = self._config.setdefault("ui", {}).setdefault("dwell_click", {})
@@ -1355,6 +1393,8 @@ class App:
         self._fitts_test_window = launch_fitts_test()
         self._fitts_test_window.set_head_session_provider(self.stop_tracking_and_save)
         self._fitts_test_window.set_head_start_provider(self.start_head_tracking)
+        self._fitts_test_window.set_dwell_provider(self.set_fitts_dwell_active)
+        self._fitts_test_window.set_mouse_task_provider(self.set_fitts_mouse_task_active)
         self._fitts_test_window.set_recordings_dir_provider(
             self.ensure_recordings_base_dir
         )
