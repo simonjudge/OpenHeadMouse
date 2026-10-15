@@ -125,3 +125,31 @@ def test_velocity_resume_uses_actual_mouse_position(controller, pause_method):
         app.window.controls._mouse_check.setChecked(True)
     assert feed(app, 30, 3) == pytest.approx((250, 300))
     assert feed(app, 40, 4) == pytest.approx((240, 300))
+
+
+def test_main_window_pairs_options_side_by_side_with_help(qt_app):
+    from PySide6.QtWidgets import QAbstractButton, QAbstractSpinBox, QComboBox, QWidget
+    from gui.headmouse_gui import HeadMouseWindow
+
+    window = HeadMouseWindow(initial_kx=1.0, initial_ky=1.0)
+    try:
+        def position(widget):
+            grid = widget.parentWidget().layout()
+            row, column, _, _ = grid.getItemPosition(grid.indexOf(widget))
+            return row, column
+
+        kx_row, kx_col = position(window._velocity_kx_spin)
+        assert position(window._velocity_ky_spin) == (kx_row, kx_col + 2)
+        gamma_row, gamma_col = position(window._gamma_spin)
+        assert position(window._deadband_spin) == (gamma_row, gamma_col + 2)
+        bias_row, bias_col = position(window._auto_zero_check)
+        assert position(window._drift_check)[0] == bias_row
+        assert position(window._drift_check)[1] > bias_col
+        assert position(window._ky_spin)[0] == position(window._kx_spin)[0]
+
+        options = (QAbstractButton, QAbstractSpinBox, QComboBox)
+        for widget in [w for w in window.findChildren(QWidget) if isinstance(w, options)]:
+            if not widget.objectName().startswith("qt_"):
+                assert widget.toolTip(), (widget, getattr(widget, "text", lambda: "")())
+    finally:
+        window.close()

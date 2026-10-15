@@ -31,7 +31,11 @@ class DwellClickService(QObject):
         self._mouse_controller = mouse_controller
         self._position_provider = position_provider or self._cursor_position
         self._clock = clock
-        self._overlay = DwellRing(color=self.settings.ring_color)
+        self._overlay = DwellRing(
+            color=self.settings.ring_color,
+            diameter_px=self.settings.ring_diameter_px,
+            thickness_px=self.settings.ring_thickness_px,
+        )
         self._timer = QTimer(self)
         self._timer.setInterval(poll_interval_ms)
         self._timer.timeout.connect(self._poll)
@@ -71,6 +75,7 @@ class DwellClickService(QObject):
         self.settings = settings
         self._engine.update_settings(settings)
         self._overlay.set_color(settings.ring_color)
+        self._overlay.set_size(settings.ring_diameter_px, settings.ring_thickness_px)
         if was_running:
             self._poll()
 

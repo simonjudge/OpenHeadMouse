@@ -6,33 +6,26 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
-    QFormLayout,
     QGridLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
-    QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
+from dwell_click.engine import DwellSettings
+from dwell_click.widgets import DWELL_HELP, ColorButton
+
 
 class ControlPanel(QWidget):
-    """Toggles for recording, mouse control, and initial calibration."""
+    """Toggles for recording, mouse control, initial calibration and dwell clicking."""
 
     recording_toggled = Signal(bool)
     mouse_control_toggled = Signal(bool)
     calibration_toggled = Signal(bool)
     dwell_click_toggled = Signal(bool)
     dwell_settings_changed = Signal(dict)
-    recordings_dir_change_requested = Signal()
-
-    _NO_RECORDINGS_DIR_TEXT = "Not set - you'll be asked when recording starts"
-    _RECORDINGS_DIR_TOOLTIP = (
-        "Head-movement sessions and Fitts' Law results are saved under this "
-        "folder, in its 'sessions' and 'fitts_sessions' subfolders."
-    )
 
     def __init__(
         self,
@@ -41,16 +34,24 @@ class ControlPanel(QWidget):
         mouse_control_enabled: bool = True,
         calibration_enabled: bool = False,
         dwell_config: dict | None = None,
-        recordings_dir=None,
     ):
         super().__init__(parent)
         dwell_config = dwell_config or {}
+        defaults = DwellSettings()
 
         self._record_check = QCheckBox("Recording")
+        self._record_check.setToolTip(
+            "Save the head-movement data to a session file while tracking. "
+            "Sessions are saved under File > Set Recordings Folder."
+        )
         self._record_check.setChecked(recording_enabled)
         self._record_check.toggled.connect(self.recording_toggled)
 
         self._mouse_check = QCheckBox("Mouse Control")
+        self._mouse_check.setToolTip(
+            "Let head movement move the mouse pointer. Untick to track (and record) "
+            "head movement without moving the pointer."
+        )
         self._mouse_check.setChecked(mouse_control_enabled)
         self._mouse_check.toggled.connect(self.mouse_control_toggled)
 
@@ -75,13 +76,13 @@ class ControlPanel(QWidget):
         self._dwell_time_spin.setDecimals(2)
         self._dwell_time_spin.setSingleStep(0.1)
         self._dwell_time_spin.setSuffix(" s")
-        self._dwell_time_spin.setValue(float(dwell_config.get("dwell_time_s", 1.0)))
+        self._dwell_time_spin.setValue(float(dwell_config.get("dwell_time_s", defaults.dwell_time_s)))
 
         self._movement_tolerance_spin = QSpinBox()
         self._movement_tolerance_spin.setRange(0, 500)
         self._movement_tolerance_spin.setSuffix(" px")
         self._movement_tolerance_spin.setValue(
-            round(float(dwell_config.get("movement_tolerance_px", 10.0)))
+            round(float(dwell_config.get("movement_tolerance_px", defaults.movement_tolerance_px)))
         )
 
         self._resume_time_spin = QDoubleSpinBox()
@@ -89,12 +90,31 @@ class ControlPanel(QWidget):
         self._resume_time_spin.setDecimals(2)
         self._resume_time_spin.setSingleStep(0.1)
         self._resume_time_spin.setSuffix(" s")
-        self._resume_time_spin.setValue(float(dwell_config.get("resume_time_s", 0.5)))
+        self._resume_time_spin.setValue(float(dwell_config.get("resume_time_s", defaults.resume_time_s)))
+
+        self._ring_diameter_spin = QSpinBox()
+        self._ring_diameter_spin.setRange(8, 400)
+        self._ring_diameter_spin.setSuffix(" px")
+        self._ring_diameter_spin.setValue(
+            int(dwell_config.get("ring_diameter_px", defaults.ring_diameter_px))
+        )
+
+        self._ring_thickness_spin = QSpinBox()
+        self._ring_thickness_spin.setRange(1, 100)
+        self._ring_thickness_spin.setSuffix(" px")
+        self._ring_thickness_spin.setValue(
+            int(dwell_config.get("ring_thickness_px", defaults.ring_thickness_px))
+        )
+
+        self._ring_color_button = ColorButton(dwell_config.get("ring_color", defaults.ring_color))
+        self._ring_color_button.color_changed.connect(self._emit_dwell_settings)
 
         for control in (
             self._dwell_time_spin,
             self._movement_tolerance_spin,
             self._resume_time_spin,
+            self._ring_diameter_spin,
+            self._ring_thickness_spin,
         ):
             control.valueChanged.connect(self._emit_dwell_settings)
 
@@ -106,26 +126,25 @@ class ControlPanel(QWidget):
         layout.addWidget(self._dwell_check, 1, 1)
 
         dwell_box = QGroupBox("Dwell Click Settings")
-        dwell_form = QFormLayout(dwell_box)
-        dwell_form.addRow("Dwell time", self._dwell_time_spin)
-        dwell_form.addRow("Movement tolerance", self._movement_tolerance_spin)
-        dwell_form.addRow("Resume time", self._resume_time_spin)
-
-        self._recordings_dir_label = QLabel()
-        self._recordings_dir_label.setWordWrap(True)
-        self._recordings_dir_button = QPushButton("Change...")
-        self._recordings_dir_button.clicked.connect(
-            self.recordings_dir_change_requested
-        )
-        recordings_box = QGroupBox("Recordings Folder")
-        recordings_row = QHBoxLayout(recordings_box)
-        recordings_row.addWidget(self._recordings_dir_label, stretch=1)
-        recordings_row.addWidget(self._recordings_dir_button)
-        self.set_recordings_dir(recordings_dir)
+        dwell_grid = QGridLayout(dwell_box)
+        dwell_grid.setColumnStretch(1, 1)
+        dwell_grid.setColumnStretch(3, 1)
+        for row, column, text, field, key in (
+            (0, 0, "Time", self._dwell_time_spin, "dwell_time_s"),
+            (0, 1, "Colour", self._ring_color_button, "ring_color"),
+            (1, 0, "Tolerance", self._movement_tolerance_spin, "movement_tolerance_px"),
+            (1, 1, "Resume", self._resume_time_spin, "resume_time_s"),
+            (2, 0, "Diameter", self._ring_diameter_spin, "ring_diameter_px"),
+            (2, 1, "Thickness", self._ring_thickness_spin, "ring_thickness_px"),
+        ):
+            label = QLabel(text)
+            label.setToolTip(DWELL_HELP[key])
+            field.setToolTip(DWELL_HELP[key])
+            dwell_grid.addWidget(label, row, column * 2)
+            dwell_grid.addWidget(field, row, column * 2 + 1)
 
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(box)
-        main_layout.addWidget(recordings_box)
         main_layout.addWidget(dwell_box)
 
     @property
@@ -150,32 +169,29 @@ class ControlPanel(QWidget):
             "dwell_time_s": self._dwell_time_spin.value(),
             "movement_tolerance_px": float(self._movement_tolerance_spin.value()),
             "resume_time_s": self._resume_time_spin.value(),
+            "ring_diameter_px": self._ring_diameter_spin.value(),
+            "ring_thickness_px": self._ring_thickness_spin.value(),
+            "ring_color": self._ring_color_button.color,
         }
 
-    @property
-    def recordings_dir_text(self) -> str:
-        return self._recordings_dir_label.text()
-
-    def set_recordings_dir(self, base_dir) -> None:
-        """Show the folder head sessions and Fitts results are written under."""
-        if base_dir is None:
-            self._recordings_dir_label.setText(self._NO_RECORDINGS_DIR_TEXT)
-        else:
-            self._recordings_dir_label.setText(str(base_dir))
-        self._recordings_dir_label.setToolTip(self._RECORDINGS_DIR_TOOLTIP)
-
-    def _emit_dwell_settings(self) -> None:
+    def _emit_dwell_settings(self, *_args) -> None:
         self.dwell_settings_changed.emit(self.dwell_settings)
 
     def set_dwell_settings(self, values: dict) -> None:
-        for control, value in (
-            (self._dwell_time_spin, values["dwell_time_s"]),
-            (self._movement_tolerance_spin, values["movement_tolerance_px"]),
-            (self._resume_time_spin, values["resume_time_s"]),
+        for control, key in (
+            (self._dwell_time_spin, "dwell_time_s"),
+            (self._movement_tolerance_spin, "movement_tolerance_px"),
+            (self._resume_time_spin, "resume_time_s"),
+            (self._ring_diameter_spin, "ring_diameter_px"),
+            (self._ring_thickness_spin, "ring_thickness_px"),
         ):
+            if key not in values:
+                continue
             blocked = control.blockSignals(True)
-            control.setValue(value)
+            control.setValue(round(values[key]) if isinstance(control, QSpinBox) else values[key])
             control.blockSignals(blocked)
+        if "ring_color" in values:
+            self._ring_color_button.set_color(values["ring_color"])
 
     def set_mouse_control_enabled(self, enabled: bool) -> None:
         """Set the Mouse Control toggle, emitting so the change is persisted."""

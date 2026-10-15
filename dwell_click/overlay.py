@@ -21,8 +21,7 @@ class DwellRing(QWidget):
         self._diameter_px = diameter_px
         self._thickness_px = thickness_px
         self._progress = 0.0
-        extent = diameter_px + thickness_px * 2
-        self.setFixedSize(extent, extent)
+        self._apply_size()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -40,6 +39,21 @@ class DwellRing(QWidget):
             raise ValueError(f"Invalid dwell ring color: {color}")
         self._color = parsed
         self.update()
+
+    def set_size(self, diameter_px: int, thickness_px: int) -> None:
+        """Change the ring's diameter and the thickness of its timer segment."""
+        if diameter_px <= 0 or thickness_px <= 0:
+            raise ValueError("Dwell ring diameter and thickness must be greater than zero")
+        center = QPoint(self.x() + self.width() // 2, self.y() + self.height() // 2)
+        self._diameter_px = int(diameter_px)
+        self._thickness_px = int(thickness_px)
+        self._apply_size()
+        self.move(center.x() - self.width() // 2, center.y() - self.height() // 2)
+        self.update()
+
+    def _apply_size(self) -> None:
+        extent = self._diameter_px + self._thickness_px * 2
+        self.setFixedSize(extent, extent)
 
     def display(self, cursor_position: tuple[float, float], progress: float) -> None:
         self._progress = max(0.0, min(1.0, progress))

@@ -229,6 +229,9 @@ class App:
         self._last_target = None
         self._last_sample = None
         self._mouse_was_active = False
+        # True once a provider sample has moved the cursor since mouse control last became
+        # active; HeadMouse dwell clicking waits for this rather than just the ACTIVE state.
+        self._cursor_driven = False
         self._session_viewer_window = None  # keep a reference so Qt/PySide doesn't GC it
         self._fitts_test_window = None  # keep a reference so Qt/PySide doesn't GC it
         self._fitts_dwell_active = False
@@ -283,14 +286,11 @@ class App:
         self._mouse_control_enabled = bool(
             config.get("ui", {}).get("mouse_control_enabled", True)
         )
-        self._dwell_settings = DwellSettings(
-                dwell_time_s=float(dwell_config.get("dwell_time_s", 1.0)),
-                movement_tolerance_px=float(
-                    dwell_config.get("movement_tolerance_px", 10.0)
-                ),
-                resume_time_s=float(dwell_config.get("resume_time_s", 0.5)),
-                ring_color=dwell_config.get("ring_color", "#ff0000"),
-        )
+        try:
+            self._dwell_settings = DwellSettings.from_config(dwell_config)
+        except ValueError as exc:
+            print(f"[HeadMouse] Invalid dwell click settings ({exc}); using defaults")
+            self._dwell_settings = DwellSettings()
         self._dwell_click = DwellClickService(
             self._dwell_settings,
             mouse_controller=mouse_controller,
@@ -308,7 +308,7 @@ class App:
             lambda state: self.window.tracking_state_changed.emit(state.value)
         )
         self.window.set_status(self.headmouse.state.value)
-        self.headmouse.add_state_callback(lambda _state: self._sync_dwell_click())
+        self.headmouse.add_state_callback(self._on_tracking_state_for_dwell)
 
         self.window.setup_panel.start_requested.connect(self._on_start_requested)
         self.window.setup_panel.stop_requested.connect(self._on_stop_requested)
@@ -335,10 +335,7 @@ class App:
         self.window.fitts_test_requested.connect(self._on_fitts_test_requested)
         self.window.set_close_handler(self._close_main_window)
         self.window.recordings_folder_requested.connect(self._on_choose_recordings_dir)
-        self.window.controls.recordings_dir_change_requested.connect(
-            self._on_choose_recordings_dir
-        )
-        self.window.controls.set_recordings_dir(self._recordings_base_dir)
+        self.window.set_recordings_dir(self._recordings_base_dir)
         self.window.controls.recording_toggled.connect(self._on_recording_toggled)
         self.window.controls.mouse_control_toggled.connect(self._on_mouse_control_toggled)
         self.window.controls.calibration_toggled.connect(self._on_calibration_toggled)
@@ -431,7 +428,7 @@ class App:
         self._recordings_base_dir = base_dir
         self._config.setdefault("recorder", {})["base_dir"] = str(base_dir)
         self._recorder.output_dir = recording_paths.head_sessions_dir(base_dir)
-        self.window.controls.set_recordings_dir(base_dir)
+        self.window.set_recordings_dir(base_dir)
         if self._config_path is not None:
             self._persist_config()
         else:
@@ -560,6 +557,7 @@ class App:
             self.dsp.reset(position=self.headmouse.cursor_position)
             self._last_sample = None
             self._mouse_was_active = False
+            self._set_cursor_driven(False)
             self._last_target = None
             self._ximu_wifi_provider = provider_name == "ximu3" and self._provider.connection_type == "wifi_ap"
             self._ximu_waiting_to_start = self._ximu_wifi_provider
@@ -985,6 +983,7 @@ class App:
             self._last_sample = None
             self._last_target = None
             self._mouse_was_active = False
+            self._set_cursor_driven(False)
             if self.window.controls.calibration_enabled and not self._ximu_waiting_to_start:
                 self._begin_calibration()
 
@@ -1097,6 +1096,7 @@ class App:
         """Apply a held neutral pose for both normal and Fitts calibration."""
         self.dsp.reset(position=self.headmouse.cursor_position)
         self._mouse_was_active = False
+        self._set_cursor_driven(False)
         self.headmouse.set_tracking_state(True)
 
         if not buffer:
@@ -1261,6 +1261,7 @@ class App:
         self._last_target = None
         self._last_sample = None
         self._mouse_was_active = False
+        self._set_cursor_driven(False)
         self.window.set_dsp_config(profile)
 
     def _on_recording_toggled(self, enabled: bool) -> None:
@@ -1294,8 +1295,23 @@ class App:
         self._sync_dwell_click()
         self._persist_config()
 
+    def _on_tracking_state_for_dwell(self, state) -> None:
+        from core.headmouse import TrackingState
+
+        if state != TrackingState.ACTIVE:
+            self._cursor_driven = False
+        self._sync_dwell_click()
+
+    def _set_cursor_driven(self, driven: bool) -> None:
+        if driven != getattr(self, "_cursor_driven", False):
+            self._cursor_driven = driven
+            self._sync_dwell_click()
+
     def _sync_dwell_click(self) -> None:
-        """Dwell follows head mouse control, or a temporary Fitts dwell request."""
+        """Dwell follows head mouse control, or a temporary Fitts dwell request.
+
+        HeadMouse dwell only starts once the input provider is actually moving the cursor.
+        """
         from core.headmouse import TrackingState
 
         should_run = (
@@ -1306,6 +1322,7 @@ class App:
                     self._dwell_armed
                     and self._mouse_control_enabled
                     and self.headmouse.state == TrackingState.ACTIVE
+                    and getattr(self, "_cursor_driven", False)
                 )
             )
         )
@@ -1329,15 +1346,10 @@ class App:
         dwell_config.update(values)
         from dwell_click.engine import DwellSettings
 
-        self._dwell_settings = DwellSettings(
-            dwell_time_s=values["dwell_time_s"],
-            movement_tolerance_px=values["movement_tolerance_px"],
-            resume_time_s=values["resume_time_s"],
-            ring_color=dwell_config.get("ring_color", "#ff0000"),
-        )
+        self._dwell_settings = DwellSettings.from_config(dwell_config)
         self._dwell_click.update_settings(self._dwell_settings)
         self._dwell_tray.set_settings(self._dwell_settings)
-        self.window.controls.set_dwell_settings(values)
+        self.window.controls.set_dwell_settings(self._dwell_settings.to_config())
         self._persist_config()
 
     def _persist_config(self) -> None:
@@ -1445,6 +1457,7 @@ class App:
                     self._ximu_was_streaming = False
                     self._last_sample = None
                     self._mouse_was_active = False
+                    self._set_cursor_driven(False)
                     if self._calibrating:
                         self._end_calibration()
                         self._ximu_waiting_to_start = True
@@ -1478,6 +1491,7 @@ class App:
         if mouse_active != self._mouse_was_active:
             self.dsp.reset(position=self.headmouse.cursor_position)
             self._mouse_was_active = mouse_active
+            self._set_cursor_driven(False)
         samples = self._drain_all()
         if not samples:
             return
@@ -1503,6 +1517,8 @@ class App:
 
             self.headmouse.process_target(target_x, target_y, sample.timestamp)
             self._last_target = (target_x, target_y)
+            if self.headmouse.state == TrackingState.ACTIVE:
+                self._set_cursor_driven(True)
 
 
 def main(argv=None) -> int:

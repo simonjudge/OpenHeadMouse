@@ -8,11 +8,13 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QLabel,
     QSpinBox,
     QVBoxLayout,
 )
 
 from .engine import DwellSettings
+from .widgets import DWELL_HELP, ColorButton
 
 
 class DwellSettingsDialog(QDialog):
@@ -41,10 +43,31 @@ class DwellSettingsDialog(QDialog):
         self._resume_time.setSuffix(" s")
         self._resume_time.setValue(settings.resume_time_s)
 
+        self._ring_diameter = QSpinBox()
+        self._ring_diameter.setRange(8, 400)
+        self._ring_diameter.setSuffix(" px")
+        self._ring_diameter.setValue(settings.ring_diameter_px)
+
+        self._ring_thickness = QSpinBox()
+        self._ring_thickness.setRange(1, 100)
+        self._ring_thickness.setSuffix(" px")
+        self._ring_thickness.setValue(settings.ring_thickness_px)
+
+        self._ring_color = ColorButton(settings.ring_color)
+
         form = QFormLayout()
-        form.addRow("Dwell time", self._dwell_time)
-        form.addRow("Movement tolerance", self._movement_tolerance)
-        form.addRow("Resume time", self._resume_time)
+        for text, field, key in (
+            ("Time", self._dwell_time, "dwell_time_s"),
+            ("Tolerance", self._movement_tolerance, "movement_tolerance_px"),
+            ("Resume", self._resume_time, "resume_time_s"),
+            ("Diameter", self._ring_diameter, "ring_diameter_px"),
+            ("Thickness", self._ring_thickness, "ring_thickness_px"),
+            ("Colour", self._ring_color, "ring_color"),
+        ):
+            label = QLabel(text)
+            label.setToolTip(DWELL_HELP[key])
+            field.setToolTip(DWELL_HELP[key])
+            form.addRow(label, field)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -63,6 +86,9 @@ class DwellSettingsDialog(QDialog):
                 "dwell_time_s": self._dwell_time.value(),
                 "movement_tolerance_px": float(self._movement_tolerance.value()),
                 "resume_time_s": self._resume_time.value(),
+                "ring_diameter_px": self._ring_diameter.value(),
+                "ring_thickness_px": self._ring_thickness.value(),
+                "ring_color": self._ring_color.color,
             }
         )
         self.accept()

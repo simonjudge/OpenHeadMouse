@@ -1,7 +1,9 @@
 """Dwell clicking follows the mouse-control lifecycle in the main GUI."""
 
 import copy
+import queue
 import threading
+from types import SimpleNamespace
 
 
 class FakeMouseController:
@@ -31,6 +33,17 @@ def make_app(qt_app, dwell_enabled: bool):
     return App(config, auto_start_listeners=False, mouse_controller=FakeMouseController())
 
 
+def drive_cursor(app, timestamp: float = 0.0) -> None:
+    """Deliver one provider sample, so HeadMouse is actually moving the cursor."""
+    from core import quaternion_math as qm
+    from providers.base_provider import ProviderSample
+
+    if getattr(app._provider, "output_queue", None) is None:
+        app._provider = SimpleNamespace(output_queue=queue.Queue(), stop=lambda: None)
+    app._provider.output_queue.put(ProviderSample(timestamp, qm.from_euler_zyx(0.0, 0.0, 0.0)))
+    app._poll()
+
+
 def test_ticking_dwell_box_does_not_start_dwell_clicking(qt_app):
     app = make_app(qt_app, dwell_enabled=False)
     try:
@@ -47,6 +60,7 @@ def test_dwell_starts_with_mouse_control_and_stops_when_paused(qt_app):
         assert app._dwell_click.is_running is False
 
         app.headmouse.set_tracking_state(True)
+        drive_cursor(app)
         assert app._dwell_click.is_running is True
 
         app.headmouse.set_tracking_state(False)
@@ -59,12 +73,16 @@ def test_unticking_mouse_control_stops_dwell_clicking(qt_app):
     app = make_app(qt_app, dwell_enabled=True)
     try:
         app.headmouse.set_tracking_state(True)
+        drive_cursor(app)
         assert app._dwell_click.is_running is True
 
         app.window.controls._mouse_check.setChecked(False)
         assert app._dwell_click.is_running is False
+        drive_cursor(app, 1.0)
+        assert app._dwell_click.is_running is False
 
         app.window.controls._mouse_check.setChecked(True)
+        drive_cursor(app, 2.0)
         assert app._dwell_click.is_running is True
     finally:
         app.shutdown()
@@ -98,6 +116,7 @@ def test_fitts_dwell_restores_running_headmouse_dwell(qt_app):
     app = make_app(qt_app, dwell_enabled=True)
     try:
         app.headmouse.set_tracking_state(True)
+        drive_cursor(app)
         app.set_fitts_dwell_active(True)
         app.set_fitts_dwell_active(False)
         assert app._dwell_click.is_running is True
@@ -110,6 +129,7 @@ def test_fitts_head_exercises_suppress_both_dwell_sources(qt_app):
     app = make_app(qt_app, dwell_enabled=True)
     try:
         app.headmouse.set_tracking_state(True)
+        drive_cursor(app)
         assert app._dwell_click.is_running
         app.set_fitts_mouse_task_active(False)
         assert not app._dwell_click.is_running
@@ -117,6 +137,7 @@ def test_fitts_head_exercises_suppress_both_dwell_sources(qt_app):
         assert not app._dwell_click.is_running
         app.headmouse.set_tracking_state(False)
         app.headmouse.set_tracking_state(True)
+        drive_cursor(app, 1.0)
         assert not app._dwell_click.is_running
         app.set_fitts_mouse_task_active(True)
         assert app._dwell_click.is_running
@@ -171,6 +192,8 @@ def test_hosted_headmouse_run_stops_dwell_and_tracking_before_saving_results(
             assert not app._dwell_click.is_running
             overlay._phase_start -= overlay.current_stage["duration_s"]
             overlay._tick()
+        assert not app._dwell_click.is_running
+        drive_cursor(app)
         assert app._dwell_click.is_running
         original_save = window._logger.save
 
@@ -194,6 +217,7 @@ def test_escape_pause_and_resume_from_listener_thread_restarts_dwell(qt_app):
     app = make_app(qt_app, dwell_enabled=True)
     try:
         app.headmouse.set_tracking_state(True)
+        drive_cursor(app)
         assert app._dwell_click.is_running is True
 
         worker = threading.Thread(
@@ -206,6 +230,40 @@ def test_escape_pause_and_resume_from_listener_thread_restarts_dwell(qt_app):
         worker.join()
 
         qt_app.processEvents()
+        assert app._dwell_click.is_running is False
+        drive_cursor(app, 1.0)
+        qt_app.processEvents()
         assert app._dwell_click.is_running is True
+    finally:
+        app.shutdown()
+
+
+def test_dwell_waits_for_the_provider_to_move_the_cursor(qt_app):
+    app = make_app(qt_app, dwell_enabled=True)
+    try:
+        app.headmouse.set_tracking_state(True)
+        app._poll()  # tracking is active, but no provider data has arrived yet
+        assert app._dwell_click.is_running is False
+
+        drive_cursor(app)
+        assert app._dwell_click.is_running is True
+
+        app.headmouse.set_tracking_state(False)
+        app.headmouse.set_tracking_state(True)
+        assert app._dwell_click.is_running is False
+        drive_cursor(app, 1.0)
+        assert app._dwell_click.is_running is True
+    finally:
+        app.shutdown()
+
+
+def test_dwell_stops_as_soon_as_cursor_control_is_reset(qt_app):
+    app = make_app(qt_app, dwell_enabled=True)
+    try:
+        app.headmouse.set_tracking_state(True)
+        drive_cursor(app)
+        assert app._dwell_click.is_running is True
+        app._set_cursor_driven(False)
+        assert app._dwell_click.is_running is False
     finally:
         app.shutdown()

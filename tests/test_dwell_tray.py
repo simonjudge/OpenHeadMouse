@@ -43,6 +43,9 @@ def test_tray_controls_service_and_settings(qt_app):
                 "dwell_time_s": 2.0,
                 "movement_tolerance_px": 10.0,
                 "resume_time_s": 0.5,
+                "ring_diameter_px": 40,
+                "ring_thickness_px": 4,
+                "ring_color": "#ff0000",
             }
         ]
     finally:

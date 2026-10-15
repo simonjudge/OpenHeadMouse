@@ -15,6 +15,8 @@ class DwellSettings:
     movement_tolerance_px: float = 10.0
     resume_time_s: float = 0.5
     ring_color: str = "#ff0000"
+    ring_diameter_px: int = 40
+    ring_thickness_px: int = 4
 
     def __post_init__(self) -> None:
         if self.dwell_time_s <= 0:
@@ -23,6 +25,36 @@ class DwellSettings:
             raise ValueError("movement_tolerance_px cannot be negative")
         if self.resume_time_s < 0:
             raise ValueError("resume_time_s cannot be negative")
+        if self.ring_diameter_px <= 0:
+            raise ValueError("ring_diameter_px must be greater than zero")
+        if self.ring_thickness_px <= 0:
+            raise ValueError("ring_thickness_px must be greater than zero")
+
+    @classmethod
+    def from_config(cls, config: dict | None) -> "DwellSettings":
+        """Build settings from a ``ui.dwell_click`` config dict, using defaults for missing keys."""
+        config = config or {}
+        defaults = cls()
+        return cls(
+            dwell_time_s=float(config.get("dwell_time_s", defaults.dwell_time_s)),
+            movement_tolerance_px=float(
+                config.get("movement_tolerance_px", defaults.movement_tolerance_px)
+            ),
+            resume_time_s=float(config.get("resume_time_s", defaults.resume_time_s)),
+            ring_color=str(config.get("ring_color", defaults.ring_color)),
+            ring_diameter_px=int(config.get("ring_diameter_px", defaults.ring_diameter_px)),
+            ring_thickness_px=int(config.get("ring_thickness_px", defaults.ring_thickness_px)),
+        )
+
+    def to_config(self) -> dict:
+        return {
+            "dwell_time_s": self.dwell_time_s,
+            "movement_tolerance_px": self.movement_tolerance_px,
+            "resume_time_s": self.resume_time_s,
+            "ring_color": self.ring_color,
+            "ring_diameter_px": self.ring_diameter_px,
+            "ring_thickness_px": self.ring_thickness_px,
+        }
 
 
 @dataclass(frozen=True)

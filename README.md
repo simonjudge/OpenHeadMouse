@@ -34,19 +34,28 @@ inside the configured movement tolerance (default 10 pixels) for the dwell time 
 second). A translucent red ring around the cursor fills clockwise as the dwell completes. After
 a click, the pointer must leave the activation area before another click can occur.
 
-Ticking the box only arms the feature. Dwell clicking starts when mouse control becomes active
-and stops whenever mouse control is switched off, paused by the toggle hotkey or corner
-failsafe, or suspended during initial calibration.
+Ticking the box only arms the feature. Dwell clicking starts only once the input provider is
+actually controlling the cursor (mouse control active and head data moving the pointer), not
+merely when **Start** is pressed or tracking is resumed. It stops whenever mouse control is
+switched off, paused by the toggle hotkey or corner failsafe, or suspended during initial
+calibration.
 
 If the pointer leaves an activation area and returns within the configurable resume time
 (default 0.5 seconds), progress continues from where it paused. Dwell time, movement tolerance,
 and resume time can be changed in the main window and are persisted in `config.json`.
+
+The timer ring's appearance is also configurable: **Diameter** (size of the circle, default 40
+pixels), **Thickness** (width of the timer segment, default 4 pixels), and **Colour** (click
+the swatch to open a colour picker). These are saved as `ring_diameter_px`,
+`ring_thickness_px`, and `ring_color` under `ui.dwell_click` in `config.json`, and the same
+options appear in the tray's dwell-click settings dialog.
 
 The module can also run independently of HeadMouse:
 
 ```
 python -m dwell_click
 python -m dwell_click --dwell-time 1.5 --movement-tolerance 12 --resume-time 0.75
+python -m dwell_click --diameter 60 --thickness 8 --color "#00a0ff"
 ```
 
 Both standalone mode and HeadMouse provide a cross-platform system-tray icon. Its menu starts
@@ -62,6 +71,9 @@ cursor left, look up → cursor up). A negative gain inverts that axis. If a pro
 negative gains to feel natural, its frame conversion is wrong. See
 [COORDINATE_FRAMES.md](COORDINATE_FRAMES.md) for the per-provider conversions and a checklist
 for adding a new provider.
+
+Main-window labels are kept short and related options sit side by side; hover over any
+option to see a fuller explanation.
 
 The DSP configuration supports absolute mapping and velocity mapping. The optional One Euro
 filter applies adaptive smoothing in either mode. Velocity mode also supports deadband/gamma
@@ -81,8 +93,8 @@ together:
 <recordings folder>/fitts_sessions/  Fitts' Law result files
 ```
 
-Set it from the main HeadMouse window with **Recordings Folder → Change...**, or
-**File → Set Recordings Folder...**. The choice is saved in `config.json` as
+Set it from the main HeadMouse window with **File → Set Recordings Folder...** (hover over the
+menu item to see the current folder). The choice is saved in `config.json` as
 `recorder.base_dir` and is shared with the Fitts' Law test window.
 
 If no folder has been chosen, you are asked for one the first time something is actually
@@ -212,8 +224,8 @@ and returning from a display edge. Velocity-mode settings changes preserve the c
 cursor position; pausing or disabling mouse control prevents background movement from
 accumulating into a jump on resume.
 
-In Velocity mode, **Auto-zero bias** estimates angular-rate bias after sustained low-speed
-motion; **Yaw drift correction** estimates the remaining yaw-rate bias more slowly using
+In Velocity mode, **Auto-zero** (bias) estimates angular-rate bias after sustained low-speed
+motion; **Yaw drift** (correction) estimates the remaining yaw-rate bias more slowly using
 its configured time constant. Both subtract rate estimates rather than accumulating pose
 offsets. With both disabled, only the configured deadband suppresses small movements.
 These estimates cannot distinguish sensor drift from deliberately very slow movement:

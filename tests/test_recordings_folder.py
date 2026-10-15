@@ -103,22 +103,26 @@ def test_prompt_for_base_dir_returns_none_when_cancelled(
     assert isolated_recordings_dir.real_prompt() is None
 
 
-# -- control panel ---------------------------------------------------------
+# -- main window -----------------------------------------------------------
 
-def test_control_panel_shows_the_folder_and_asks_to_change_it(qt_app):
-    panel = ControlPanel()
+def test_folder_is_shown_and_changed_from_the_file_menu_only(qt_app):
+    from gui.headmouse_gui import HeadMouseWindow
+
+    window = HeadMouseWindow(initial_kx=1.0, initial_ky=1.0)
     try:
-        assert "Not set" in panel.recordings_dir_text
+        assert not hasattr(window.controls, "set_recordings_dir")
+        assert "Not set" in window.recordings_dir_text
 
         requested = []
-        panel.recordings_dir_change_requested.connect(lambda: requested.append(True))
-        panel._recordings_dir_button.click()
+        window.recordings_folder_requested.connect(lambda: requested.append(True))
+        window._recordings_folder_action.trigger()
         assert requested == [True]
 
-        panel.set_recordings_dir(Path("/data/study"))
-        assert panel.recordings_dir_text == str(Path("/data/study"))
+        window.set_recordings_dir(Path("/data/study"))
+        assert window.recordings_dir_text == str(Path("/data/study"))
+        assert str(Path("/data/study")) in window._recordings_folder_action.toolTip()
     finally:
-        panel.close()
+        window.close()
 
 
 # -- host application ------------------------------------------------------
@@ -141,9 +145,12 @@ def _make_app(tmp_path, *, config_path, base_dir=None) -> App:
     app._last_sample = SimpleNamespace(timestamp=1.0)
     app.headmouse = SimpleNamespace(state=TrackingState.ACTIVE)
     app._recorder = SimpleNamespace(output_dir=Path(config["recorder"]["output_dir"]))
+    shown = []
     app.window = SimpleNamespace(
         controls=ControlPanel(recording_enabled=False, mouse_control_enabled=False),
         setup_panel=SimpleNamespace(request_start=lambda: None),
+        set_recordings_dir=shown.append,
+        shown_recordings_dirs=shown,
     )
     return app
 
@@ -178,7 +185,7 @@ def test_recording_prompts_for_a_folder_once_and_remembers_it(qt_app, tmp_path, 
     assert app._recordings_base_dir == chosen
     # Head sessions are redirected straight away, not just on the next run.
     assert app._recorder.output_dir == chosen / "sessions"
-    assert app.window.controls.recordings_dir_text == str(chosen)
+    assert app.window.shown_recordings_dirs[-1] == chosen
     assert json.loads(config_path.read_text())["recorder"]["base_dir"] == str(chosen)
 
     # Already answered, so starting a recording must not ask again.

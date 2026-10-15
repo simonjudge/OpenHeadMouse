@@ -24,6 +24,9 @@ class TelemetryWidget(QWidget):
         for label in (self._yaw_label, self._pitch_label, self._roll_label):
             label.setStyleSheet("font-family: monospace; font-size: 14pt;")
 
+        self._yaw_label.setToolTip("Yaw: head turn left (-) / right (+) in degrees, relative to the neutral pose.")
+        self._pitch_label.setToolTip("Pitch: head tilt up / down in degrees, relative to the neutral pose.")
+        self._roll_label.setToolTip("Roll: sideways head tilt (ear towards shoulder) in degrees.")
         box = QGroupBox("Telemetry")
         box_layout = QVBoxLayout(box)
         box_layout.addWidget(self._yaw_label)

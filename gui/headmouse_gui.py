@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QCheckBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -103,72 +104,60 @@ class HeadMouseWindow(QMainWindow):
         for name, values in ONE_EURO_PRESETS.items():
             self._filter_preset_combo.addItem(name, userData=values)
         self._select_filter_preset(filter_config)
-        self._auto_zero_check = QCheckBox("Auto-zero bias")
+        self._auto_zero_check = QCheckBox("Auto-zero")
         self._auto_zero_check.setChecked(bool(auto_zero_config.get("enabled", False)))
-        self._drift_check = QCheckBox("Yaw drift correction")
+        self._drift_check = QCheckBox("Yaw drift")
         self._drift_check.setChecked(bool(drift_config.get("enabled", False)))
 
         self._absolute_options = QGroupBox("Absolute mapping")
-        absolute_form = QFormLayout(self._absolute_options)
-        self._add_labeled_row(
-            absolute_form,
-            "Horizontal gain",
-            self._kx_spin,
-            "Pixels moved horizontally per degree of yaw. Positive values move the cursor in the direction you turn; negative values invert it.",
+        absolute_grid = self._make_pair_grid(self._absolute_options)
+        self._add_grid_field(
+            absolute_grid, 0, 0, "H gain", self._kx_spin,
+            "Horizontal gain: pixels moved horizontally per degree of yaw. Positive values move the cursor in the direction you turn; negative values invert it.",
         )
-        self._add_labeled_row(
-            absolute_form,
-            "Vertical gain",
-            self._ky_spin,
-            "Pixels moved vertically per degree of pitch. Positive values move the cursor up when you look up; negative values invert it.",
+        self._add_grid_field(
+            absolute_grid, 0, 1, "V gain", self._ky_spin,
+            "Vertical gain: pixels moved vertically per degree of pitch. Positive values move the cursor up when you look up; negative values invert it.",
         )
         self._filter_options = QGroupBox("Adaptive smoothing")
         filter_form = QFormLayout(self._filter_options)
         filter_form.addRow(self._one_euro_check)
         self._add_labeled_row(
             filter_form,
-            "Filtering level",
+            "Level",
             self._filter_preset_combo,
-            "Low is most responsive, Medium balances stability and response, and High gives the steadiest fine pointing.",
+            "Filtering level: Low is most responsive, Medium balances stability and response, and High gives the steadiest fine pointing.",
         )
 
         self._velocity_options = QGroupBox("Velocity mapping")
-        velocity_form = QFormLayout(self._velocity_options)
-        self._add_labeled_row(
-            velocity_form,
-            "Horizontal gain",
-            self._velocity_kx_spin,
-            "Scales horizontal cursor speed produced by yaw speed. Positive values move the cursor in the direction you turn; negative values invert it.",
+        velocity_grid = self._make_pair_grid(self._velocity_options)
+        self._add_grid_field(
+            velocity_grid, 0, 0, "H gain", self._velocity_kx_spin,
+            "Horizontal gain: scales horizontal cursor speed produced by yaw speed. Positive values move the cursor in the direction you turn; negative values invert it.",
         )
-        self._add_labeled_row(
-            velocity_form,
-            "Vertical gain",
-            self._velocity_ky_spin,
-            "Scales vertical cursor speed produced by pitch speed. Positive values move the cursor up when you look up; negative values invert it.",
+        self._add_grid_field(
+            velocity_grid, 0, 1, "V gain", self._velocity_ky_spin,
+            "Vertical gain: scales vertical cursor speed produced by pitch speed. Positive values move the cursor up when you look up; negative values invert it.",
         )
-        self._add_labeled_row(
-            velocity_form,
-            "Acceleration (gamma)",
-            self._gamma_spin,
-            "Controls non-linear acceleration. 1.0 is linear; values above 1 make fast head movements accelerate more strongly.",
+        self._add_grid_field(
+            velocity_grid, 1, 0, "Accel (γ)", self._gamma_spin,
+            "Acceleration (gamma): controls non-linear acceleration. 1.0 is linear; values above 1 make fast head movements accelerate more strongly.",
         )
-        self._add_labeled_row(
-            velocity_form,
-            "Deadband (deg/s)",
-            self._deadband_spin,
-            "Ignores angular speeds below this threshold to prevent small involuntary movements from moving the cursor.",
+        self._add_grid_field(
+            velocity_grid, 1, 1, "Deadband", self._deadband_spin,
+            "Deadband (deg/s): ignores angular speeds below this threshold to prevent small involuntary movements from moving the cursor.",
         )
         self._one_euro_check.setToolTip(
             "Optionally smooths absolute-mode jitter: stronger smoothing during slow movement and less during fast movement."
         )
         self._auto_zero_check.setToolTip(
-            "Learns and removes a small stationary motion bias after the head remains still."
+            "Auto-zero bias: learns and removes a small stationary motion bias after the head remains still."
         )
         self._drift_check.setToolTip(
-            "Slowly estimates and removes yaw-rate drift after sustained low-speed motion in Velocity mode."
+            "Yaw drift correction: slowly estimates and removes yaw-rate drift after sustained low-speed motion in Velocity mode."
         )
-        velocity_form.addRow(self._auto_zero_check)
-        velocity_form.addRow(self._drift_check)
+        velocity_grid.addWidget(self._auto_zero_check, 2, 0, 1, 2)
+        velocity_grid.addWidget(self._drift_check, 2, 2, 1, 2)
 
         gain_box = QGroupBox("DSP")
         gain_form = QFormLayout(gain_box)
@@ -195,12 +184,19 @@ class HeadMouseWindow(QMainWindow):
         self._update_mode_visibility()
 
         self._recenter_button = QPushButton("Recenter")
+        self._recenter_button.setToolTip(
+            "Take the current head pose as the new neutral (centre) position."
+        )
         self._recenter_button.clicked.connect(self.recenter_requested)
 
         self._status_label = QLabel("PAUSED")
+        self._status_label.setToolTip(
+            "Tracking state: ACTIVE moves the pointer, PAUSED holds it, DISABLED means no provider is running."
+        )
         self._status_label.setStyleSheet(f"font-weight: bold; color: {_STATE_COLORS['paused']};")
 
         self._hotkey_label = QLabel(f"Toggle tracking: {hotkey}")
+        self._hotkey_label.setToolTip("Press this key at any time to pause or resume pointer tracking.")
         self._hotkey_label.setStyleSheet("color: #666; font-size: 10pt;")
 
         # Recenter/status/hotkey share one compact row instead of three stacked
@@ -232,19 +228,37 @@ class HeadMouseWindow(QMainWindow):
         open_fitts_action = QAction("Open Fitts' Law Test...", self)
         open_fitts_action.triggered.connect(self.fitts_test_requested)
 
-        recordings_folder_action = QAction("Set Recordings Folder...", self)
-        recordings_folder_action.setToolTip(
-            "Choose the folder that head-movement sessions and Fitts' Law "
-            "results are saved under."
-        )
-        recordings_folder_action.triggered.connect(self.recordings_folder_requested)
+        self._recordings_folder_action = QAction("Set Recordings Folder...", self)
+        self._recordings_folder_action.triggered.connect(self.recordings_folder_requested)
+        self._recordings_dir_text = ""
+        self.set_recordings_dir(None)
 
         file_menu = self.menuBar().addMenu("File")
+        file_menu.setToolTipsVisible(True)
         file_menu.addAction(open_visualizer_action)
         file_menu.addAction(open_fitts_action)
         file_menu.addSeparator()
-        file_menu.addAction(recordings_folder_action)
+        file_menu.addAction(self._recordings_folder_action)
         self._close_action = add_close_action(self, file_menu)
+
+    _NO_RECORDINGS_DIR_TEXT = "Not set - you'll be asked when recording starts"
+
+    @property
+    def recordings_dir_text(self) -> str:
+        return self._recordings_dir_text
+
+    def set_recordings_dir(self, base_dir) -> None:
+        """Show the folder head sessions and Fitts results are written under."""
+        self._recordings_dir_text = (
+            self._NO_RECORDINGS_DIR_TEXT if base_dir is None else str(base_dir)
+        )
+        help_text = (
+            "Choose the folder that head-movement sessions and Fitts' Law results are saved "
+            "under, in its 'sessions' and 'fitts_sessions' subfolders.\n"
+            f"Current folder: {self._recordings_dir_text}"
+        )
+        self._recordings_folder_action.setToolTip(help_text)
+        self._recordings_folder_action.setStatusTip(f"Recordings folder: {self._recordings_dir_text}")
 
     def set_status(self, state_name: str) -> None:
         color = _STATE_COLORS.get(state_name, "#000000")
@@ -328,6 +342,24 @@ class HeadMouseWindow(QMainWindow):
         spin.setSingleStep(1)
         spin.setValue(round(value))
         return spin
+
+    @staticmethod
+    def _make_pair_grid(parent: QWidget) -> QGridLayout:
+        """Two label/field pairs per row."""
+        grid = QGridLayout(parent)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+        return grid
+
+    @staticmethod
+    def _add_grid_field(
+        grid: QGridLayout, row: int, column: int, text: str, field: QWidget, tooltip: str
+    ) -> None:
+        label = QLabel(text)
+        label.setToolTip(tooltip)
+        field.setToolTip(tooltip)
+        grid.addWidget(label, row, column * 2)
+        grid.addWidget(field, row, column * 2 + 1)
 
     @staticmethod
     def _add_labeled_row(form: QFormLayout, text: str, field: QWidget, tooltip: str) -> None:

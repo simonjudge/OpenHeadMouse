@@ -35,6 +35,10 @@ class SetupPanel(QWidget):
         self._provider_combo.addItem("xIMU3 (IMU)", userData="ximu3")
         if show_airpods:
             self._provider_combo.addItem("AirPods (CoreMotion)", userData="airpods")
+        self._provider_combo.setToolTip(
+            "Head-tracking input: UniFace uses the webcam, xIMU3 a head-mounted IMU"
+            + (", AirPods their motion sensors." if show_airpods else ".")
+        )
         provider_index = self._provider_combo.findData(initial_provider)
         if provider_index >= 0:
             self._provider_combo.setCurrentIndex(provider_index)
@@ -42,6 +46,8 @@ class SetupPanel(QWidget):
         self._start_button = QPushButton("Start")
         self._stop_button = QPushButton("Stop")
         self._stop_button.setEnabled(False)
+        self._start_button.setToolTip("Connect to the selected provider and start head tracking.")
+        self._stop_button.setToolTip("Stop head tracking (and save the recording if Recording is on).")
         self._close_button = QPushButton("Close")
         self._close_button.setToolTip("Close the HeadMouse setup window")
         self._close_button.clicked.connect(lambda: self.window().close())
@@ -51,9 +57,14 @@ class SetupPanel(QWidget):
 
         self._ximu3_ignore_mag_button = QPushButton("AHRS: Ignore Magnetometer (Off)")
         self._ximu3_ignore_mag_button.setCheckable(True)
+        self._ximu3_ignore_mag_button.setToolTip(
+            "Ignore the xIMU3 magnetometer in orientation estimation. Use near metal or "
+            "electronics that disturb the compass; yaw may then drift slowly."
+        )
         self._ximu3_ignore_mag_button.toggled.connect(self._on_ximu3_ignore_mag_toggled)
 
         self._ximu3_mounting_label = QLabel("Mounting:")
+        self._ximu3_mounting_label.setToolTip("How the xIMU3 sensor is worn on the head.")
         self._ximu3_mounting_combo = QComboBox()
         for name in MOUNTING_ORIENTATIONS:
             self._ximu3_mounting_combo.addItem(name, userData=name)

@@ -93,12 +93,13 @@ def test_setup_close_button_closes_its_window(qt_app):
 
 def test_setup_close_stops_input_and_saves_active_recording(qt_app, tmp_path):
     from core import quaternion_math as qm
-    from tests.test_dwell_lifecycle import make_app
+    from tests.test_dwell_lifecycle import drive_cursor, make_app
 
     app = make_app(qt_app, dwell_enabled=True)
     app._recorder.output_dir = tmp_path
     app._recorder.record_sample(0.0, qm.from_euler_zyx(0.2, 0, 0))
     app.headmouse.set_tracking_state(True)
+    drive_cursor(app)
     app.window.show()
     try:
         assert app._dwell_click.is_running

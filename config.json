@@ -9,15 +9,17 @@
   },
   "active_provider": "uniface",
   "ui": {
-    "recording_enabled": true,
-    "mouse_control_enabled": false,
+    "recording_enabled": false,
+    "mouse_control_enabled": true,
     "calibration_enabled": false,
     "dwell_click": {
-      "enabled": false,
+      "enabled": true,
       "dwell_time_s": 1.6,
       "movement_tolerance_px": 30.0,
       "resume_time_s": 0.5,
-      "ring_color": "#ff0000"
+      "ring_color": "#0055ff",
+      "ring_diameter_px": 80,
+      "ring_thickness_px": 8
     }
   },
   "calibration": {
