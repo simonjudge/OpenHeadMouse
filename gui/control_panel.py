@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from dwell_click.engine import DwellSettings
-from dwell_click.widgets import DWELL_HELP, ColorButton
+from dwell_click.widgets import DWELL_HELP, ColorButton, ContextMenuOptions, ZoomOptions
 
 
 class ControlPanel(QWidget):
@@ -108,6 +108,10 @@ class ControlPanel(QWidget):
 
         self._ring_color_button = ColorButton(dwell_config.get("ring_color", defaults.ring_color))
         self._ring_color_button.color_changed.connect(self._emit_dwell_settings)
+        self._zoom_options = ZoomOptions(dwell_config)
+        self._zoom_options.changed.connect(self._emit_dwell_settings)
+        self._context_options = ContextMenuOptions(dwell_config)
+        self._context_options.changed.connect(self._emit_dwell_settings)
 
         for control in (
             self._dwell_time_spin,
@@ -126,6 +130,9 @@ class ControlPanel(QWidget):
         layout.addWidget(self._dwell_check, 1, 1)
 
         dwell_box = QGroupBox("Dwell Click Settings")
+        self._dwell_settings_box = dwell_box
+        dwell_box.setVisible(self.dwell_click_enabled)
+        self._dwell_check.toggled.connect(dwell_box.setVisible)
         dwell_grid = QGridLayout(dwell_box)
         dwell_grid.setColumnStretch(1, 1)
         dwell_grid.setColumnStretch(3, 1)
@@ -142,6 +149,8 @@ class ControlPanel(QWidget):
             field.setToolTip(DWELL_HELP[key])
             dwell_grid.addWidget(label, row, column * 2)
             dwell_grid.addWidget(field, row, column * 2 + 1)
+        dwell_grid.addWidget(self._zoom_options, 3, 0, 1, 4)
+        dwell_grid.addWidget(self._context_options, 4, 0, 1, 4)
 
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(box)
@@ -172,12 +181,16 @@ class ControlPanel(QWidget):
             "ring_diameter_px": self._ring_diameter_spin.value(),
             "ring_thickness_px": self._ring_thickness_spin.value(),
             "ring_color": self._ring_color_button.color,
+            **self._zoom_options.values(),
+            **self._context_options.values(),
         }
 
     def _emit_dwell_settings(self, *_args) -> None:
         self.dwell_settings_changed.emit(self.dwell_settings)
 
     def set_dwell_settings(self, values: dict) -> None:
+        self._zoom_options.set_values(values)
+        self._context_options.set_values(values)
         for control, key in (
             (self._dwell_time_spin, "dwell_time_s"),
             (self._movement_tolerance_spin, "movement_tolerance_px"),
@@ -205,3 +218,4 @@ class ControlPanel(QWidget):
         blocked = self._dwell_check.blockSignals(True)
         self._dwell_check.setChecked(enabled)
         self._dwell_check.blockSignals(blocked)
+        self._dwell_settings_box.setVisible(enabled)

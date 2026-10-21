@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -195,9 +196,11 @@ def _make_tracking_app(*, recording: bool, mouse_control: bool) -> App:
     app._calibrating = False
     app._ximu_waiting_to_start = False
     app._last_sample = SimpleNamespace(timestamp=1.0)
-    # No config path, so the recordings folder is never asked about here.
+    # The recordings folder is covered in test_recordings_folder; here it is
+    # simply already chosen and ready.
     app._config_path = None
-    app._recordings_base_dir = None
+    app._recordings_base_dir = Path("study")
+    app.ensure_recordings_base_dir = lambda prompt=True: app._recordings_base_dir
     app.headmouse = SimpleNamespace(state=TrackingState.ACTIVE)
     app.window = SimpleNamespace(
         controls=ControlPanel(

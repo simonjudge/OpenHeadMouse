@@ -54,6 +54,39 @@ def test_ticking_dwell_box_does_not_start_dwell_clicking(qt_app):
         app.shutdown()
 
 
+def test_pointer_movement_does_not_require_dwell_clicking(qt_app, monkeypatch):
+    app = make_app(qt_app, dwell_enabled=False)
+    monkeypatch.setattr(app.dsp, "process", lambda *args, **kwargs: (300.0, 200.0))
+    try:
+        app.headmouse.set_tracking_state(True)
+        drive_cursor(app)
+        assert app.headmouse._mouse.position == (300.0, 200.0)
+        assert not app._dwell_click.is_running
+    finally:
+        app.shutdown()
+
+
+def test_blocked_pointer_movement_pauses_tracking_and_warns(qt_app, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from core.headmouse import TrackingState
+
+    app = make_app(qt_app, dwell_enabled=False)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+
+    def blocked(*args):
+        raise OSError("Windows blocked pointer movement")
+
+    monkeypatch.setattr(app.headmouse, "process_target", blocked)
+    try:
+        app.headmouse.set_tracking_state(True)
+        drive_cursor(app)
+        assert app.headmouse.state == TrackingState.PAUSED
+        assert warnings == ["Windows blocked pointer movement"]
+        assert not app._dwell_click.is_running
+    finally:
+        app.shutdown()
+
 def test_dwell_starts_with_mouse_control_and_stops_when_paused(qt_app):
     app = make_app(qt_app, dwell_enabled=True)
     try:

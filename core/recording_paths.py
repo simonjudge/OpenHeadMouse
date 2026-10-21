@@ -16,6 +16,7 @@ asked once per machine even when the Fitts test is run on its own.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 HEAD_SESSIONS_SUBDIR = "sessions"
@@ -92,12 +93,64 @@ def save_base_dir(base_dir: str | Path, config_path: str | Path | None = None) -
     return True
 
 
-def prompt_for_base_dir(parent=None, reason: str = "") -> Path | None:
+def prompt_for_base_dir(parent=None, reason: str = "", start_dir=None) -> Path | None:
     """Ask for the base folder; returns None if the user cancelled."""
     from PySide6.QtWidgets import QFileDialog
 
     title = "Choose a folder for HeadMouse recordings"
     if reason:
         title = f"{title} ({reason})"
-    chosen = QFileDialog.getExistingDirectory(parent, title, str(Path.home()))
+    start = Path(start_dir) if start_dir is not None else Path.home()
+    while not start.is_dir() and start.parent != start:
+        start = start.parent
+    chosen = QFileDialog.getExistingDirectory(parent, title, str(start))
     return Path(chosen) if chosen else None
+
+
+def prepare_base_dir(base_dir: str | Path) -> str | None:
+    """Create the base folder and its subfolders and check they are writable.
+
+    Returns None when recordings can be saved there, otherwise the reason
+    they can't, so nothing is recorded into a folder that would lose it.
+    """
+    try:
+        for folder in (head_sessions_dir(base_dir), fitts_sessions_dir(base_dir)):
+            folder.mkdir(parents=True, exist_ok=True)
+            probe = folder / f".headmouse_write_test_{os.getpid()}"
+            probe.write_bytes(b"")
+            probe.unlink()
+    except OSError as exc:
+        return str(exc) or exc.__class__.__name__
+    return None
+
+
+def warn_unusable_base_dir(parent, base_dir, problem: str) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    QMessageBox.warning(
+        parent,
+        "Recordings folder can't be used",
+        f"Recordings can't be saved in:\n{base_dir}\n\n{problem}\n\nPlease choose another folder.",
+    )
+
+
+def ensure_usable_base_dir(current, parent=None, reason: str = "") -> Path | None:
+    """A base folder that exists and is writable, asking for one if needed.
+
+    `current` is used when it can be prepared; otherwise (unset, missing
+    drive, no permission) the user is asked until a usable folder is chosen.
+    Returns None only when the user cancels.
+    """
+    if current is not None:
+        problem = prepare_base_dir(current)
+        if problem is None:
+            return Path(current)
+        warn_unusable_base_dir(parent, current, problem)
+    while True:
+        chosen = prompt_for_base_dir(parent, reason)
+        if chosen is None:
+            return None
+        problem = prepare_base_dir(chosen)
+        if problem is None:
+            return chosen
+        warn_unusable_base_dir(parent, chosen, problem)

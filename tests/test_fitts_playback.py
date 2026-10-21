@@ -252,6 +252,87 @@ def test_synchronised_playback_shares_one_clock(qt_app):
         viewer.close()
 
 
+def test_synchronised_playback_tiles_by_default_and_from_either_file_menu(qt_app, monkeypatch):
+    from session_viewer import session_viewer
+
+    head = _head_samples([999.0 + 0.1 * i for i in range(40)])
+    logger = FittsResultsLogger()
+    logger.trials = _fitts_trials(1000.0)
+    viewer = session_viewer.SessionVisualizerWindow()
+    viewer.show()
+    tiled = []
+    monkeypatch.setattr(session_viewer, "tile_side_by_side", lambda *args: tiled.append(args))
+    fitts_window = None
+    try:
+        fitts_window = viewer.open_synchronised(head, None, "head", logger, "fitts")
+        assert tiled == [(viewer, fitts_window, viewer.screen())]
+
+        head_screen, fitts_screen = object(), object()
+        monkeypatch.setattr(viewer, "screen", lambda: head_screen)
+        monkeypatch.setattr(fitts_window, "screen", lambda: fitts_screen)
+        for window, screen in ((viewer, head_screen), (fitts_window, fitts_screen)):
+            menu = window.menuBar().actions()[0].menu()
+            menu.aboutToShow.emit()
+            assert window._tile_windows_action in menu.actions()
+            assert window._tile_windows_action.isEnabled()
+            window._tile_windows_action.trigger()
+            assert tiled[-1] == (viewer, fitts_window, screen)
+
+        viewer.close()
+        fitts_window.menuBar().actions()[0].menu().aboutToShow.emit()
+        assert not fitts_window._tile_windows_action.isEnabled()
+        viewer.show()
+        fitts_window.close()
+        viewer.menuBar().actions()[0].menu().aboutToShow.emit()
+        assert not viewer._tile_windows_action.isEnabled()
+    finally:
+        if fitts_window is not None:
+            fitts_window.close()
+        viewer.close()
+
+
+def test_tiling_restores_windows_and_uses_requested_screen_available_area():
+    from types import SimpleNamespace
+    from PySide6.QtCore import QRect
+    from session_viewer.session_viewer import tile_side_by_side
+
+    class Window:
+        def __init__(self):
+            self.restored = False
+            self.raised = False
+            self.geometry = None
+
+        def showNormal(self):
+            self.restored = True
+
+        def setGeometry(self, *geometry):
+            assert self.restored
+            self.geometry = geometry
+
+        def raise_(self):
+            self.raised = True
+
+    left, right = Window(), Window()
+    screen = SimpleNamespace(availableGeometry=lambda: QRect(-1920, 40, 1919, 1040))
+    tile_side_by_side(left, right, screen)
+    assert left.geometry == (-1920, 40, 959, 1040)
+    assert right.geometry == (-961, 40, 960, 1040)
+    assert left.raised and right.raised
+
+
+def test_tiling_is_disabled_without_a_partner(qt_app):
+    from session_viewer.fitts_playback import FittsPlaybackWindow
+    from session_viewer.session_viewer import SessionVisualizerWindow
+
+    for window_type in (SessionVisualizerWindow, FittsPlaybackWindow):
+        window = window_type()
+        try:
+            window.menuBar().actions()[0].menu().aboutToShow.emit()
+            assert not window._tile_windows_action.isEnabled()
+        finally:
+            window.close()
+
+
 def test_refused_sync_can_open_fitts_on_its_own(qt_app, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 

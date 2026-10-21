@@ -269,6 +269,11 @@ class SessionVisualizerWindow(QMainWindow):
         file_menu.addAction(open_action)
         file_menu.addAction(open_sync_action)
         file_menu.addAction(open_fitts_action)
+        self._tile_windows_action = QAction("Tile Windows Side by Side", self)
+        self._tile_windows_action.setEnabled(False)
+        self._tile_windows_action.triggered.connect(self._on_tile_windows)
+        file_menu.addAction(self._tile_windows_action)
+        file_menu.aboutToShow.connect(self._update_tile_windows_action)
 
         toolbar = QToolBar("Main")
         toolbar.setMovable(False)
@@ -547,12 +552,28 @@ class SessionVisualizerWindow(QMainWindow):
         from session_viewer.fitts_playback import FittsPlaybackWindow
 
         window = FittsPlaybackWindow()
+        window._head_window = self
         window.load_fitts_session(logger.trials, logger.metadata, name)
         if head_samples:
             window.set_head_session_samples(head_samples)
         window.show()
         self._fitts_windows = [w for w in self._fitts_windows if w.isVisible()] + [window]
+        self._update_tile_windows_action()
+        window._update_tile_windows_action()
         return window
+
+    def _tile_partner(self):
+        if self._linked_fitts_window is not None and self._linked_fitts_window.isVisible():
+            return self._linked_fitts_window
+        return next((w for w in reversed(self._fitts_windows) if w.isVisible()), None)
+
+    def _update_tile_windows_action(self) -> None:
+        self._tile_windows_action.setEnabled(self._tile_partner() is not None)
+
+    def _on_tile_windows(self) -> None:
+        partner = self._tile_partner()
+        if partner is not None:
+            tile_side_by_side(self, partner, self.screen())
 
     def _on_open_synchronised(self):
         """File > Open Synchronised Playback: a head session plus a Fitts session on one clock."""
@@ -600,7 +621,11 @@ class SessionVisualizerWindow(QMainWindow):
                 f"{result.reason}\n\nOpen the Fitts session for playback on its own?",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
             )
-            return self._open_fitts_window(logger, fitts_name, samples) if answer == QMessageBox.Yes else None
+            if answer != QMessageBox.Yes:
+                return None
+            fitts_window = self._open_fitts_window(logger, fitts_name, samples)
+            tile_side_by_side(self, fitts_window, self.screen())
+            return fitts_window
 
         self.load_session(
             trimmed, f"Session - {head_name}", recorder=recorder,
@@ -613,6 +638,7 @@ class SessionVisualizerWindow(QMainWindow):
         self._linked_fitts_window = fitts_window
         shared.set_range(t0, t1)
         self.setWindowTitle(f"Session Visualizer - {head_name} ⇄ {fitts_name} (synchronised)")
+        tile_side_by_side(self, fitts_window, self.screen())
         return fitts_window
 
     def _attach_clock(self, clock: PlaybackClock, frame_times) -> None:
@@ -774,8 +800,12 @@ def tile_side_by_side(left_window, right_window, screen=None) -> None:
         return
     area = screen.availableGeometry()
     half = area.width() // 2
+    left_window.showNormal()
+    right_window.showNormal()
     left_window.setGeometry(area.left(), area.top(), half, area.height())
     right_window.setGeometry(area.left() + half, area.top(), area.width() - half, area.height())
+    left_window.raise_()
+    right_window.raise_()
 
 
 def open_synchronised_playback(head_path, fitts_path, screen=None, parent=None):
@@ -827,14 +857,6 @@ def visualize_session_native(recorded_samples: list | None = None, session_name:
 
 
 if __name__ == '__main__':
-    """Standalone mode - opens empty; use File > Open Session to load a recording."""
-    from PySide6.QtWidgets import QApplication
+    from session_viewer.__main__ import main
 
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication(sys.argv)
-
-    window = SessionVisualizerWindow()
-    window.show()
-
-    sys.exit(app.exec())
+    raise SystemExit(main())

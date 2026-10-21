@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+from importlib.util import find_spec
 from pathlib import Path
 
 import numpy as np
@@ -303,6 +304,10 @@ class App:
             initial_dsp_config=active_dsp_config,
             initial_provider=config.get("active_provider", "uniface"),
             initial_ui_config=config.get("ui", {}),
+            research_tools_enabled=all(
+                find_spec(module) is not None
+                for module in ("fitts_law", "session_viewer")
+            ),
         )
         self.headmouse.add_state_callback(
             lambda state: self.window.tracking_state_changed.emit(state.value)
@@ -403,24 +408,25 @@ class App:
         return Path(self._config["recorder"]["output_dir"])
 
     def ensure_recordings_base_dir(self, prompt: bool = True) -> Path | None:
-        """The base folder for recordings, asking for one the first time.
+        """The base folder for recordings, made ready before anything is recorded.
 
-        Returns None only when the user declines to choose one, in which case
-        the legacy ``recorder.output_dir`` default is used instead.
+        With `prompt`, the folder and its subfolders are created and checked
+        to be writable, asking for another folder when it is unset or
+        unusable; None means the user cancelled, so nothing must be recorded.
+        Without `prompt` the configured folder is only read (None if unset).
         """
-        if self._recordings_base_dir is not None:
-            return self._recordings_base_dir
         if not prompt:
-            return None
+            return self._recordings_base_dir
 
-        chosen = recording_paths.prompt_for_base_dir(
-            self.window, "needed before anything can be recorded"
+        ready = recording_paths.ensure_usable_base_dir(
+            self._recordings_base_dir, self.window, "needed before anything can be recorded"
         )
-        if chosen is None:
-            print("[HeadMouse] No recordings folder chosen; using the default folder")
+        if ready is None:
+            print("[HeadMouse] No usable recordings folder chosen; nothing will be recorded")
             return None
-        self.set_recordings_base_dir(chosen)
-        return chosen
+        if ready != self._recordings_base_dir:
+            self.set_recordings_base_dir(ready)
+        return ready
 
     def set_recordings_base_dir(self, base_dir) -> None:
         """Save the base folder and point this run's recordings at it."""
@@ -439,17 +445,36 @@ class App:
         print(f"[HeadMouse] Recordings folder set to {base_dir}")
 
     def _on_choose_recordings_dir(self) -> None:
-        chosen = recording_paths.prompt_for_base_dir(
-            self.window, "head sessions and Fitts results are saved here"
+        while True:
+            chosen = recording_paths.prompt_for_base_dir(
+                self.window,
+                "head sessions and Fitts results are saved here",
+                start_dir=self._recordings_base_dir,
+            )
+            if chosen is None:
+                return
+            problem = recording_paths.prepare_base_dir(chosen)
+            if problem is None:
+                break
+            recording_paths.warn_unusable_base_dir(self.window, chosen, problem)
+        self.set_recordings_base_dir(chosen)
+
+    def _warn_no_recordings_dir(self, what: str) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        QMessageBox.warning(
+            self.window,
+            "No recordings folder",
+            f"Recording is switched on but no usable recordings folder was chosen, so {what}.\n\n"
+            "Choose one with File > Set Recordings Folder..., or switch Recording off.",
         )
-        if chosen is not None:
-            self.set_recordings_base_dir(chosen)
 
     def _on_start_requested(self, provider_name: str) -> None:
-        if self.window.controls.recording_enabled:
-            # Ask before the provider starts, so the first session of a run
-            # cannot be written to the wrong place.
-            self.ensure_recordings_base_dir()
+        if self.window.controls.recording_enabled and self.ensure_recordings_base_dir() is None:
+            # Starting anyway would record head movement that can't be saved.
+            self.window.setup_panel.reset_to_stopped()
+            self._warn_no_recordings_dir("tracking was not started")
+            return
         try:
             # Special handling for xIMU3: show device discovery dialog
             if provider_name == "ximu3":
@@ -639,12 +664,41 @@ class App:
         # Save the recording if anything was recorded
         filepath = None
         if self._recorder.has_samples or self._recorder.has_calibration:
-            filepath = self._recorder.save()
-            print(f"Session saved to {filepath}")
+            filepath = self._save_recording()
+            if filepath is not None:
+                print(f"Session saved to {filepath}")
         # Each start/stop run is its own session file; without this, every
         # save re-wrote all data since launch (mixing providers' clocks).
         self._recorder.clear()
         return filepath
+
+    def _save_recording(self) -> Path | None:
+        """Save the head session, asking for another folder rather than losing it."""
+        from PySide6.QtWidgets import QMessageBox
+
+        while True:
+            try:
+                return self._recorder.save()
+            except OSError as exc:
+                recording_paths.warn_unusable_base_dir(
+                    self.window, self._recorder.output_dir, str(exc) or exc.__class__.__name__
+                )
+            chosen = recording_paths.ensure_usable_base_dir(
+                None, self.window, "the head-movement session could not be saved"
+            )
+            if chosen is not None:
+                self.set_recordings_base_dir(chosen)
+                continue
+            answer = QMessageBox.question(
+                self.window,
+                "Discard head-movement session?",
+                "The head-movement session has not been saved. Discard it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                print("[HeadMouse] Head-movement session discarded (not saved)")
+                return None
 
     # -- external tracking control -----------------------------------------
 
@@ -674,12 +728,16 @@ class App:
         if on_ready is not None:
             self._tracking_ready_callbacks.append(on_ready)
 
+        if recording and self.ensure_recordings_base_dir() is None:
+            self._tracking_ready_callbacks = [
+                cb for cb in self._tracking_ready_callbacks if cb is not on_ready
+            ]
+            self._warn_no_recordings_dir("head tracking was not started")
+            return False
         if recording and not self.window.controls.recording_enabled:
             # Without this the tracker would run but nothing would be saved.
             self.window.controls.set_recording_enabled(True)
             print("[HeadMouse] Recording enabled so head movement is saved")
-        if recording:
-            self.ensure_recordings_base_dir()
 
         if self.window.controls.mouse_control_enabled != mouse_control:
             # Without this the tracker would run but nothing would move the
@@ -1018,7 +1076,7 @@ class App:
         self.dsp.recenter(quaternion)
         self._last_target = None
         if self.window.controls.mouse_control_enabled:
-            self.headmouse.process_target(
+            self._move_pointer(
                 self.dsp.origin_x + self.dsp.screen_width / 2.0,
                 self.dsp.origin_y + self.dsp.screen_height / 2.0,
                 timestamp,
@@ -1029,6 +1087,17 @@ class App:
             data["source"] = source
         self._recorder.record_event(timestamp, "recenter", data)
         print(f"✓ Recentered at {timestamp:.3f}s")
+
+    def _move_pointer(self, x: float, y: float, timestamp: float) -> bool:
+        try:
+            self.headmouse.process_target(x, y, timestamp)
+        except OSError as exc:
+            from PySide6.QtWidgets import QMessageBox
+
+            self.headmouse.set_tracking_state(False)
+            QMessageBox.warning(self.window, "Pointer movement blocked", str(exc))
+            return False
+        return True
 
     # -- initial calibration ---------------------------------------------------
     def _begin_calibration(self) -> None:
@@ -1265,9 +1334,12 @@ class App:
         self.window.set_dsp_config(profile)
 
     def _on_recording_toggled(self, enabled: bool) -> None:
+        if enabled and self.ensure_recordings_base_dir() is None:
+            # Recording is only left on once there is somewhere to save it.
+            print("[HeadMouse] Recording switched off: no recordings folder chosen")
+            self.window.controls.set_recording_enabled(False)
+            return
         self._config.setdefault("ui", {})["recording_enabled"] = enabled
-        if enabled:
-            self.ensure_recordings_base_dir()
         self._persist_config()
 
     def _on_mouse_control_toggled(self, enabled: bool) -> None:
@@ -1515,7 +1587,8 @@ class App:
             # if self._poll_count % 10 == 0:
             #     print(f"[Poll] yaw={yaw_deg:+7.1f}° target=({target_x:7.1f}, {target_y:7.1f}) screen=({self.dsp.screen_width}, {self.dsp.screen_height})")
 
-            self.headmouse.process_target(target_x, target_y, sample.timestamp)
+            if not self._move_pointer(target_x, target_y, sample.timestamp):
+                return
             self._last_target = (target_x, target_y)
             if self.headmouse.state == TrackingState.ACTIVE:
                 self._set_cursor_driven(True)

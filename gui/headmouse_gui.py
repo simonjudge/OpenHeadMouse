@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QScrollArea,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -55,6 +56,7 @@ class HeadMouseWindow(QMainWindow):
         initial_dsp_config: dict | None = None,
         initial_provider: str = "uniface",
         initial_ui_config: dict | None = None,
+        research_tools_enabled: bool = True,
         parent=None,
     ):
         super().__init__(parent)
@@ -62,7 +64,7 @@ class HeadMouseWindow(QMainWindow):
         self.setWindowTitle("HeadMouse")
         self.tracking_state_changed.connect(self.set_status)
 
-        self._create_menu()
+        self._create_menu(research_tools_enabled)
 
         ui_config = initial_ui_config or {}
         self.setup_panel = SetupPanel(initial_provider=initial_provider)
@@ -109,7 +111,8 @@ class HeadMouseWindow(QMainWindow):
         self._drift_check = QCheckBox("Yaw drift")
         self._drift_check.setChecked(bool(drift_config.get("enabled", False)))
 
-        self._absolute_options = QGroupBox("Absolute mapping")
+        gain_box = QGroupBox("DSP", self)
+        self._absolute_options = QGroupBox("Absolute mapping", gain_box)
         absolute_grid = self._make_pair_grid(self._absolute_options)
         self._add_grid_field(
             absolute_grid, 0, 0, "H gain", self._kx_spin,
@@ -119,7 +122,7 @@ class HeadMouseWindow(QMainWindow):
             absolute_grid, 0, 1, "V gain", self._ky_spin,
             "Vertical gain: pixels moved vertically per degree of pitch. Positive values move the cursor up when you look up; negative values invert it.",
         )
-        self._filter_options = QGroupBox("Adaptive smoothing")
+        self._filter_options = QGroupBox("Adaptive smoothing", gain_box)
         filter_form = QFormLayout(self._filter_options)
         filter_form.addRow(self._one_euro_check)
         self._add_labeled_row(
@@ -129,7 +132,7 @@ class HeadMouseWindow(QMainWindow):
             "Filtering level: Low is most responsive, Medium balances stability and response, and High gives the steadiest fine pointing.",
         )
 
-        self._velocity_options = QGroupBox("Velocity mapping")
+        self._velocity_options = QGroupBox("Velocity mapping", gain_box)
         velocity_grid = self._make_pair_grid(self._velocity_options)
         self._add_grid_field(
             velocity_grid, 0, 0, "H gain", self._velocity_kx_spin,
@@ -159,7 +162,9 @@ class HeadMouseWindow(QMainWindow):
         velocity_grid.addWidget(self._auto_zero_check, 2, 0, 1, 2)
         velocity_grid.addWidget(self._drift_check, 2, 2, 1, 2)
 
-        gain_box = QGroupBox("DSP")
+        self._dsp_box = gain_box
+        gain_box.setVisible(self.controls.mouse_control_enabled)
+        self.controls.mouse_control_toggled.connect(gain_box.setVisible)
         gain_form = QFormLayout(gain_box)
         self._add_labeled_row(
             gain_form,
@@ -199,9 +204,6 @@ class HeadMouseWindow(QMainWindow):
         self._hotkey_label.setToolTip("Press this key at any time to pause or resume pointer tracking.")
         self._hotkey_label.setStyleSheet("color: #666; font-size: 10pt;")
 
-        # Recenter/status/hotkey share one compact row instead of three stacked
-        # widgets so the telemetry readout below always has room and never
-        # gets pushed off the bottom of the window.
         status_row = QHBoxLayout()
         status_row.setContentsMargins(0, 0, 0, 0)
         status_row.addWidget(self._recenter_button)
@@ -213,32 +215,52 @@ class HeadMouseWindow(QMainWindow):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
         layout.addWidget(self.setup_panel)
-        layout.addWidget(self.controls)
-        layout.addWidget(gain_box)
+        options = QWidget()
+        options_layout = QHBoxLayout(options)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        options_layout.addWidget(self.controls, 1, Qt.AlignTop)
+        mouse_options = QVBoxLayout()
+        mouse_options.addWidget(gain_box)
+        mouse_options.addWidget(self.telemetry)
+        mouse_options.addStretch()
+        options_layout.addLayout(mouse_options, 1)
+        self._options_scroll = QScrollArea()
+        self._options_scroll.setWidgetResizable(True)
+        self._options_scroll.setWidget(options)
+        layout.addWidget(self._options_scroll, 1)
         layout.addLayout(status_row)
-        layout.addWidget(self.telemetry)
         self.setCentralWidget(central)
+        screen = self.screen()
+        area = screen.availableGeometry() if screen is not None else None
+        self.resize(
+            min(1000, max(1, area.width() - 40)) if area is not None else 1000,
+            min(740, max(1, area.height() - 60)) if area is not None else 740,
+        )
 
-    def _create_menu(self) -> None:
+    def _create_menu(self, research_tools_enabled: bool) -> None:
         from gui.window_actions import add_close_action
-
-        open_visualizer_action = QAction("Open Session Viewer...", self)
-        open_visualizer_action.triggered.connect(self.load_session_requested)
-
-        open_fitts_action = QAction("Open Fitts' Law Test...", self)
-        open_fitts_action.triggered.connect(self.fitts_test_requested)
 
         self._recordings_folder_action = QAction("Set Recordings Folder...", self)
         self._recordings_folder_action.triggered.connect(self.recordings_folder_requested)
+        # Read-only line under it, so the folder in use is visible at a glance.
+        self._recordings_folder_info_action = QAction("", self)
+        self._recordings_folder_info_action.setEnabled(False)
         self._recordings_dir_text = ""
         self.set_recordings_dir(None)
 
         file_menu = self.menuBar().addMenu("File")
         file_menu.setToolTipsVisible(True)
-        file_menu.addAction(open_visualizer_action)
-        file_menu.addAction(open_fitts_action)
-        file_menu.addSeparator()
+        if research_tools_enabled:
+            open_visualizer_action = QAction("Open Session Viewer...", self)
+            open_visualizer_action.triggered.connect(self.load_session_requested)
+            file_menu.addAction(open_visualizer_action)
+
+            open_fitts_action = QAction("Open Fitts' Law Test...", self)
+            open_fitts_action.triggered.connect(self.fitts_test_requested)
+            file_menu.addAction(open_fitts_action)
+            file_menu.addSeparator()
         file_menu.addAction(self._recordings_folder_action)
+        file_menu.addAction(self._recordings_folder_info_action)
         self._close_action = add_close_action(self, file_menu)
 
     _NO_RECORDINGS_DIR_TEXT = "Not set - you'll be asked when recording starts"
@@ -259,6 +281,7 @@ class HeadMouseWindow(QMainWindow):
         )
         self._recordings_folder_action.setToolTip(help_text)
         self._recordings_folder_action.setStatusTip(f"Recordings folder: {self._recordings_dir_text}")
+        self._recordings_folder_info_action.setText(f"    Saving to: {self._recordings_dir_text}")
 
     def set_status(self, state_name: str) -> None:
         color = _STATE_COLORS.get(state_name, "#000000")

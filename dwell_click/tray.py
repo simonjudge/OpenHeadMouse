@@ -45,6 +45,10 @@ class DwellTray(QObject):
         self._settings_dialog: DwellSettingsDialog | None = None
 
         self.icon = QSystemTrayIcon(_make_tray_icon(), self)
+        if hasattr(service, "error_occurred"):
+            service.error_occurred.connect(self._show_error)
+        if hasattr(service, "running_changed"):
+            service.running_changed.connect(lambda _running: self._update_toggle_text())
         self.icon.setToolTip("Dwell Click")
         self.menu = QMenu()
         self.toggle_action = QAction(self.menu)
@@ -56,9 +60,17 @@ class DwellTray(QObject):
         quit_action = self.menu.addAction("Quit")
         quit_action.triggered.connect(self._quit)
         self.icon.setContextMenu(self.menu)
+        self.icon.activated.connect(self._activated)
         self.menu.aboutToShow.connect(self._update_toggle_text)
         self._update_toggle_text()
         self.icon.show()
+
+    def _activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self.show_settings()
+
+    def _show_error(self, message: str) -> None:
+        self.icon.showMessage("Dwell Click", message, QSystemTrayIcon.MessageIcon.Warning)
 
     def set_settings(self, settings: DwellSettings) -> None:
         self._settings = settings
@@ -70,6 +82,8 @@ class DwellTray(QObject):
             return
         dialog = DwellSettingsDialog(self._settings)
         self._settings_dialog = dialog
+        dialog.set_running(self._is_active())
+        dialog.toggle_requested.connect(self._toggle)
         dialog.settings_applied.connect(self._settings_applied)
         dialog.finished.connect(lambda _result: self._clear_dialog(dialog))
         dialog.show()
@@ -77,6 +91,9 @@ class DwellTray(QObject):
         dialog.activateWindow()
 
     def _settings_applied(self, values: dict) -> None:
+        if self._settings_dialog is not None:
+            self._settings_dialog._zoom_options.set_values(values)
+            self._settings_dialog._context_options.set_values(values)
         if self._on_settings_changed is not None:
             self._on_settings_changed(values)
 
@@ -85,17 +102,23 @@ class DwellTray(QObject):
             self._settings_dialog = None
 
     def _toggle(self) -> None:
-        if self._service.is_running:
+        if self._is_active():
             self._service.stop()
         else:
+            # Also resumes a service paused from the click menu.
             self._service.start()
         if self._on_toggled is not None:
             self._on_toggled(self._service.is_running)
         self._update_toggle_text()
 
+    def _is_active(self) -> bool:
+        return getattr(self._service, "is_active", self._service.is_running)
+
     def _update_toggle_text(self) -> None:
+        if self._settings_dialog is not None:
+            self._settings_dialog.set_running(self._is_active())
         self.toggle_action.setText(
-            "Stop Dwell Clicking" if self._service.is_running else "Start Dwell Clicking"
+            "Stop Dwell Clicking" if self._is_active() else "Start Dwell Clicking"
         )
 
     def _quit(self) -> None:

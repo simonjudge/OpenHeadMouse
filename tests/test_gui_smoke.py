@@ -41,6 +41,34 @@ def test_setup_panel_start_stop_signals(qt_app):
     assert not panel._stop_button.isEnabled()
 
 
+def test_headmouse_only_menu_hides_research_tools(qt_app):
+    from gui.headmouse_gui import HeadMouseWindow
+
+    window = HeadMouseWindow(
+        initial_kx=1.0,
+        initial_ky=1.0,
+        research_tools_enabled=False,
+    )
+
+    file_menu = window.menuBar().actions()[0].menu()
+    action_texts = [action.text() for action in file_menu.actions()]
+    assert "Open Session Viewer..." not in action_texts
+    assert "Open Fitts' Law Test..." not in action_texts
+    assert "Set Recordings Folder..." in action_texts
+    assert "Close" in action_texts
+
+
+def test_full_menu_includes_research_tools(qt_app):
+    from gui.headmouse_gui import HeadMouseWindow
+
+    window = HeadMouseWindow(initial_kx=1.0, initial_ky=1.0)
+
+    file_menu = window.menuBar().actions()[0].menu()
+    action_texts = [action.text() for action in file_menu.actions()]
+    assert "Open Session Viewer..." in action_texts
+    assert "Open Fitts' Law Test..." in action_texts
+
+
 def test_setup_panel_only_shows_airpods_when_enabled(qt_app):
     from gui.setup_gui import SetupPanel
 
@@ -241,6 +269,28 @@ def test_telemetry_widget_updates_labels(qt_app):
     widget.update_angles(12.3, -4.5, 0.0)
     assert "12.3" in widget._yaw_label.text()
     assert "-4.5" in widget._pitch_label.text()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_dsp_visibility_follows_mouse_control_without_losing_settings(qt_app, enabled):
+    from gui.headmouse_gui import HeadMouseWindow
+
+    window = HeadMouseWindow(
+        initial_kx=21, initial_ky=-17,
+        initial_ui_config={"mouse_control_enabled": enabled},
+    )
+    try:
+        window.show()
+        assert window._dsp_box.isVisible() is enabled
+        window.controls._mouse_check.setChecked(not enabled)
+        assert window._dsp_box.isVisible() is not enabled
+        window.controls.set_mouse_control_enabled(enabled)
+        assert window._dsp_box.isVisible() is enabled
+        assert window._kx_spin.value() == 21
+        assert window._ky_spin.value() == -17
+        assert window.controls._mouse_check.isVisible()
+    finally:
+        window.close()
 
 
 def test_headmouse_window_builds_and_reports_status(qt_app):

@@ -41,10 +41,11 @@ def isolated_recordings_dir(tmp_path, monkeypatch):
         lambda: tmp_path / "recordings_config" / "config.json",
     )
     # A real folder chooser is modal and would hang the suite, so it is
-    # stubbed out as "cancelled" unless a test replaces it.
+    # stubbed to pick a temporary folder unless a test replaces it.
     real_prompt = recording_paths.prompt_for_base_dir
     monkeypatch.setattr(
-        recording_paths, "prompt_for_base_dir", lambda parent=None, reason="": None
+        recording_paths,
+        "prompt_for_base_dir",
+        lambda parent=None, reason="", **_: tmp_path / "recordings",
     )
     return SimpleNamespace(real_prompt=real_prompt)
-

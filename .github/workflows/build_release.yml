@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.platform }}
+    name: Build ${{ matrix.platform }} editions
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -16,19 +16,10 @@ jobs:
         include:
           - os: windows-latest
             platform: Windows
-            binary_asset_name: OpenHeadMouse-windows-amd64.exe
-            binary_exec_path: dist/OpenHeadMouse.exe
-            installer_asset_name: OpenHeadMouse-windows-amd64-setup.exe
           - os: ubuntu-latest
             platform: Linux
-            binary_asset_name: OpenHeadMouse-linux-amd64
-            binary_exec_path: dist/OpenHeadMouse
-            installer_asset_name: OpenHeadMouse-linux-amd64.deb
           - os: macos-latest
             platform: macOS
-            binary_asset_name: OpenHeadMouse-macos-universal
-            binary_exec_path: dist/OpenHeadMouse
-            installer_asset_name: OpenHeadMouse-macos-universal.dmg
 
     steps:
       - name: Checkout Repository
@@ -69,100 +60,280 @@ jobs:
             https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
           python -c "import hashlib, pathlib; p = pathlib.Path('models/face_landmarker.task'); actual = hashlib.sha256(p.read_bytes()).hexdigest(); expected = '64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff'; assert actual == expected, f'FaceLandmarker model checksum mismatch: {actual}'"
 
-      - name: Build Executable with PyInstaller
+      - name: Download Session Viewer Mesh
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            pyinstaller --onefile \
-              --add-data "config.json;." \
-              --add-data "models/face_landmarker.task;models" \
-              --hidden-import "mediapipe.tasks.c" \
-              --collect-binaries "mediapipe" \
-              --name OpenHeadMouse main.py
-          else
-            pyinstaller --onefile \
-              --add-data "config.json:." \
-              --add-data "models/face_landmarker.task:models" \
-              --hidden-import "mediapipe.tasks.c" \
-              --collect-binaries "mediapipe" \
-              --name OpenHeadMouse main.py
-          fi
+          curl --fail --location --retry 3 \
+            --output models/canonical_face_model.obj \
+            https://raw.githubusercontent.com/google-ai-edge/mediapipe/master/mediapipe/modules/face_geometry/data/canonical_face_model.obj
+          python -c "import hashlib, pathlib; p = pathlib.Path('models/canonical_face_model.obj'); actual = hashlib.sha256(p.read_bytes()).hexdigest(); expected = '8bac80443397e113f41a8b565ea72c59390bc031d9defab289dba7bc0c54e618'; assert actual == expected, f'Session Viewer mesh checksum mismatch: {actual}'"
 
-      - name: Rename Output Binary
+      - name: Build all editions
         shell: bash
         run: |
-          mv "${{ matrix.binary_exec_path }}" "dist/${{ matrix.binary_asset_name }}"
+          mkdir -p dist
+          for EDITION in full headmouse-only dwell-click session-viewer; do
+            PYINSTALLER_ARGS=(--onefile)
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              PYINSTALLER_ARGS+=(--windowed)
+            fi
 
-      - name: Build Windows Installer (Inno Setup)
+            case "$EDITION" in
+              full)
+                APP_NAME="OpenHeadMouse"
+                ENTRY_POINT="main.py"
+                ;;
+              headmouse-only)
+                APP_NAME="OpenHeadMouseHeadOnly"
+                ENTRY_POINT="main.py"
+                PYINSTALLER_ARGS+=(--exclude-module fitts_law --exclude-module session_viewer)
+                ;;
+              dwell-click)
+                APP_NAME="DwellClick"
+                ENTRY_POINT="dwell_click/__main__.py"
+                ;;
+              session-viewer)
+                APP_NAME="SessionViewer"
+                ENTRY_POINT="session_viewer/__main__.py"
+                ;;
+            esac
+
+            PYINSTALLER_ARGS+=(--name "$APP_NAME")
+            if [ "$EDITION" = "full" ] || [ "$EDITION" = "headmouse-only" ]; then
+              if [ "$RUNNER_OS" = "Windows" ]; then
+                PYINSTALLER_ARGS+=(
+                  --add-data "config.json;."
+                  --add-data "models/face_landmarker.task;models"
+                )
+              else
+                PYINSTALLER_ARGS+=(
+                  --add-data "config.json:."
+                  --add-data "models/face_landmarker.task:models"
+                )
+              fi
+              PYINSTALLER_ARGS+=(
+                --hidden-import mediapipe.tasks.c
+                --collect-binaries mediapipe
+              )
+            fi
+            if [ "$EDITION" = "full" ] || [ "$EDITION" = "session-viewer" ]; then
+              if [ "$RUNNER_OS" = "Windows" ]; then
+                PYINSTALLER_ARGS+=(--add-data "models/canonical_face_model.obj;models")
+              else
+                PYINSTALLER_ARGS+=(--add-data "models/canonical_face_model.obj:models")
+              fi
+            fi
+            pyinstaller "${PYINSTALLER_ARGS[@]}" "$ENTRY_POINT"
+
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              EXTENSION=".exe"
+              case "$EDITION" in
+                full) BINARY_NAME="OpenHeadMouse-windows-amd64.exe" ;;
+                headmouse-only) BINARY_NAME="OpenHeadMouse-headmouse-only-windows-amd64.exe" ;;
+                dwell-click) BINARY_NAME="DwellClick-windows-amd64.exe" ;;
+                session-viewer) BINARY_NAME="SessionViewer-windows-amd64.exe" ;;
+              esac
+            elif [ "$RUNNER_OS" = "Linux" ]; then
+              EXTENSION=""
+              case "$EDITION" in
+                full) BINARY_NAME="OpenHeadMouse-linux-amd64" ;;
+                headmouse-only) BINARY_NAME="OpenHeadMouse-headmouse-only-linux-amd64" ;;
+                dwell-click) BINARY_NAME="DwellClick-linux-amd64" ;;
+                session-viewer) BINARY_NAME="SessionViewer-linux-amd64" ;;
+              esac
+            else
+              EXTENSION=""
+              case "$EDITION" in
+                full) BINARY_NAME="OpenHeadMouse-macos-universal" ;;
+                headmouse-only) BINARY_NAME="OpenHeadMouse-headmouse-only-macos-universal" ;;
+                dwell-click) BINARY_NAME="DwellClick-macos-universal" ;;
+                session-viewer) BINARY_NAME="SessionViewer-macos-universal" ;;
+              esac
+            fi
+            mv "dist/${APP_NAME}${EXTENSION}" "dist/${BINARY_NAME}"
+          done
+
+      - name: Build Windows Installers (Inno Setup)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           choco install innosetup --no-progress -y
-          @"
+          $editions = @(
+            [pscustomobject]@{
+              AppName = "OpenHeadMouse"
+              Version = "${{ steps.ver.outputs.clean }}"
+              InstallDir = "OpenHeadMouse"
+              SetupName = "OpenHeadMouse-windows-amd64-setup"
+              Binary = "OpenHeadMouse-windows-amd64.exe"
+              ExeName = "OpenHeadMouse.exe"
+            },
+            [pscustomobject]@{
+              AppName = "OpenHeadMouse (HeadMouse-only)"
+              Version = "${{ steps.ver.outputs.clean }}"
+              InstallDir = "OpenHeadMouse HeadMouse-only"
+              SetupName = "OpenHeadMouse-headmouse-only-windows-amd64-setup"
+              Binary = "OpenHeadMouse-headmouse-only-windows-amd64.exe"
+              ExeName = "OpenHeadMouse.exe"
+            },
+            [pscustomobject]@{
+              AppName = "Dwell Click"
+              Version = "${{ steps.ver.outputs.clean }}"
+              InstallDir = "Dwell Click"
+              SetupName = "DwellClick-windows-amd64-setup"
+              Binary = "DwellClick-windows-amd64.exe"
+              ExeName = "DwellClick.exe"
+            },
+            [pscustomobject]@{
+              AppName = "Session Viewer"
+              Version = "${{ steps.ver.outputs.clean }}"
+              InstallDir = "Session Viewer"
+              SetupName = "SessionViewer-windows-amd64-setup"
+              Binary = "SessionViewer-windows-amd64.exe"
+              ExeName = "SessionViewer.exe"
+            }
+          )
+          foreach ($edition in $editions) {
+            $script = @"
           [Setup]
-          AppName=OpenHeadMouse
-          AppVersion=${{ steps.ver.outputs.clean }}
-          DefaultDirName={autopf}\OpenHeadMouse
-          DefaultGroupName=OpenHeadMouse
+          AppName=$($edition.AppName)
+          AppVersion=$($edition.Version)
+          DefaultDirName={autopf}\$($edition.InstallDir)
+          DefaultGroupName=$($edition.AppName)
           OutputDir=dist
-          OutputBaseFilename=OpenHeadMouse-windows-amd64-setup
+          OutputBaseFilename=$($edition.SetupName)
           Compression=lzma
           SolidCompression=yes
           WizardStyle=modern
 
           [Files]
-          Source: "dist\${{ matrix.binary_asset_name }}"; DestDir: "{app}"; DestName: "OpenHeadMouse.exe"; Flags: ignoreversion
+          Source: "dist\$($edition.Binary)"; DestDir: "{app}"; DestName: "$($edition.ExeName)"; Flags: ignoreversion
 
           [Icons]
-          Name: "{group}\OpenHeadMouse"; Filename: "{app}\OpenHeadMouse.exe"
-          Name: "{autodesktop}\OpenHeadMouse"; Filename: "{app}\OpenHeadMouse.exe"
-          "@ | Set-Content installer.iss
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          Name: "{group}\$($edition.AppName)"; Filename: "{app}\$($edition.ExeName)"
+          Name: "{autodesktop}\$($edition.AppName)"; Filename: "{app}\$($edition.ExeName)"
+          "@
+            Set-Content -Path installer.iss -Value $script -Encoding ASCII
+            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
-      - name: Build Linux .deb package
+      - name: Build Linux .deb packages
         if: runner.os == 'Linux'
         shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y ruby ruby-dev build-essential
           sudo gem install --no-document fpm
-
           mkdir -p pkg/usr/local/bin
-          cp "dist/${{ matrix.binary_asset_name }}" pkg/usr/local/bin/OpenHeadMouse
-          chmod +x pkg/usr/local/bin/OpenHeadMouse
 
-          fpm -s dir -t deb \
-            -n openheadmouse \
-            -v "${{ steps.ver.outputs.clean }}" \
-            --architecture amd64 \
-            --description "OpenHeadMouse" \
-            -C pkg \
-            usr/local/bin/OpenHeadMouse
+          VERSION="${{ steps.ver.outputs.clean }}"
+          for EDITION in full headmouse-only dwell-click session-viewer; do
+            case "$EDITION" in
+              full)
+                BINARY_NAME="OpenHeadMouse-linux-amd64"
+                PACKAGE_NAME="openheadmouse"
+                OUTPUT_NAME="OpenHeadMouse-linux-amd64.deb"
+                EXECUTABLE_NAME="OpenHeadMouse"
+                DESCRIPTION="OpenHeadMouse full edition"
+                ;;
+              headmouse-only)
+                BINARY_NAME="OpenHeadMouse-headmouse-only-linux-amd64"
+                PACKAGE_NAME="openheadmouse-headmouse-only"
+                OUTPUT_NAME="OpenHeadMouse-headmouse-only-linux-amd64.deb"
+                EXECUTABLE_NAME="OpenHeadMouseHeadOnly"
+                DESCRIPTION="OpenHeadMouse headmouse-only edition"
+                ;;
+              dwell-click)
+                BINARY_NAME="DwellClick-linux-amd64"
+                PACKAGE_NAME="dwell-click"
+                OUTPUT_NAME="DwellClick-linux-amd64.deb"
+                EXECUTABLE_NAME="DwellClick"
+                DESCRIPTION="Dwell Click standalone application"
+                ;;
+              session-viewer)
+                BINARY_NAME="SessionViewer-linux-amd64"
+                PACKAGE_NAME="session-viewer"
+                OUTPUT_NAME="SessionViewer-linux-amd64.deb"
+                EXECUTABLE_NAME="SessionViewer"
+                DESCRIPTION="HeadMouse Session Viewer standalone application"
+                ;;
+            esac
+            cp "dist/${BINARY_NAME}" "pkg/usr/local/bin/${EXECUTABLE_NAME}"
+            chmod +x "pkg/usr/local/bin/${EXECUTABLE_NAME}"
+            fpm -s dir -t deb \
+              -n "$PACKAGE_NAME" \
+              -v "$VERSION" \
+              --architecture amd64 \
+              --description "$DESCRIPTION" \
+              -C pkg \
+              -p "dist/${OUTPUT_NAME}" \
+              "usr/local/bin/${EXECUTABLE_NAME}"
+          done
 
-          mv ./*.deb "dist/${{ matrix.installer_asset_name }}"
-
-      - name: Build macOS .app bundle
+      - name: Build macOS .app bundles and DMGs
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          APP_ROOT="dist/OpenHeadMouse.app"
-          mkdir -p "$APP_ROOT/Contents/MacOS"
-          mkdir -p "$APP_ROOT/Contents/Resources"
+          brew update
+          brew install create-dmg
+          VERSION="${{ steps.ver.outputs.clean }}"
 
-          cp "dist/${{ matrix.binary_asset_name }}" "$APP_ROOT/Contents/MacOS/OpenHeadMouse"
-          chmod +x "$APP_ROOT/Contents/MacOS/OpenHeadMouse"
+          for EDITION in full headmouse-only dwell-click session-viewer; do
+            case "$EDITION" in
+              full)
+                BINARY_NAME="OpenHeadMouse-macos-universal"
+                APP_NAME="OpenHeadMouse"
+                DISPLAY_NAME="OpenHeadMouse"
+                BUNDLE_ID="io.github.simonjudge.openheadmouse"
+                EXECUTABLE_NAME="OpenHeadMouse"
+                DMG_NAME="OpenHeadMouse-macos-universal.dmg"
+                VOLUME_NAME="OpenHeadMouse"
+                ;;
+              headmouse-only)
+                BINARY_NAME="OpenHeadMouse-headmouse-only-macos-universal"
+                APP_NAME="OpenHeadMouse-HeadMouse-only"
+                DISPLAY_NAME="OpenHeadMouse HeadMouse-only"
+                BUNDLE_ID="io.github.simonjudge.openheadmouse.headmouseonly"
+                EXECUTABLE_NAME="OpenHeadMouse"
+                DMG_NAME="OpenHeadMouse-headmouse-only-macos-universal.dmg"
+                VOLUME_NAME="OpenHeadMouse HeadMouse-only"
+                ;;
+              dwell-click)
+                BINARY_NAME="DwellClick-macos-universal"
+                APP_NAME="DwellClick"
+                DISPLAY_NAME="Dwell Click"
+                BUNDLE_ID="io.github.simonjudge.dwellclick"
+                EXECUTABLE_NAME="DwellClick"
+                DMG_NAME="DwellClick-macos-universal.dmg"
+                VOLUME_NAME="Dwell Click"
+                ;;
+              session-viewer)
+                BINARY_NAME="SessionViewer-macos-universal"
+                APP_NAME="SessionViewer"
+                DISPLAY_NAME="Session Viewer"
+                BUNDLE_ID="io.github.simonjudge.sessionviewer"
+                EXECUTABLE_NAME="SessionViewer"
+                DMG_NAME="SessionViewer-macos-universal.dmg"
+                VOLUME_NAME="Session Viewer"
+                ;;
+            esac
 
-          cat > "$APP_ROOT/Contents/Info.plist" <<'PLIST'
+            APP_ROOT="dist/${APP_NAME}.app"
+            mkdir -p "$APP_ROOT/Contents/MacOS" "$APP_ROOT/Contents/Resources"
+            cp "dist/${BINARY_NAME}" "$APP_ROOT/Contents/MacOS/${EXECUTABLE_NAME}"
+            chmod +x "$APP_ROOT/Contents/MacOS/${EXECUTABLE_NAME}"
+
+            cat > "$APP_ROOT/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-            <key>CFBundleName</key><string>OpenHeadMouse</string>
-            <key>CFBundleDisplayName</key><string>OpenHeadMouse</string>
-            <key>CFBundleIdentifier</key><string>io.github.simonjudge.openheadmouse</string>
-            <key>CFBundleVersion</key><string>${{ steps.ver.outputs.clean }}</string>
-            <key>CFBundleShortVersionString</key><string>${{ steps.ver.outputs.clean }}</string>
-            <key>CFBundleExecutable</key><string>OpenHeadMouse</string>
+            <key>CFBundleName</key><string>${DISPLAY_NAME}</string>
+            <key>CFBundleDisplayName</key><string>${DISPLAY_NAME}</string>
+            <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleExecutable</key><string>${EXECUTABLE_NAME}</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>LSMinimumSystemVersion</key><string>11.0</string>
             <key>NSHighResolutionCapable</key><true/>
@@ -170,37 +341,24 @@ jobs:
           </plist>
           PLIST
 
-      - name: Build macOS DMG
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          brew update
-          brew install create-dmg
+            DMG_ROOT="dmg-root-${EDITION}"
+            mkdir -p "$DMG_ROOT"
+            cp -R "$APP_ROOT" "$DMG_ROOT/${APP_NAME}.app"
+            create-dmg \
+              --volname "$VOLUME_NAME" \
+              --window-size 640 420 \
+              --icon-size 100 \
+              --icon "${APP_NAME}.app" 170 190 \
+              --app-drop-link 470 190 \
+              "dist/${DMG_NAME}" \
+              "$DMG_ROOT"
+          done
 
-          mkdir -p dmg-root
-          cp -R "dist/OpenHeadMouse.app" "dmg-root/OpenHeadMouse.app"
-
-          create-dmg \
-            --volname "OpenHeadMouse" \
-            --window-size 640 420 \
-            --icon-size 100 \
-            --icon "OpenHeadMouse.app" 170 190 \
-            --app-drop-link 470 190 \
-            "dist/${{ matrix.installer_asset_name }}" \
-            "dmg-root"
-
-      - name: Upload Binary Artifact
+      - name: Upload Release Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.binary_asset_name }}
-          path: dist/${{ matrix.binary_asset_name }}
-          if-no-files-found: error
-
-      - name: Upload Installer Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.installer_asset_name }}
-          path: dist/${{ matrix.installer_asset_name }}
+          name: ${{ matrix.platform }}-release-assets
+          path: dist/*
           if-no-files-found: error
 
   release:
@@ -220,12 +378,6 @@ jobs:
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            release-assets/OpenHeadMouse-windows-amd64.exe
-            release-assets/OpenHeadMouse-windows-amd64-setup.exe
-            release-assets/OpenHeadMouse-linux-amd64
-            release-assets/OpenHeadMouse-linux-amd64.deb
-            release-assets/OpenHeadMouse-macos-universal
-            release-assets/OpenHeadMouse-macos-universal.dmg
+          files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ github.token }}

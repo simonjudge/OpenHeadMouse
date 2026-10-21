@@ -215,6 +215,7 @@ class FittsPlaybackWindow(QMainWindow):
         self.clock = self._own_clock
         self.clock.time_changed.connect(self._on_clock_time)
         self.transport = PlaybackTransport(self)
+        self._head_window = None
 
         self._create_ui()
         self.transport.set_clock(self.clock)
@@ -229,6 +230,11 @@ class FittsPlaybackWindow(QMainWindow):
         open_action.triggered.connect(self._on_open_fitts_session)
         file_menu = self.menuBar().addMenu("File")
         file_menu.addAction(open_action)
+        self._tile_windows_action = QAction("Tile Windows Side by Side", self)
+        self._tile_windows_action.setEnabled(False)
+        self._tile_windows_action.triggered.connect(self._on_tile_windows)
+        file_menu.addAction(self._tile_windows_action)
+        file_menu.aboutToShow.connect(self._update_tile_windows_action)
         toolbar = QToolBar("Main")
         toolbar.setMovable(False)
         toolbar.addAction(open_action)
@@ -317,6 +323,17 @@ class FittsPlaybackWindow(QMainWindow):
         right_layout.addWidget(self.raw_data_widget, 1)
         right_layout.addWidget(self._create_controls_box())
         main_layout.addLayout(right_layout, 1)
+
+    def _update_tile_windows_action(self) -> None:
+        self._tile_windows_action.setEnabled(
+            self._head_window is not None and self._head_window.isVisible()
+        )
+
+    def _on_tile_windows(self) -> None:
+        from session_viewer.session_viewer import tile_side_by_side
+
+        if self._head_window is not None and self._head_window.isVisible():
+            tile_side_by_side(self._head_window, self, self.screen())
 
     def _create_controls_box(self) -> QWidget:
         box = QGroupBox("Controls")

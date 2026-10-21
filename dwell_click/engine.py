@@ -17,6 +17,14 @@ class DwellSettings:
     ring_color: str = "#ff0000"
     ring_diameter_px: int = 40
     ring_thickness_px: int = 4
+    zoom_enabled: bool = False
+    zoom_width_px: int = 300
+    zoom_height_px: int = 200
+    zoom_scale: float = 4.0
+    context_menu_enabled: bool = False
+    context_menu_distance_px: int = 60
+    context_menu_size_px: int = 54
+    context_menu_lock_time_s: float = 3.0
 
     def __post_init__(self) -> None:
         if self.dwell_time_s <= 0:
@@ -29,6 +37,26 @@ class DwellSettings:
             raise ValueError("ring_diameter_px must be greater than zero")
         if self.ring_thickness_px <= 0:
             raise ValueError("ring_thickness_px must be greater than zero")
+        for name in ("zoom_width_px", "zoom_height_px"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if not math.isfinite(self.zoom_scale) or self.zoom_scale <= 1:
+            raise ValueError("zoom_scale must be finite and greater than one")
+        if (
+            not isinstance(self.context_menu_distance_px, int)
+            or isinstance(self.context_menu_distance_px, bool)
+            or self.context_menu_distance_px < 48
+        ):
+            raise ValueError("context_menu_distance_px must be an integer of at least 48")
+        if not math.isfinite(self.context_menu_lock_time_s) or self.context_menu_lock_time_s <= 0:
+            raise ValueError("context_menu_lock_time_s must be finite and greater than zero")
+        if (
+            not isinstance(self.context_menu_size_px, int)
+            or isinstance(self.context_menu_size_px, bool)
+            or not 24 <= self.context_menu_size_px <= 200
+        ):
+            raise ValueError("context_menu_size_px must be an integer between 24 and 200")
 
     @classmethod
     def from_config(cls, config: dict | None) -> "DwellSettings":
@@ -44,6 +72,14 @@ class DwellSettings:
             ring_color=str(config.get("ring_color", defaults.ring_color)),
             ring_diameter_px=int(config.get("ring_diameter_px", defaults.ring_diameter_px)),
             ring_thickness_px=int(config.get("ring_thickness_px", defaults.ring_thickness_px)),
+            zoom_enabled=bool(config.get("zoom_enabled", defaults.zoom_enabled)),
+            zoom_width_px=int(config.get("zoom_width_px", defaults.zoom_width_px)),
+            zoom_height_px=int(config.get("zoom_height_px", defaults.zoom_height_px)),
+            zoom_scale=float(config.get("zoom_scale", defaults.zoom_scale)),
+            context_menu_enabled=bool(config.get("context_menu_enabled", defaults.context_menu_enabled)),
+            context_menu_distance_px=int(config.get("context_menu_distance_px", defaults.context_menu_distance_px)),
+            context_menu_size_px=int(config.get("context_menu_size_px", defaults.context_menu_size_px)),
+            context_menu_lock_time_s=float(config.get("context_menu_lock_time_s", defaults.context_menu_lock_time_s)),
         )
 
     def to_config(self) -> dict:
@@ -54,6 +90,14 @@ class DwellSettings:
             "ring_color": self.ring_color,
             "ring_diameter_px": self.ring_diameter_px,
             "ring_thickness_px": self.ring_thickness_px,
+            "zoom_enabled": self.zoom_enabled,
+            "zoom_width_px": self.zoom_width_px,
+            "zoom_height_px": self.zoom_height_px,
+            "zoom_scale": self.zoom_scale,
+            "context_menu_enabled": self.context_menu_enabled,
+            "context_menu_distance_px": self.context_menu_distance_px,
+            "context_menu_size_px": self.context_menu_size_px,
+            "context_menu_lock_time_s": self.context_menu_lock_time_s,
         }
 
 
@@ -91,6 +135,11 @@ class DwellEngine:
     def update_settings(self, settings: DwellSettings) -> None:
         self.settings = settings
         self.reset()
+
+    def inhibit_until_moved(self, position: Point) -> None:
+        """Require leaving this area before starting another dwell."""
+        self.reset()
+        self._clicked_anchor = position
 
     def update(self, position: Point, now_s: float) -> DwellUpdate:
         point = (float(position[0]), float(position[1]))

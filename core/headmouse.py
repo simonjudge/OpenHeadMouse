@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import threading
 import time
+import sys
 from dataclasses import dataclass
 from enum import Enum
 
@@ -74,7 +75,14 @@ class HeadMouse:
         self.corner_region_px = corner_region_px
         self.corner_failsafe_ms = corner_failsafe_ms
         self._clock = clock
-        self._mouse = mouse_controller if mouse_controller is not None else mouse.Controller()
+        if mouse_controller is not None:
+            self._mouse = mouse_controller
+        elif sys.platform == "win32":
+            from core.windows_mouse import WindowsMouseController
+
+            self._mouse = WindowsMouseController()
+        else:
+            self._mouse = mouse.Controller()
         self._hotkey_str = hotkey
 
         self._state = TrackingState.PAUSED  # starts paused until the GUI/main explicitly activates

@@ -17,15 +17,101 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Release editions
+
+Each tagged GitHub release includes four editions for Windows, Linux, and macOS:
+
+- **Full** — HeadMouse, the Fitts' Law test suite, and the session viewer.
+- **HeadMouse-only** — HeadMouse without the Fitts' Law test suite or session viewer. Their
+  File-menu items are omitted; head-movement recording and its folder setting remain available.
+- **Dwell Click** — the standalone dwell-click tray application, without the HeadMouse interface.
+- **Session Viewer** — standalone head-movement and Fitts' Law playback, without starting
+  head tracking or mouse control.
+
+The Dwell Click edition starts its tray application when launched. Its settings and command-line
+options are the same as the standalone `python -m dwell_click` mode described below.
+Windows executables for all four editions are built without a console window. The Fitts'
+Law suite and session viewer run within the full edition without opening a separate terminal.
+This applies to newly built executables; existing downloads must be rebuilt or replaced.
+
+To build locally without a console window, build from the checked-in spec files (they set
+`console=False`), for example `pyinstaller OpenHeadMouse.spec`, `pyinstaller
+OpenHeadMouseHeadOnly.spec`, `pyinstaller DwellClick.spec` or `pyinstaller SessionViewer.spec`.
+Running `pyinstaller main.py`
+without `--windowed` overwrites the spec with `console=True`, which brings the terminal back.
+
+### Building Windows executables and installers locally
+
+Install [Inno Setup 6](https://jrsoftware.org/isdl.php) and install the Python dependencies
+and PyInstaller into your build environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+.\build-release.ps1 -Version 0.2.0
+```
+
+Run these commands in PowerShell from the project root. If script execution is blocked,
+use `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-release.ps1 -Version 0.2.0`.
+The script builds all four editions without console windows, then compiles their installers.
+Executables and `*-setup.exe` installers are written to `dist`. Generated specs and Inno Setup
+definitions go under `build/local-release`, leaving existing root-level specs untouched.
+The face-landmarker model and canonical face mesh must already be present under `models`.
+
+By default, the script uses `.venv\Scripts\python.exe` if present, otherwise `python` on PATH.
+Use `-Python "C:\path\to\python.exe"` or `-Iscc "C:\path\to\ISCC.exe"` to override the tools.
+It does not install dependencies or download assets automatically. Installers are unsigned.
+
 ## Layout
 
 - `core/` — quaternion math, absolute/velocity DSP engine and filters, recorder, OS cursor control
 - `providers/` — input drivers (UniFace/MediaPipe, xIMU3, AirPods)
 - `gui/` — PySide6 setup and DSP tuning UI
 - `session_viewer/` — standalone pyqtgraph session viewer (mesh + line-graph playback), opened from the main window's File menu; also replays Fitts sessions, optionally synchronised with a head recording (see below)
+- `colab_session_viewer/` — [Colab notebook viewer](colab_session_viewer/README.md) with one head/cursor playback panel, multiple participants/sessions, pooled summaries and per-participant first-target exclusions
 - `fitts_law/` — standalone ISO 9241-411 Fitts' Law test suite (circular + edge-target tasks, pluggable stimuli, Random Path and Typing Test modes), opened from the main window's File menu
 - `dwell_click/` — standalone dwell-click engine, translucent progress overlay, and command-line launcher
 - `tests/` — unit tests
+
+### Standalone session viewer
+
+From the repository root, with the dependencies installed, run:
+
+```powershell
+python -m session_viewer
+```
+
+The viewer opens without a recording loaded. Use its File menu to open a head-movement
+session (JSON or CSV), a Fitts test, or synchronised head/Fitts playback. It does not start
+HeadMouse, connect to a tracker, or control the cursor. The main application's File-menu
+viewer continues to work as before.
+
+Opening **Open Synchronised Playback...** automatically tiles the head viewer on the left
+and Fitts playback on the right. Both windows have **File > Tile Windows Side by Side** to
+restore this layout after moving or maximising them. The command uses the available area
+of the screen containing the window where it was selected, moving both windows onto that
+screen. It is disabled when the other playback window is closed.
+
+To build the standalone executable locally:
+
+```powershell
+python -c "from session_viewer.mesh_visualizer import download_mediapipe_model; download_mediapipe_model()"
+python -m PyInstaller --noconfirm SessionViewer.spec
+```
+
+On Windows this creates `dist\SessionViewer.exe` without a terminal window. The face mesh
+is bundled, so no model download is needed at runtime. Tagged releases also package the
+viewer as a Windows installer, Linux executable/`.deb`, and macOS executable/`.app`/DMG.
+
+### Colab session viewer
+
+Open [session_viewer.ipynb](colab_session_viewer/session_viewer.ipynb) in Google Colab
+and run its setup and viewer cells. Import individual head/Fitts recordings or
+multiple ZIP data sets with a participant/session manifest. The single viewer
+at the top switches between participants and sessions; the table below combines
+all tests into one row per participant and exports CSV. Each participant can
+exclude the first N targets **per Fitts file** from the summary without changing
+playback or removing whole tests. See the [notebook guide](colab_session_viewer/README.md)
+for setup, batch import format, aggregation definitions and data-privacy notes.
 
 ### Dwell click
 
@@ -33,6 +119,8 @@ Tick **Dwell Click** in the Subsystems panel to click automatically when the poi
 inside the configured movement tolerance (default 10 pixels) for the dwell time (default 1
 second). A translucent red ring around the cursor fills clockwise as the dwell completes. After
 a click, the pointer must leave the activation area before another click can occur.
+The main window shows **Dwell Click Settings** only while **Dwell Click** is ticked.
+Unticking it hides the settings without discarding their values; tray settings remain available.
 
 Ticking the box only arms the feature. Dwell clicking starts only once the input provider is
 actually controlling the cursor (mouse control active and head data moving the pointer), not
@@ -56,10 +144,131 @@ The module can also run independently of HeadMouse:
 python -m dwell_click
 python -m dwell_click --dwell-time 1.5 --movement-tolerance 12 --resume-time 0.75
 python -m dwell_click --diameter 60 --thickness 8 --color "#00a0ff"
+python -m dwell_click --zoom --zoom-width 300 --zoom-height 200 --zoom-scale 4
 ```
 
 Both standalone mode and HeadMouse provide a cross-platform system-tray icon. Its menu starts
 or stops dwell clicking, opens the dwell-click settings dialog, and exits standalone mode.
+Left-clicking the tray icon opens the settings dialog directly; right-clicking opens its menu.
+The settings dialog also has a **Start/Stop Dwell Clicking** button. It stays open when
+the button is used and follows changes made through the tray or HeadMouse lifecycle.
+
+**Click Context Menu** is optional and disabled by default. Enable it in the main window's
+dwell settings or the tray settings dialog. A completed dwell opens five icons around
+the original click point: **left click** at 135 degrees (upper-left), **zoom** at 90 degrees
+(above), **right click** at 45 degrees (upper-right), **double click** at 225 degrees
+(lower-left), and **pause** at 315 degrees (lower-right). Dwell on an icon to choose it.
+Each icon samples the screen beneath it when the menu opens: dark backgrounds use white
+artwork and a 20%-opacity white backing; light backgrounds use dark artwork and a
+20%-opacity black backing. Rounded corners remain transparent and active choices have a
+contrasting blue outline. If screen sampling is unavailable, a warning is logged and the
+application colour scheme is used. **Icon size** sets each square target's size
+(default 54 pixels, 50% larger than the original 36; range 24-200), with artwork scaled
+proportionally. **Distance** sets P, the distance to each icon centre (default 60 pixels;
+minimum 48). Spacing grows when needed to prevent larger targets overlapping.
+The group shifts together near screen edges to keep the icons visible; spacing is reduced
+if the configured distance would make the group wider or taller than the display.
+When the dwell target is on the taskbar (outside the screen's usable area), the menu is
+placed at least 260 pixels away from the taskbar, clear of the window previews that pop up
+there; the zoom box is moved clear in the same way (it still magnifies the taskbar area). Windows draws those previews above all normal programs, even always-on-top ones;
+see the UIAccess next step below.
+
+Left, right and double click are the click buttons ("L/R" below includes double click).
+The first L/R choice is remembered across menu openings. Each new menu has its own original
+target: selecting an icon clicks that target, not the icon or a target from a previous menu.
+The menu closes before clicking and the cursor stays at the clicked location; it is not
+warped back to the icons. Menu and zoom clicks rest on the target for about 120 ms before
+pressing, so custom-drawn title-bar buttons (e.g. browser or Windows 11 app close buttons)
+register the hover and accept the click.
+
+| Menu choice | Effect | Menu |
+| --- | --- | --- |
+| First L or R selection | Click the original target once using that button; remember the choice | Closes |
+| Same L/R at a later target | Lock that button and click this target once | Closes |
+| Already-locked L/R icon | Unlock that button, clear its remembered choice; no click | Closes |
+| Different L/R while a button is locked | Unlock the old button and click once with the new choice; choosing it again later locks it | Closes |
+| First zoom selection, with L/R already chosen | Magnify this pending click and click with the locked or remembered L/R | Closes |
+| First zoom selection, no L/R chosen yet | Highlight zoom and wait; choosing L or R then magnifies and clicks with that button | Stays open |
+| Second zoom selection (a later menu) | Lock zoom independently of L/R; magnify and click as above | Closes, or stays open if no L/R is chosen |
+| Already-locked zoom icon | Unlock zoom only; no click | Closes |
+| Zoom selected after an automatic click was already sent | Arm zoom for the next target, or lock it on the second selection; never repeat the completed click | Closes |
+| Pause | Cancel the pending click and pause dwell clicking; locks are kept | Closes |
+| Dwell outside an unlocked menu | Cancel without clicking | Closes |
+
+**Pause** stops all dwell clicking and shows a floating **Resume** (play) button in the
+bottom-right corner of the screen. Dwell on it to resume hands-free, or use **Start Dwell
+Clicking** in the tray menu or settings dialog. While paused the tray shows Start; the main
+window's Dwell Click checkbox stays ticked. If Resume appears under the pointer, move off it
+and back before dwelling. Stopping dwell clicking also clears the pause.
+
+Locked options have blue outlines. Future target dwells use the selected button directly
+when L/R is locked, opening the magnifier first when zoom is also locked. If only zoom is
+locked, the menu still opens so L or R can be chosen for the zoomed click.
+After these automatic clicks, the menu appears for **Stay** seconds (S, default 3), allowing
+unlocking or a different choice. Switching to the other L/R intentionally sends one click
+with the newly selected button at that menu's target, even if the previous automatic click
+was already sent. Dwelling outside this timed menu performs the next automatic click.
+The dismissal timer pauses during an icon dwell so an action can finish near the deadline.
+If the menu opens underneath the pointer, leave the icon and re-enter it before selecting;
+remaining stationary cannot immediately unlock a newly locked option.
+
+**Use zoom (start locked)** seeds the independent zoom lock when starting dwell clicking.
+Menu selections change runtime locks only: they do not toggle the checkbox or save locks.
+For example, unlocking zoom in the menu leaves the checkbox checked; restarting restores
+the configured zoom default. Stopping or changing settings clears remembered selections and
+L/R locks, and reapplies that zoom default.
+
+HeadMouse persists `context_menu_enabled`, `context_menu_distance_px`, `context_menu_size_px`,
+and `context_menu_lock_time_s` under `ui.dwell_click`. Standalone mode also accepts
+`--context-menu --menu-distance 60 --menu-size 54 --menu-lock-time 3`.
+After zoom opens, move away from the icon-selection position before dwelling on the image;
+remaining still will not complete or cancel the precise click.
+
+**Zoom clicking** is optional and disabled by default. Enable it in the main window or tray
+settings to start with zoom locked, or select zoom once from the context menu. The magnifying
+dwell opens a borderless screenshot around that point without
+clicking the application. Move the pointer beyond the movement tolerance, then dwell on the
+desired pixel inside the box to complete the selected L/R click at the original screen location
+(left click when running without the context menu).
+Dwelling outside the box cancels without clicking. Simply remaining still after the box opens
+does not complete a click. The same dwell time and tolerance apply to both stages.
+
+**Width** and **Height** set the displayed box size (default 300 by 200 pixels);
+**Scale** sets magnification (default 4x, without image smoothing). The box and captured area
+are kept on the pointer's display and the box is reduced to fit smaller screens. These sizes
+use Qt screen coordinates (logical pixels on scaled displays); selection maps back to
+individual captured screen pixels, including on high-DPI displays. HeadMouse saves
+`zoom_enabled`, `zoom_width_px`, `zoom_height_px`, and `zoom_scale` under `ui.dwell_click`
+in `config.json`. Standalone settings apply for the current run, with command-line options
+available as above. Stopping dwell clicking or changing settings cancels any pending zoom click.
+Screen capture must be permitted by the OS; capture failures are logged and shown through
+a tray notification rather than falling back to an unzoomed click. Pointer-control permission
+is also required; if the cursor cannot reach the selected point, the click is cancelled and
+an error is reported.
+
+**Possible next step: UIAccess (Windows).** Taskbar previews, the Start menu and windows of
+programs running as administrator sit in Windows z-order layers above every normal program,
+so the dwell menu can be hidden by them and clicks into elevated windows are blocked.
+Accessibility software such as OptiKey avoids this with *UIAccess*, which lets an app
+draw above those layers and interact with elevated windows without itself running as
+administrator. Requirements:
+
+* Manifest flag `uiAccess="true"` (PyInstaller: `uac_uiaccess=True` in `EXE(...)` in the
+  `.spec` file). Make it opt-in for release builds only: an unsigned UIAccess exe will not
+  start ("A referral was returned from the server").
+* Authenticode-sign the exe with a certificate trusted by the installing PC. Options:
+  * Trusted, no extra steps for users: an open-source code-signing certificate (e.g.
+    Certum Open Source, as OptiKey uses), SignPath Foundation (free for open-source
+    projects) or Azure Trusted Signing.
+  * Self-signed (for testing on your own PCs): each PC must import the certificate into
+    *Local Machine > Trusted Root Certification Authorities* (admin rights). That PC
+    then trusts anything signed with the key, so keep the private key safe and out of
+    the repository.
+* Install the exe in a secure location such as `C:\Program Files\...`; by default Windows
+  refuses to start a UIAccess exe from user folders such as Downloads.
+
+Running Dwell Click as administrator is a simpler interim workaround for clicking into
+elevated windows, but it does not lift the menu above taskbar previews or the Start menu.
 
 ### Coordinate frame and gain signs
 
@@ -73,15 +282,30 @@ negative gains to feel natural, its frame conversion is wrong. See
 for adding a new provider.
 
 Main-window labels are kept short and related options sit side by side; hover over any
-option to see a fuller explanation.
+option to see a fuller explanation. The main window uses two columns for dwell and DSP
+settings, with scrollbars on smaller screens so enabling every option does not push the
+bottom controls off-screen. Provider controls and Recenter remain outside the scrolling area.
 
 The DSP configuration supports absolute mapping and velocity mapping. The optional One Euro
-filter applies adaptive smoothing in either mode. Velocity mode also supports deadband/gamma
+filter applies adaptive smoothing in either mode. The main window shows **DSP** settings only
+while **Mouse Control** is ticked; hiding the settings preserves their values. Velocity mode
+also supports deadband/gamma
 shaping, stationary auto-zero bias, and optional yaw-drift correction. Cursor clamping
 follows the display that contains the HeadMouse window, including displays with negative
 coordinate origins. On Windows, native pixel bounds are used so display scaling does not
 shrink the usable cursor area. The bounds are refreshed and the cursor is centered on that
 display whenever tracking starts.
+
+On Windows, head-driven movement uses absolute mouse-input events across the virtual
+desktop rather than only repositioning the cursor. This allows Windows to restore a pointer
+suppressed after touch/pen input, independently of whether **Dwell Click** is enabled.
+Blocked input pauses tracking and displays a permissions warning.
+
+The real Windows pointer is separate from the dwell ring, zoom box and click-menu overlays.
+Those overlays can be covered by taskbar previews or privileged windows (see UIAccess above);
+UIAccess is not a general fix for an invisible native pointer. If pointer movement or clicking
+is blocked over an application running as administrator, HeadMouse needs matching permissions
+or an appropriately signed/installed UIAccess build. Secure-desktop prompts remain out of scope.
 
 ### Recordings folder
 
@@ -93,18 +317,25 @@ together:
 <recordings folder>/fitts_sessions/  Fitts' Law result files
 ```
 
-Set it from the main HeadMouse window with **File → Set Recordings Folder...** (hover over the
-menu item to see the current folder). The choice is saved in `config.json` as
-`recorder.base_dir` and is shared with the Fitts' Law test window.
+Set it from the main HeadMouse window with **File → Set Recordings Folder...**; the folder in
+use is shown on the **Saving to:** line just below it in the File menu. The chooser opens at the
+current folder, and the new folder applies straight away, including to a session that is
+already being recorded. The choice is saved in `config.json` as `recorder.base_dir` and is shared
+with the Fitts' Law test window.
 
-If no folder has been chosen, you are asked for one the first time something is actually
-recorded: when **Recording** is switched on, when a provider is started with **Recording**
-already on, or when a Fitts test is started with **Record head movement** ticked. This also
-applies to the Fitts window run standalone (`python fitts_law/fitts_test.py`), which asks for
-the folder itself and saves the answer to `config.json` and to its own
-`fitts_law/fitts_settings.json`, so it is only asked once either way. Cancelling the prompt
-falls back to the `recorder.output_dir` default (`sessions/`), and you'll be asked again next
-time.
+Before anything is recorded, the folder and its `sessions/` and `fitts_sessions/` subfolders are
+created if missing and checked to be writable. This happens when **Recording** is switched on,
+when a provider is started with **Recording** on, and before every Fitts test (its results are
+always saved). If no folder has been chosen, or the chosen one can't be used (for example a
+removed drive or no write permission), you are asked for another one. Cancelling refuses to
+record rather than writing to a default folder: Recording is switched back off, tracking with
+Recording on is not started, or the Fitts test is not started, with a message saying why. If a
+head session still can't be saved when tracking stops, you are asked for another folder; it
+is only discarded if you confirm that.
+
+The Fitts window run standalone (`python fitts_law/fitts_test.py`) does the same checks itself
+and saves the chosen folder to `config.json` and to its own `fitts_law/fitts_settings.json`, so
+it is only asked once either way.
 
 ### Session files
 
@@ -428,7 +659,6 @@ TEST - add centre point to detect headpose and tremor etc.
 IDEAS:
  * recentering tool for absolute mode
  * snap to object
- * ?? zooming dwell clicker ??
  *  FUSION MODE - camera+IMU
    * Use for recentering? Work out centre from camera, but only re-centre/adjust when at edges (hard to reach)????
  * calibration - establish ROM - work out the gains...

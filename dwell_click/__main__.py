@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .engine import DwellSettings
-from .tray import DwellTray
+from dwell_click.engine import DwellSettings
+from dwell_click.tray import DwellTray
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -21,6 +21,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="Diameter of the dwell timer circle")
     parser.add_argument("--thickness", type=int, default=4, metavar="PIXELS",
                         help="Thickness of the dwell timer segment")
+    parser.add_argument("--zoom", action="store_true", help="Use two-stage zoom dwell clicking")
+    parser.add_argument("--zoom-width", type=int, default=300, metavar="PIXELS")
+    parser.add_argument("--zoom-height", type=int, default=200, metavar="PIXELS")
+    parser.add_argument("--zoom-scale", type=float, default=4.0, metavar="FACTOR")
+    parser.add_argument("--context-menu", action="store_true", help="Choose left, right or zoom after dwelling")
+    parser.add_argument("--menu-distance", type=int, default=60, metavar="PIXELS")
+    parser.add_argument("--menu-size", type=int, default=54, metavar="PIXELS")
+    parser.add_argument("--menu-lock-time", type=float, default=3.0, metavar="SECONDS")
     args = parser.parse_args(argv)
 
     try:
@@ -31,13 +39,21 @@ def main(argv: list[str] | None = None) -> int:
             ring_color=args.color,
             ring_diameter_px=args.diameter,
             ring_thickness_px=args.thickness,
+            zoom_enabled=args.zoom,
+            zoom_width_px=args.zoom_width,
+            zoom_height_px=args.zoom_height,
+            zoom_scale=args.zoom_scale,
+            context_menu_enabled=args.context_menu,
+            context_menu_distance_px=args.menu_distance,
+            context_menu_size_px=args.menu_size,
+            context_menu_lock_time_s=args.menu_lock_time,
         )
     except ValueError as exc:
         parser.error(str(exc))
 
     from PySide6.QtWidgets import QApplication
 
-    from .service import DwellClickService
+    from dwell_click.service import DwellClickService
 
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)

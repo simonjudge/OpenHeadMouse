@@ -457,11 +457,13 @@ class FittsTestWindow(QMainWindow):
         self._recordings_dir_provider = provider
         self._apply_results_dir(prompt=False)
 
-    def _apply_results_dir(self, *, prompt: bool) -> None:
+    def _apply_results_dir(self, *, prompt: bool):
         """Point the results logger at the configured recordings folder.
 
-        Falls back to the logger's own default when no folder has been
-        chosen, so a standalone run still saves its results somewhere.
+        With `prompt` the folder is created and checked (asking for one if
+        needed) and the returned folder is None only if the user cancelled.
+        Without it the configured folder is just read, falling back to the
+        logger's own default when none has been chosen.
         """
         if self._recordings_dir_provider is not None:
             base_dir = self._recordings_dir_provider(prompt=prompt)
@@ -469,33 +471,31 @@ class FittsTestWindow(QMainWindow):
             base_dir = self._standalone_base_dir(prompt=prompt)
         if base_dir is not None:
             self._logger.output_dir = recording_paths.fitts_sessions_dir(base_dir)
+        return base_dir
 
     def _standalone_base_dir(self, *, prompt: bool):
         """The recordings folder when running without a HeadMouse window.
 
         The shared config.json is read first so a folder chosen in the
-        HeadMouse GUI is honoured, then this window's own settings. When
-        neither has one and `prompt` is True the user is asked and the answer
-        is saved to both, so it is only asked for once.
+        HeadMouse GUI is honoured, then this window's own settings. With
+        `prompt` the folder is made ready, asking for one when it is unset or
+        unusable, and the answer is saved to both so it is only asked once.
         """
         base_dir = recording_paths.load_base_dir()
-        if base_dir is not None:
-            return base_dir
-
-        stored = self._settings.get("recordings_base_dir")
-        if stored is not None and str(stored).strip():
-            return Path(str(stored)).expanduser()
+        if base_dir is None:
+            stored = self._settings.get("recordings_base_dir")
+            if stored is not None and str(stored).strip():
+                base_dir = Path(str(stored)).expanduser()
 
         if not prompt:
-            return None
+            return base_dir
 
-        chosen = recording_paths.prompt_for_base_dir(
-            self, "needed before head movement can be recorded"
+        ready = recording_paths.ensure_usable_base_dir(
+            base_dir, self, "needed before the test can be recorded"
         )
-        if chosen is None:
-            return None
-        self._save_standalone_base_dir(chosen)
-        return chosen
+        if ready is not None and ready != base_dir:
+            self._save_standalone_base_dir(ready)
+        return ready
 
     def _save_standalone_base_dir(self, base_dir: Path) -> None:
         """Remember the folder for the next standalone run."""
@@ -909,6 +909,16 @@ class FittsTestWindow(QMainWindow):
             return
 
         mode = self._mode_combo.currentText()
+        if self._apply_results_dir(prompt=True) is None:
+            # Running the test anyway would collect results that can't be saved.
+            self._stop_run_input()
+            QMessageBox.warning(
+                self,
+                "No recordings folder",
+                "No usable recordings folder was chosen, so the test has not been started.\n\n"
+                "Choose a folder when asked (or in HeadMouse: File > Set Recordings Folder...).",
+            )
+            return
         self._screen_w, self._screen_h = self._current_screen_geometry()
         stimulus = None
         if mouse_task and mode != MODE_TYPING:
@@ -920,9 +930,8 @@ class FittsTestWindow(QMainWindow):
         self._logger = FittsResultsLogger()
         access_method = self._access_method_combo.currentText()
         record_head = self._record_head_checkbox.isChecked() or includes_head
-        # Recording head movement needs somewhere to save it, so this is the
-        # point at which the folder is asked for if it hasn't been chosen.
-        self._apply_results_dir(prompt=record_head)
+        # The folder was made ready above; this just points the new logger at it.
+        self._apply_results_dir(prompt=False)
         # Head samples are phase-labelled whenever head movement is recorded,
         # whichever access method is actually driving the cursor.
         self._use_head_phase_provider = record_head

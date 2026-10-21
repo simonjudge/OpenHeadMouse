@@ -6,6 +6,8 @@ sessions/
 fitts_sessions/
 *.egg-info/
 .DS_Store
+*.iss
+*.spec
 
 build/
 dist/

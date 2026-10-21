@@ -75,6 +75,12 @@ def test_stationary_pointer_only_clicks_once_until_it_moves_away():
         {"resume_time_s": -1},
         {"ring_diameter_px": 0},
         {"ring_thickness_px": 0},
+        {"zoom_width_px": 0},
+        {"zoom_height_px": -1},
+        {"zoom_width_px": 2.5},
+        {"zoom_scale": 1},
+        {"zoom_scale": float("nan")},
+        {"zoom_scale": float("inf")},
     ],
 )
 def test_invalid_settings_are_rejected(kwargs):

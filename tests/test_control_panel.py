@@ -81,6 +81,14 @@ def test_control_panel_dwell_click_settings(qt_app):
         "ring_diameter_px": 40,
         "ring_thickness_px": 4,
         "ring_color": "#ff0000",
+        "zoom_enabled": False,
+        "zoom_width_px": 300,
+        "zoom_height_px": 200,
+        "zoom_scale": 4.0,
+        "context_menu_enabled": False,
+        "context_menu_distance_px": 60,
+        "context_menu_size_px": 54,
+        "context_menu_lock_time_s": 3.0,
     }
 
     toggles = []
@@ -149,3 +157,24 @@ def test_dwell_fields_are_paired_side_by_side(qt_app):
     assert position(panel._resume_time_spin) == (tol_row, tol_col + 2)
     dia_row, dia_col = position(panel._ring_diameter_spin)
     assert position(panel._ring_thickness_spin) == (dia_row, dia_col + 2)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_dwell_settings_visibility_follows_checkbox_and_programmatic_updates(qt_app, enabled):
+    from gui.control_panel import ControlPanel
+
+    panel = ControlPanel(dwell_config={"enabled": enabled, "dwell_time_s": 2.5})
+    seen = []
+    panel.dwell_click_toggled.connect(seen.append)
+    try:
+        panel.show()
+        assert panel._dwell_settings_box.isVisible() is enabled
+        panel._dwell_check.setChecked(not enabled)
+        assert panel._dwell_settings_box.isVisible() is not enabled
+        assert seen == [not enabled]
+        panel.set_dwell_click_enabled(enabled)
+        assert panel._dwell_settings_box.isVisible() is enabled
+        assert seen == [not enabled]
+        assert panel.dwell_settings["dwell_time_s"] == 2.5
+    finally:
+        panel.close()

@@ -121,6 +121,8 @@ def test_folder_is_shown_and_changed_from_the_file_menu_only(qt_app):
         window.set_recordings_dir(Path("/data/study"))
         assert window.recordings_dir_text == str(Path("/data/study"))
         assert str(Path("/data/study")) in window._recordings_folder_action.toolTip()
+        assert str(Path("/data/study")) in window._recordings_folder_info_action.text()
+        assert not window._recordings_folder_info_action.isEnabled()
     finally:
         window.close()
 
@@ -244,6 +246,102 @@ def test_no_prompt_when_head_tracking_without_recording(qt_app, tmp_path, monkey
     assert app._recordings_base_dir is None
 
 
+def test_a_missing_recordings_folder_is_created_before_recording(qt_app, tmp_path, monkeypatch):
+    base = tmp_path / "deleted" / "study"
+    app = _make_app(tmp_path, config_path=tmp_path / "config.json", base_dir=base)
+    monkeypatch.setattr(
+        recording_paths,
+        "prompt_for_base_dir",
+        lambda parent=None, reason="": pytest.fail("a usable folder must not be asked for"),
+    )
+
+    assert app.ensure_recordings_base_dir() == base
+    assert (base / "sessions").is_dir()
+    assert (base / "fitts_sessions").is_dir()
+
+
+def test_an_unusable_recordings_folder_asks_for_another(qt_app, tmp_path, monkeypatch):
+    blocker = tmp_path / "not_a_folder"
+    blocker.write_text("")
+    app = _make_app(tmp_path, config_path=tmp_path / "config.json", base_dir=blocker)
+    warned = []
+    monkeypatch.setattr(
+        recording_paths, "warn_unusable_base_dir", lambda parent, folder, problem: warned.append(folder)
+    )
+    chosen = tmp_path / "study"
+    monkeypatch.setattr(recording_paths, "prompt_for_base_dir", lambda parent=None, reason="": chosen)
+
+    assert app.ensure_recordings_base_dir() == chosen
+    assert warned == [blocker]
+    assert app._recorder.output_dir == chosen / "sessions"
+
+
+def test_head_tracking_is_not_started_to_record_without_a_folder(qt_app, tmp_path, monkeypatch):
+    app = _make_app(tmp_path, config_path=tmp_path / "config.json")
+    monkeypatch.setattr(recording_paths, "prompt_for_base_dir", lambda parent=None, reason="": None)
+    warnings = []
+    app._warn_no_recordings_dir = warnings.append
+    callback = lambda started: None
+
+    assert app.start_head_tracking(callback, mouse_control=False) is False
+
+    assert warnings
+    assert callback not in app._tracking_ready_callbacks
+    assert not app.window.controls.recording_enabled
+
+
+def test_recording_is_switched_back_off_when_no_folder_is_chosen(qt_app, tmp_path, monkeypatch):
+    app = _make_app(tmp_path, config_path=tmp_path / "config.json")
+    monkeypatch.setattr(recording_paths, "prompt_for_base_dir", lambda parent=None, reason="": None)
+    app.window.controls.recording_toggled.connect(app._on_recording_toggled)
+
+    app.window.controls.set_recording_enabled(True)
+
+    assert not app.window.controls.recording_enabled
+    assert app._config["ui"]["recording_enabled"] is False
+
+
+def test_choosing_a_folder_redirects_the_next_recording(qt_app, tmp_path, monkeypatch):
+    from core.recorder import Recorder
+
+    app = _make_app(tmp_path, config_path=tmp_path / "config.json", base_dir=tmp_path / "old")
+    app._recorder = Recorder(output_dir=app._head_sessions_dir())
+    starts = []
+
+    def fake_prompt(parent=None, reason="", start_dir=None):
+        starts.append(start_dir)
+        return tmp_path / "new"
+
+    monkeypatch.setattr(recording_paths, "prompt_for_base_dir", fake_prompt)
+
+    app._on_choose_recordings_dir()
+
+    assert starts == [tmp_path / "old"]
+    assert app.window.shown_recordings_dirs[-1] == tmp_path / "new"
+    app._recorder.record_sample(0.0, [1.0, 0.0, 0.0, 0.0])
+    assert app._save_recording().parent == tmp_path / "new" / "sessions"
+
+
+def test_a_failed_save_asks_for_another_folder_instead_of_losing_the_session(
+    qt_app, tmp_path, monkeypatch
+):
+    from core.recorder import Recorder
+
+    blocker = tmp_path / "not_a_folder"
+    blocker.write_text("")
+    app = _make_app(tmp_path, config_path=tmp_path / "config.json")
+    app._recorder = Recorder(output_dir=blocker / "sessions")
+    app._recorder.record_sample(0.0, [1.0, 0.0, 0.0, 0.0])
+    monkeypatch.setattr(recording_paths, "warn_unusable_base_dir", lambda *args: None)
+    chosen = tmp_path / "rescue"
+    monkeypatch.setattr(recording_paths, "prompt_for_base_dir", lambda parent=None, reason="": chosen)
+
+    saved = app._save_recording()
+
+    assert saved.parent == chosen / "sessions"
+    assert json.loads(saved.read_text())["sample_count"] == 1
+
+
 # -- Fitts test ------------------------------------------------------------
 
 def _configure_small_test(window: FittsTestWindow) -> None:
@@ -290,13 +388,14 @@ def test_fitts_asks_for_the_folder_when_recording_head_movement(qt_app, tmp_path
         )
         window._on_start_clicked()
 
-        assert prompts[-1] is True
+        assert True in prompts
         assert window._logger.output_dir == tmp_path / "study" / "fitts_sessions"
     finally:
         window.close()
 
 
-def test_fitts_does_not_ask_when_head_movement_is_not_recorded(qt_app, tmp_path):
+def test_fitts_needs_the_folder_even_when_head_movement_is_not_recorded(qt_app, tmp_path):
+    """The test's own results are recordings too, so they need the folder."""
     window = FittsTestWindow()
     try:
         _configure_small_test(window)
@@ -310,8 +409,28 @@ def test_fitts_does_not_ask_when_head_movement_is_not_recorded(qt_app, tmp_path)
         window.set_recordings_dir_provider(provider)
         window._on_start_clicked()
 
-        assert True not in prompts
+        assert True in prompts
+        assert window._canvas is not None
         assert window._logger.output_dir == tmp_path / "study" / "fitts_sessions"
+    finally:
+        window.close()
+
+
+def test_fitts_is_not_started_without_a_recordings_folder(qt_app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
+    window = FittsTestWindow()
+    try:
+        _configure_small_test(window)
+        _set_checked_without_saving(window._record_head_checkbox, False)
+        window.set_recordings_dir_provider(lambda prompt=True: None)
+
+        window._on_start_clicked()
+
+        assert window._canvas is None
+        assert warnings and "recordings folder" in warnings[0][2]
     finally:
         window.close()
 
@@ -398,31 +517,36 @@ def test_standalone_fitts_prefers_the_folder_set_in_the_headmouse_gui(qt_app, tm
         window.close()
 
 
-def test_standalone_fitts_still_runs_when_the_prompt_is_cancelled(qt_app, monkeypatch):
+def test_standalone_fitts_is_not_started_when_the_prompt_is_cancelled(qt_app, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
     monkeypatch.setattr(
         recording_paths, "prompt_for_base_dir", lambda parent=None, reason="": None
     )
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args))
 
     window = FittsTestWindow()
     try:
         _configure_small_test(window)
         _set_checked_without_saving(window._record_head_checkbox, True)
-        default_dir = window._logger.output_dir
 
         window._on_start_clicked()
 
-        assert window._canvas is not None
-        assert window._logger.output_dir == default_dir
+        assert window._canvas is None
+        assert len(warnings) == 1
     finally:
         window.close()
 
 
-def test_standalone_fitts_does_not_ask_without_head_recording(qt_app, monkeypatch):
-    monkeypatch.setattr(
-        recording_paths,
-        "prompt_for_base_dir",
-        lambda parent=None, reason="": pytest.fail("must not ask"),
-    )
+def test_standalone_fitts_asks_for_the_folder_without_head_recording(qt_app, tmp_path, monkeypatch):
+    prompts = []
+
+    def fake_prompt(parent=None, reason=""):
+        prompts.append(reason)
+        return tmp_path / "study"
+
+    monkeypatch.setattr(recording_paths, "prompt_for_base_dir", fake_prompt)
 
     window = FittsTestWindow()
     try:
@@ -431,7 +555,9 @@ def test_standalone_fitts_does_not_ask_without_head_recording(qt_app, monkeypatc
 
         window._on_start_clicked()
 
+        assert len(prompts) == 1
         assert window._canvas is not None
+        assert (tmp_path / "study" / "fitts_sessions").is_dir()
     finally:
         window.close()
 
