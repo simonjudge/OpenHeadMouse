@@ -741,8 +741,9 @@ node --test .\colab_session_viewer\viewer.test.cjs
 .\.venv\Scripts\python.exe tools\check_publication.py
 ```
 
-Tests configure offscreen Qt and have a per-test timeout. On Linux, run under
-`xvfb-run -a` for libraries that also require an X display. CI runs these checks
+Tests configure offscreen Qt by default and have a per-test timeout. On Linux, use
+`QT_QPA_PLATFORM=xcb xvfb-run -a python -m pytest -q` so OpenGL widgets have a
+supported X display/context. CI runs these checks
 before packaging. The publication check is pattern-based and not an exhaustive audit.
 
 Camera, xIMU3, AirPods, global hotkey, and native Swift helper behavior require the

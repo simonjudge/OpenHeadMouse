@@ -29,10 +29,11 @@ node --test .\colab_session_viewer\viewer.test.cjs
 python tools\check_publication.py
 ```
 
-Linux tests need an X display for some input-library imports:
-`xvfb-run -a python -m pytest -q`.
+Linux tests need an X display and the XCB Qt platform for input/OpenGL libraries:
+`QT_QPA_PLATFORM=xcb xvfb-run -a python -m pytest -q`.
 Device tests use mocks; passing them does not validate real camera/IMU hardware,
 hotkey permissions, OpenGL rendering or packaged installation.
+Actions test-result and temporary build artifacts are retained for seven days.
 
 Keep contributions focused, include regression tests and update related guidance.
 New code contributed to this project is expected to be available under its MIT

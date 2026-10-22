@@ -38,7 +38,8 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-24.04, macos-14]
     env:
-      QT_QPA_PLATFORM: offscreen
+      QT_QPA_PLATFORM: ${{ matrix.os == 'ubuntu-24.04' && 'xcb' || 'offscreen' }}
+      LIBGL_ALWAYS_SOFTWARE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -83,4 +84,5 @@ jobs:
         with:
           name: test-results-${{ matrix.os }}
           path: test-results.xml
+          retention-days: 7
           if-no-files-found: warn

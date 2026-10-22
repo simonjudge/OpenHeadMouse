@@ -15,6 +15,7 @@ from IPython.display import HTML, clear_output, display
 from colab_session_viewer.data import (
     Session, format_number, initial_pose_reference_diagram, initial_pose_wireframes, participant_rows, participant_tables,
     payload_json, playback_payload, summary_csv, column_label, table_sources, head_range_diagnostics,
+    field_description,
 )
 from colab_session_viewer.archive import ArchiveDataset, Assignment, load_archive, manifest_csv
 
@@ -54,6 +55,13 @@ class NotebookViewer:
         self.viewer = widgets.Output(layout=widgets.Layout(width="100%"))
         self.message = widgets.HTML()
         self.table = widgets.HTML()
+        self.pose_zero_controls = {
+            axis: widgets.Checkbox(value=False, description=f"Zero {axis}", indent=False,
+                                   layout=widgets.Layout(width="120px"))
+            for axis in ("yaw", "pitch", "roll")
+        }
+        for control in self.pose_zero_controls.values():
+            control.observe(self._pose_zero_changed, names="value")
         self.exclusion_controls = widgets.VBox()
         self.import_participant = widgets.Text(description="Participant:", placeholder="P01")
         self.import_session = widgets.Text(description="Session:", placeholder="Test 1")
@@ -91,6 +99,10 @@ class NotebookViewer:
                          "trials across all imported sessions using the desktop FittsStats formulas. "
                          "Times are seconds, angles degrees, distances pixels; error_rate is a fraction. "
                          "Blank values mean unavailable. Pre-test columns are means across available sessions.</p>"),
+            widgets.HTML("<b>Initial head position plots only</b>: set selected angles to 0.0 deg for all "
+                         "participant plots. Tables, CSVs and playback are unchanged. Uncheck to restore recorded angles."),
+            widgets.HBox(list(self.pose_zero_controls.values()),
+                         layout=widgets.Layout(flex_flow="row wrap")),
             self.table,
         ], layout=widgets.Layout(width="100%"))
         self._show_empty()
@@ -304,6 +316,9 @@ class NotebookViewer:
     def summary_rows(self):
         return participant_rows(self.sessions, self.exclusions)
 
+    def _pose_zero_changed(self, change):
+        self._refresh_table()
+
     def _refresh_table(self):
         rows = self.summary_rows()
         if not rows:
@@ -341,20 +356,28 @@ class NotebookViewer:
         for label, table_rows in participant_tables(rows).items():
             filename = label.lower().replace(" ", "_") + ".csv"
             sections.append(
-                f"<h3>{label}</h3><p>{descriptions[label]}</p>" +
+                f"<h3>{label}</h3>" +
                 self._table_html(table_rows, filename, f"Download {label.lower()} CSV")
             )
             sources = table_sources(self.sessions, label)
             sections.append(
-                '<div style="font-size:11px;margin:6px 0"><b>Source files:</b><ul>' +
+                '<details style="font-size:11px;margin:6px 0;overflow-wrap:anywhere"><summary><b>Source files</b></summary><ul>' +
                 "".join(f"<li>{html.escape(participant)}: " +
                         (", ".join(html.escape(name) for name in names) if names else "No contributing files") +
                         "</li>" for participant, names in sorted(sources.items())) +
-                "</ul></div>"
+                "</ul></details>"
             )
             if label == "Initial head positions":
-                sections.append(initial_pose_reference_diagram())
-                sections.append(initial_pose_wireframes(table_rows))
+                sections.append(
+                    "<details><summary><b>Angle references and zero-position diagrams</b></summary>"
+                    f"<p>{descriptions[label]}</p>" + initial_pose_reference_diagram() + "</details>"
+                )
+                zero_axes = tuple(axis for axis, control in self.pose_zero_controls.items() if control.value)
+                sections.append(initial_pose_wireframes(table_rows, zero_axes=zero_axes))
+            else:
+                sections.append(
+                    f"<details><summary><b>Calculation notes</b></summary><p>{descriptions[label]}</p></details>"
+                )
             if label == "Head movement stats":
                 diagnostics = [row for session in self.sessions
                                if (row := head_range_diagnostics(session)) is not None]
@@ -377,7 +400,7 @@ class NotebookViewer:
         columns = list(dict.fromkeys(key for row in rows for key in row))
         header = "".join(
             f'<th title="{html.escape(c, quote=True)}" style="padding:4px;overflow-wrap:anywhere;'
-            f'font-weight:600">{html.escape(column_label(c))}</th>' for c in columns
+            f'font-weight:bold">{html.escape(column_label(c))}</th>' for c in columns
         )
         body = []
         for row in rows:
@@ -391,7 +414,15 @@ class NotebookViewer:
         return (
             f'<a download="{filename}" href="data:text/csv;base64,{encoded}">{download_label}</a>'
             '<div style="width:100%;max-width:100%;overflow-x:auto">'
-            '<table border="1" cellpadding="3" style="border-collapse:collapse;table-layout:fixed;'
-            'width:100%;font-size:11px;line-height:1.25;overflow-wrap:anywhere">'
+            '<table border="1" cellpadding="3" style="border-collapse:collapse;table-layout:auto;'
+            'width:auto;max-width:100%;font-size:11px;line-height:1.25;overflow-wrap:anywhere">'
             f"<thead><tr>{header}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
+            '<details style="overflow-wrap:anywhere"><summary><b>Field key</b></summary>'
+            '<p>Blank means unavailable. Values are displayed/exported to 1 decimal place; calculations retain precision. '
+            'Fitts measures pool retained trials across files, including misses. Path measures average only usable '
+            'trials, using sampled paths with the click point appended when needed.</p><dl>' +
+            "".join(
+                f'<dt><b>{html.escape(column_label(c))}</b> <code>{html.escape(c)}</code></dt>'
+                f'<dd>{html.escape(field_description(c))}</dd>' for c in columns
+            ) + '</dl></details>'
         )

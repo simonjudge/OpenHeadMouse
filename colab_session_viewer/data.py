@@ -388,6 +388,106 @@ def participant_tables(rows: list[dict]) -> dict[str, list[dict]]:
     }
 
 
+def field_description(key: str) -> str:
+    """Definitions match the shared statistics helpers and their aggregation."""
+    definitions = {
+        "participant": "Participant label assigned at import.",
+        "sessions": "Number of imported sessions for this participant, including head-only or Fitts-only sessions.",
+        "head_files": "Number of sessions containing a head recording.",
+        "fitts_files": "Number of sessions containing a Fitts recording.",
+        "head_samples": "Total number of head samples across all recordings.",
+        "head_duration_s": "Sum of head recording durations (last minus first timestamp), in seconds.",
+        "exclude_first_targets_per_file": "First N chronological completed targets excluded from each Fitts file; head data is unaffected.",
+        "targets_recorded": "Total completed targets before exclusions, including misses.",
+        "targets_excluded": "Total targets removed by the first-N-per-file setting.",
+        "targets_analysed": "Retained targets after exclusions, including misses; pooled across Fitts files.",
+        "hits": "Number of retained targets with a successful hit.",
+        "error_rate": "Retained misses divided by retained targets; a fraction from 0 to 1, not a percentage.",
+        "mean_movement_time_s": "Mean recorded movement time (MT) across all retained trials, in seconds.",
+        "effective_amplitude_px": "Effective amplitude (Ae): mean actual start-to-click Euclidean distance, in pixels.",
+        "effective_width_px": "Effective width (We): 4.133 times the sample SD of click error projected onto each start-to-target axis, pooled across retained trials, in pixels. Zero with fewer than two trials.",
+        "index_of_difficulty_bits": "Effective index of difficulty (IDe): log2(Ae / We + 1), in bits; the shared helper returns zero when We is zero.",
+        "throughput_bits_per_s": "Throughput (TP): pooled effective index of difficulty divided by mean movement time, in bits/s; zero for non-positive MT.",
+        "path_trial_count": "Retained trials with at least two path points and a nonzero start-to-target axis; these contribute to the path-measure means.",
+        "path_tre": "Target re-entry (TRE): mean number of entries after the first entry into the circular target, per usable trial.",
+        "path_tac": "Task-axis crossing (TAC): mean number of sign changes in perpendicular path displacement, per usable trial; zeros are ignored.",
+        "path_mdc": "Movement-direction change (MDC): mean number of direction reversals perpendicular to the task axis, per usable trial; zero steps are ignored.",
+        "path_odc": "Orthogonal-direction change (ODC): mean number of direction reversals along the task axis, per usable trial; zero steps are ignored.",
+        "path_mv_px": "Movement variability (MV): sample SD of perpendicular path displacement about its own mean, in pixels, averaged over usable trials.",
+        "path_me_px": "Movement error (ME): mean absolute perpendicular distance from the task axis, in pixels, averaged over usable trials.",
+        "path_mo_px": "Movement offset (MO): mean signed perpendicular distance from the task axis, in pixels, averaged over usable trials. Positive is the left-hand normal (-uy, ux) in stored screen coordinates, not necessarily screen-up.",
+        "session": "Imported session label.",
+        "head_file": "Original head recording filename within the import.",
+        "samples": "Number of head samples in this recording.",
+        "fitts_samples": "Head samples explicitly labelled task_phase == fitts_test.",
+        "max_abs_relative_pitch_deg": "Maximum absolute neutral-relative Euler pitch in the recording, in degrees.",
+        "near_gimbal_samples": "Samples with absolute neutral-relative Euler pitch at least 80 deg; a warning of proximity to the +/-90 deg singularity.",
+    }
+    if key in definitions:
+        return definitions[key]
+    if key.startswith("head_initial_rest_"):
+        measure = key.removeprefix("head_initial_rest_").removesuffix("_session_mean")
+        initial = {
+            "yaw_absolute_mean_deg": "Circular mean yaw during initial-rest hold in the provider frame; not necessarily a compass heading.",
+            "yaw_relative_mean_deg": "Circular mean initial-rest yaw after removing only mean calibration heading, not full neutral tilt. Unavailable without calibration.",
+            "yaw_calibration_mean_deg": "Yaw of the mean saved calibration quaternion (or saved neutral when calibration samples are absent), in provider coordinates.",
+            "sample_count": "Number of head samples during initial-rest hold.",
+            "duration_s": "Last minus first host timestamp during initial-rest hold, in seconds; unavailable without enough host timestamps.",
+        }
+        if measure in initial:
+            description = initial[measure]
+        elif measure in ("pitch_mean_deg", "roll_mean_deg"):
+            axis = measure.split("_")[0]
+            description = f"Mean initial-rest {axis}, in degrees: gravity-referenced for xIMU3/AirPods with correct mounting/fit; camera-referenced for webcam systems."
+        elif measure in ("yaw_std_deg", "pitch_std_deg", "roll_std_deg"):
+            axis = measure.split("_")[0]
+            description = f"Population SD of initial-rest {axis}, in degrees." + (
+                " Uses unwrapped calibration-heading-relative yaw; unavailable without calibration." if axis == "yaw" else ""
+            )
+        else:
+            raise ValueError(f"Missing initial-position field definition: {key}")
+        return description + " Participant value is the mean of available session values (circular for mean yaw)."
+    if key.startswith("head_range_of_movement_task_"):
+        axis = key.removeprefix("head_range_of_movement_task_").split("_")[0]
+        return (
+            f"Unwrapped provider-frame {axis} max-minus-min across labelled ROM move and hold samples only, "
+            "in degrees; mean of available session spans. Not the full-neutral-relative range in Head movement stats."
+        )
+    if key.startswith("head_range_of_movement_directions_"):
+        direction = key.removeprefix("head_range_of_movement_directions_").split("_")[0]
+        axis = "yaw" if direction in ("left", "right") else "pitch"
+        measure = (
+            f"Signed difference between mean {axis} in the {direction} hold and initial-rest mean {axis}"
+            if "_offset_from_rest_" in key else f"Mean {axis} during the {direction} ROM hold"
+        )
+        reference = (
+            " Yaw is calibration-heading-relative when calibration is available, otherwise provider-frame."
+            if axis == "yaw" else " Pitch retains provider-frame tilt (gravity-referenced for IMUs, camera-referenced for webcam)."
+        )
+        return measure + ", in degrees; mean of available sessions. Only labelled hold samples contribute." + reference
+    if key.startswith(("head_speed_", "head_acceleration_")):
+        measure = (
+            "Angular speed: shortest quaternion rotation between successive samples divided by elapsed time, in deg/s"
+            if key.startswith("head_speed_") else
+            "Angular acceleration magnitude: absolute change in angular speed divided by elapsed time, in deg/s2"
+        )
+        aggregate = "Mean" if key.endswith("_mean") else "Maximum"
+        return (
+            f"{aggregate} across all usable within-recording intervals. {measure}. "
+            "Includes preparation and ROM; no across-file derivatives. Non-positive intervals and intervals "
+            "shorter than half the positive median sample interval are excluded before speed calculation."
+        )
+    if key.endswith("_range_deg"):
+        axis = key.removeprefix("head_").removeprefix("fitts_").split("_")[0]
+        scope = "Fitts-labelled samples only" if key.startswith("fitts_") else "all recording samples"
+        aggregate = " Participant value is the largest within-recording span, not pooled extrema." if key.startswith("head_") else ""
+        return (
+            f"Unwrapped {axis} Euler max-minus-min from inverse(neutral) * sample, in degrees, using {scope}. "
+            "Neutral-relative components can couple when neutral is tilted; not gravity-referenced tilt ranges." + aggregate
+        )
+    raise ValueError(f"Missing field definition: {key}")
+
+
 def format_number(value) -> str:
     if value is None:
         return ""
@@ -451,18 +551,30 @@ def initial_pose_reference_diagram(mesh_path: Path | None = None) -> str:
         '<p>These are reference poses, not participant data. IMU tilt assumes correct sensor mounting/fit. '
         'Camera axes follow the camera, so a tilted camera does not define gravity-level. '
         'xIMU3 yaw may be magnetic when enabled and reliable; AirPods yaw has an arbitrary heading reference. '
-        'Positive directions: yaw left, pitch up, roll left ear down.</p>'
+        'Positive directions: yaw left, pitch up, roll left ear down. '
+        'Participant plots use a fixed oblique viewing angle to expose the signed head axes; '
+        'this viewing angle is not part of the reported pose.</p>'
         '<div style="display:flex;flex-wrap:wrap">' + "".join(cards) + '</div>'
     )
 
 
-def initial_pose_wireframes(rows: list[dict], mesh_path: Path | None = None) -> str:
+def initial_pose_wireframes(
+    rows: list[dict], mesh_path: Path | None = None, *, zero_axes: tuple[str, ...] = (),
+) -> str:
     """Initial-rest tilt with saved calibration mean yaw, not initial-rest yaw."""
+    if set(zero_axes) - {"yaw", "pitch", "roll"}:
+        raise ValueError("Plot zero axes must be yaw, pitch or roll")
     cards = []
     geometry = None
     for row in rows:
         angles = [row.get("head_initial_rest_yaw_calibration_mean_deg_session_mean")]
         angles += [row.get(f"head_initial_rest_{axis}_mean_deg_session_mean") for axis in ("pitch", "roll")]
+        if all(value is None for value in angles):
+            participant = html.escape(row["participant"])
+            cards.append(f"<figure><figcaption>{participant}</figcaption><p>No initial head pose recorded.</p></figure>")
+            continue
+        angles = [0.0 if axis in zero_axes else value
+                  for axis, value in zip(("yaw", "pitch", "roll"), angles)]
         participant = html.escape(row["participant"])
         if any(value is None for value in angles):
             cards.append(f"<figure><figcaption>{participant}</figcaption><p>No initial head pose recorded "
@@ -475,6 +587,10 @@ def initial_pose_wireframes(rows: list[dict], mesh_path: Path | None = None) -> 
         rotation = head_rotation_to_mesh_frame(rotation_from_quaternion(
             *qm.from_euler_zyx(*np.radians(angles))
         ))
+        view = head_rotation_to_mesh_frame(rotation_from_quaternion(
+            *qm.from_euler_zyx(*np.radians([20, -10, 0]))
+        ))
+        rotation = view @ rotation
         rotated = vertices @ rotation.T
         scale = 240 / np.maximum(0.2, 4 - rotated[:, 2])
         projected = np.column_stack((120 + rotated[:, 0] * scale, 110 - rotated[:, 1] * scale))
@@ -483,13 +599,34 @@ def initial_pose_wireframes(rows: list[dict], mesh_path: Path | None = None) -> 
             f'x2="{projected[b, 0]:.1f}" y2="{projected[b, 1]:.1f}"/>'
             for a, b in edges
         )
+        axes_markup = []
+        for axis, direction, color in (
+            ("X", [0, 0, 1], "#a62920"), ("Y", [1, 0, 0], "#146b36"), ("Z", [0, 1, 0], "#175fa8"),
+        ):
+            endpoints = np.array([direction, -np.array(direction)]) * 1.3 @ rotation.T
+            axis_scale = 240 / np.maximum(0.2, 4 - endpoints[:, 2])
+            points = np.column_stack((120 + endpoints[:, 0] * axis_scale, 110 - endpoints[:, 1] * axis_scale))
+            for sign, (x, y) in zip(("+", "-"), points):
+                dash = ' stroke-dasharray="3 2"' if sign == "-" else ""
+                axes_markup.append(
+                    f'<path d="M120 110 L{x:.1f} {y:.1f}" fill="none" stroke="{color}" '
+                    f'stroke-width="1.8"{dash}/>'
+                    f'<text x="{x:.1f}" y="{y - 4:.1f}" fill="{color}" font-size="11" '
+                    f'font-weight="bold" text-anchor="middle">{sign}{axis}</text>'
+                )
         caption = " / ".join(format_number(angle) for angle in angles)
         cards.append(
-            f'<figure style="margin:8px"><figcaption><b>{participant}</b><br>'
-            f'Calibration yaw / initial pitch / roll: {caption} deg</figcaption>'
+            f'<figure style="margin:8px;max-width:100%"><figcaption><b>{participant}</b><br>'
+            f'Calibration yaw / initial pitch / roll: {caption} deg'
+            + ("<br>Display-only zero: " + ", ".join(zero_axes) if zero_axes else "") + '</figcaption>'
             f'<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{participant} initial head pose" '
-            f'viewBox="0 0 240 220" width="240" height="220">'
-            f'<g fill="none" stroke="#333" stroke-width="0.7">{lines}</g></svg></figure>'
+            f'viewBox="0 0 240 285" style="width:240px;max-width:100%">'
+            f'<g fill="none" stroke="#333" stroke-width="0.7">{lines}</g>{"".join(axes_markup)}'
+            '<text x="5" y="220" font-size="10">Head axes: X forward, Y left, Z up</text>'
+            '<text x="5" y="237" font-size="10">Yaw: + left / - right (about Z)</text>'
+            '<text x="5" y="254" font-size="10">Pitch: + up / - down</text>'
+            '<text x="5" y="271" font-size="10">Roll: + left ear down / - right ear down</text>'
+            '</svg></figure>'
         )
     return '<div style="display:flex;flex-wrap:wrap">' + "".join(cards) + "</div>"
 

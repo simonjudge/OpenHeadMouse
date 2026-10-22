@@ -24,7 +24,8 @@ def main() -> None:
     if len(executables) != 4:
         raise RuntimeError(f"Expected four release executables, found {len(executables)}")
     with tempfile.TemporaryDirectory(prefix="openheadmouse-smoke-") as temporary:
-        env = {**os.environ, "QT_QPA_PLATFORM": "offscreen"}
+        env = dict(os.environ)
+        env.setdefault("QT_QPA_PLATFORM", "offscreen")
         config = Path(temporary) / "config.json"
         shutil.copyfile(Path(__file__).resolve().parents[1] / "config.json", config)
         for path in executables:

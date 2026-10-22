@@ -18,6 +18,7 @@ licence files and refuse to overwrite an unrecognised nonempty directory.
 | Python | PSF licence and notices for included components |
 | NumPy, SciPy | BSD-style licences plus bundled numerical-library notices |
 | PySide6, Shiboken6, Qt | LGPL/GPL/commercial alternatives; review the exact Qt modules and native plugins included |
+| Qt Virtual Keyboard | GPL-3.0/commercial, not LGPL; currently automatically collected in all four Windows candidates and a blocking redistribution item |
 | pyqtgraph | MIT |
 | OpenCV / opencv-python | Apache-2.0 for current releases; preserve third-party notices and review included codecs |
 | MediaPipe | Apache-2.0; preserve its LICENSE and NOTICE |
@@ -32,6 +33,12 @@ Sources: [Qt for Python licensing](https://doc.qt.io/qtforpython-6/commercial/in
 [pynput](https://github.com/moses-palmer/pynput),
 [PyInstaller licence](https://pyinstaller.org/en/stable/license.html).
 The installed version's own licence files are authoritative.
+The Windows build analysis currently includes `Qt6VirtualKeyboard.dll`; its
+[6.11.2 source licence declaration](https://github.com/qt/qtvirtualkeyboard/blob/v6.11.2/src/virtualkeyboard/qvirtualkeyboardinputcontext.cpp)
+offers commercial or GPL-3.0-only terms. Exclude the unused module/plugin or resolve
+those terms before distributing binaries. Also note that the installed PySide6
+wheels only supplied a commercial licence file in their discovered package notices;
+the generated inventory does not supply the missing LGPL/GPL texts or source.
 
 ## MediaPipe assets
 

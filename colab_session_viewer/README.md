@@ -113,6 +113,13 @@ or pre-test measures. If a file has N or fewer targets it contributes none.
 The summaries are split into six tables, each with one row per participant
 across all their sessions and its own CSV download:
 
+Table columns size to their content rather than using equal fixed widths, with
+bold headers. Every table (including range diagnostics) has a collapsed
+**Field key** explaining every field, its units, aggregation and, for Fitts/path
+measures, its formula or count definition. **Source files**, calculation notes
+and initial-position angle-reference diagrams are collapsed by default; expand
+them when needed.
+
 1. **Session summary:** session/file counts, head sample count, summed head
    recording duration. Movement measures are in their own table.
 2. **Initial head positions:** head pose in degrees during `initial_rest.hold`,
@@ -149,6 +156,18 @@ across all their sessions and its own CSV download:
    Participant means average available session measurements, with yaw again
    averaged circularly. Calibration recorded during initial rest can naturally
    yield near-zero initial yaw.
+   Participant plots have signed head axes (X forward, Y left, Z up) and a sign
+   key: positive yaw is left, positive pitch is up, positive roll is left ear
+   down; negative values are the opposite. Solid axes are positive and dashed
+   axes negative. A fixed oblique viewing angle makes the three axes visible;
+   this viewing angle is not added to the displayed measurements.
+   **Zero yaw / Zero pitch / Zero roll** controls above the summaries set chosen
+   plotted Euler components to 0.0 degrees for every participant, immediately
+   redrawing the plots. Uncheck to restore the original angles. This is a
+   display-only override, not recalibration: tables, CSV exports, source data
+   and playback stay unchanged. Explicitly zeroing yaw permits a tilt-only
+   plot when calibration heading is missing; wholly absent initial poses are
+   never manufactured.
 3. **Range of movement stats:** only `range_of_movement.*` task data. Columns
    containing `task_yaw_range`, `task_pitch_range` and `task_roll_range` measure
    the angle span across move and hold samples within each session, averaged

@@ -16,13 +16,15 @@ the applicable gates below are signed off.
 - [x] Tagged builds create drafts; hyphenated versions are marked prereleases.
 - [x] Build-environment versions and discovered third-party notices exported.
 - [x] Release checksum generation and no-input-control packaged smoke tests configured.
-- [x] Python 3.12.15 / Qt 6.11.2: 592 tests passed with exit code 0 in the worktree
-  (2026-10-22), including repeated synchronised-window destruction, real
-  OpenCV/MediaPipe imports and notice-export replacement/safety regressions.
-  A publication-only snapshot also passed the earlier 588-test suite.
+- [x] Python 3.12.15 / Qt 6.11.2: the final publication-only snapshot passed
+  606 tests with exit code 0 (2026-10-22), including synchronised-window
+  destruction, real OpenCV/MediaPipe imports, notice-export safety, deterministic
+  mock sample periods and the approved additional notebook viewer changes.
+  The earlier 592-test suite also passed in the worktree and Windows GitHub CI.
 - [ ] Clean-checkout GitHub Actions run passes on each included build platform.
 - [x] All four Windows EXEs/installers build and packaged smoke tests pass locally.
-- [ ] Exact build-environment inventory and artefact checksums archived.
+- [x] Windows build inventory archived (59 installed distributions, 116 discovered
+  licence files); all nine executable/installer/notices checksums independently verified.
 - [x] GitHub workflow syntax/semantics validated locally with actionlint 1.7.12.
 - [x] Six JavaScript playback tests passed.
 
@@ -59,6 +61,10 @@ service. This does not establish that historical study outputs are safe to publi
 - [ ] Establish a compliant corresponding-source arrangement for shipped LGPL libraries.
 - [ ] Verify/document rebuilding or recombining LGPL components in single-file bundles.
 - [ ] Confirm no incompatible GPL-only Qt modules/codecs/plugins are shipped.
+- [ ] Resolve Qt Virtual Keyboard's GPL-3.0/commercial terms: PyInstaller's analysis
+  currently includes `Qt6VirtualKeyboard.dll` in all four Windows editions.
+  Remove the unused module/plugin or establish compatible redistribution terms
+  before publishing binaries; the overall LGPL review remains required.
 
 Single-file EXEs were retained by explicit maintainer choice, with binary publication
 deferred pending this review. See [third-party notices](THIRD_PARTY_NOTICES.md).
@@ -106,6 +112,9 @@ tools. Do not use real participant data.
 - [ ] Review draft release notes and known limitations.
 - [x] Maintainer approved committing/pushing the complete worktree to private
   `main` for CI, without tagging, publishing or changing visibility.
+- [x] First private push completed. With maintainer approval, deleted 25 pre-RC
+  Actions artifacts (about 4.62 GiB) after CI hit the storage quota. GitHub may
+  take 6-12 hours to recalculate usage; do not bypass failing uploads/test gates.
 - [ ] Commit/push reviewed changes and confirm remote CI results.
 - [ ] Invite a small RC tester group; collect results before claiming stable support.
 - [ ] Approve source visibility and binary redistribution separately.

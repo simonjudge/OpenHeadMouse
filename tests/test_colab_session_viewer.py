@@ -703,7 +703,7 @@ def test_head_only_tables_numeric_precision_and_calibration_pose_wireframes(tmp_
     assert re.findall(r'<line [^>]+', svg) != re.findall(r'<line [^>]+', initial_pose_wireframes(neutral))
     assert "No initial head pose recorded" in initial_pose_wireframes([{"participant": "No head"}])
     rendered = NotebookViewer._table_html(
-        [{"participant": "P01", "count": 2, "value": 1.2345, "missing": None}], "test.csv", "CSV"
+        [{"participant": "P01", "sessions": 2, "mean_movement_time_s": 1.2345, "error_rate": None}], "test.csv", "CSV"
     )
     assert "<td>2.0</td>" in rendered
     assert "<td>1.2</td>" in rendered
@@ -765,11 +765,131 @@ def test_table_order_compact_headers_and_sources(tmp_path):
     viewer = NotebookViewer()
     viewer._add_sessions([session])
     markup = viewer.table.value
-    assert markup.count("<b>Source files:</b>") == 6
-    assert "table-layout:fixed" in markup
+    assert markup.count("<summary><b>Source files</b></summary>") == 6
+    assert "table-layout:auto" in markup
+    assert "table-layout:fixed" not in markup
     assert "overflow-wrap:anywhere" in markup
     assert "Yaw absolute (deg)" in markup
     assert "gravity does not determine yaw" in markup
+
+
+def test_collapsed_reference_sources_and_complete_field_keys(tmp_path):
+    from html.parser import HTMLParser
+    from colab_session_viewer.app import NotebookViewer
+    from colab_session_viewer.data import field_description, head_range_diagnostics, participant_tables
+
+    session = Session.load("P", "pair", head_path=make_head(tmp_path), fitts_path=make_fitts(tmp_path))
+    viewer = NotebookViewer()
+    viewer._add_sessions([session])
+
+    class ReportParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.details = []
+            self.headers = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "details":
+                self.details.append(dict(attrs))
+            elif tag == "th":
+                self.headers.append(dict(attrs))
+
+    parser = ReportParser()
+    parser.feed(viewer.table.value)
+    assert parser.details
+    assert all("open" not in attrs for attrs in parser.details)
+    assert all("font-weight:bold" in attrs["style"] for attrs in parser.headers)
+    assert viewer.table.value.count("<summary><b>Field key</b></summary>") == 7
+    for table in participant_tables(viewer.summary_rows()).values():
+        for key in table[0]:
+            assert field_description(key)
+            assert f"<code>{key}</code>" in viewer.table.value
+    for key in head_range_diagnostics(session):
+        assert field_description(key)
+        assert f"<code>{key}</code>" in viewer.table.value
+    for text in ("4.133", "log2(Ae / We + 1)", "Target re-entry (TRE)",
+                 "Task-axis crossing (TAC)", "Movement-direction change (MDC)",
+                 "Orthogonal-direction change (ODC)", "Movement variability (MV)",
+                 "Movement error (ME)", "Movement offset (MO)"):
+        assert text in viewer.table.value
+    assert "calibration-heading-relative when calibration is available" in field_description(
+        "head_range_of_movement_directions_left_angle_mean_deg_session_mean",
+    )
+
+
+@pytest.mark.parametrize("zero_axes", [
+    (), ("yaw",), ("pitch",), ("roll",), ("yaw", "pitch"),
+    ("yaw", "roll"), ("pitch", "roll"), ("yaw", "pitch", "roll"),
+])
+def test_pose_zero_axes_redraw_without_mutating_measurements(zero_axes):
+    import copy
+    import re
+    from colab_session_viewer.data import initial_pose_wireframes
+
+    rows = [{
+        "participant": "<P>",
+        "head_initial_rest_yaw_calibration_mean_deg_session_mean": 30,
+        "head_initial_rest_pitch_mean_deg_session_mean": 20,
+        "head_initial_rest_roll_mean_deg_session_mean": -10,
+    }]
+    before = copy.deepcopy(rows)
+    markup = initial_pose_wireframes(rows, zero_axes=zero_axes)
+    expected = [0 if axis in zero_axes else value
+                for axis, value in zip(("yaw", "pitch", "roll"), (30, 20, -10))]
+    assert " / ".join(f"{v:.1f}" for v in expected) + " deg" in markup
+    assert rows == before
+    for axis in ("X", "Y", "Z"):
+        assert f">+{axis}</text>" in markup
+        assert f">-{axis}</text>" in markup
+    assert "Yaw: + left / - right" in markup
+    assert "Pitch: + up / - down" in markup
+    assert "Roll: + left ear down / - right ear down" in markup
+    if zero_axes:
+        original = initial_pose_wireframes(rows)
+        assert re.findall(r"<line [^>]+", markup) != re.findall(r"<line [^>]+", original)
+
+
+def test_pose_controls_redraw_restore_and_preserve_exports_and_playback(tmp_path):
+    from colab_session_viewer.app import NotebookViewer
+
+    recorder = Recorder(tmp_path)
+    q = qm.from_euler_zyx(*np.radians([30, 20, -10]))
+    recorder.set_calibration([(0, q)], q)
+    for i in range(2):
+        recorder.record_sample(i, q, metadata={"task_phase": "initial_rest.hold"}, host_time=1000 + i)
+    session = Session.load("P", "Head", head_path=recorder.save("pose.json"))
+    viewer = NotebookViewer()
+    viewer._add_sessions([session])
+    before_markup = viewer.table.value
+    before_rows = viewer.summary_rows()
+    before_csv = summary_csv(before_rows)
+    before_playback = playback_payload(session)
+    for control in viewer.pose_zero_controls.values():
+        assert not control.value
+        control.value = True
+    assert "0.0 / 0.0 / 0.0 deg" in viewer.table.value
+    assert viewer.table.value != before_markup
+    assert viewer.summary_rows() == before_rows
+    assert summary_csv(viewer.summary_rows()) == before_csv
+    assert playback_payload(session) == before_playback
+    for control in viewer.pose_zero_controls.values():
+        control.value = False
+    assert viewer.table.value == before_markup
+
+
+def test_zero_missing_yaw_is_explicit_but_does_not_invent_initial_pose():
+    from colab_session_viewer.data import initial_pose_wireframes
+
+    row = {"participant": "P",
+           "head_initial_rest_pitch_mean_deg_session_mean": 20,
+           "head_initial_rest_roll_mean_deg_session_mean": -10}
+    assert "No initial head pose recorded" in initial_pose_wireframes([row])
+    assert "0.0 / 20.0 / -10.0 deg" in initial_pose_wireframes([row], zero_axes=("yaw",))
+    assert "No initial head pose recorded" in initial_pose_wireframes(
+        [{"participant": "No head"}], zero_axes=("yaw", "pitch", "roll"),
+    )
+    with pytest.raises(ValueError, match="Plot zero axes"):
+        initial_pose_wireframes([row], zero_axes=("invalid",))
 
 
 def test_ranges_use_quaternions_and_do_not_pool_different_euler_wrap_sheets(tmp_path):

@@ -104,7 +104,8 @@ def test_camera_runtime_dependencies_import():
     assert callable(FaceLandmarker.create_from_options)
 
 
-def test_packaged_smoke_checks_all_editions_with_existing_config(tmp_path, monkeypatch):
+@pytest.mark.parametrize("platform", ["offscreen", "xcb"])
+def test_packaged_smoke_checks_all_editions_with_existing_config(tmp_path, monkeypatch, platform):
     from tools import smoke_release
 
     for name in (
@@ -116,11 +117,12 @@ def test_packaged_smoke_checks_all_editions_with_existing_config(tmp_path, monke
     ):
         (tmp_path / name).touch()
     monkeypatch.setattr(sys, "argv", ["smoke_release.py", str(tmp_path)])
+    monkeypatch.setenv("QT_QPA_PLATFORM", platform)
     calls = []
 
     def run(command, *, env, check, timeout):
         assert "--smoke-test" in command
-        assert env["QT_QPA_PLATFORM"] == "offscreen"
+        assert env["QT_QPA_PLATFORM"] == platform
         assert check is True and timeout == 60
         if Path(command[0]).name.startswith("OpenHeadMouse-"):
             config = Path(command[command.index("--config") + 1])
