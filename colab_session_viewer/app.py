@@ -46,7 +46,7 @@ def _write_upload(directory: Path, name: str, content: bytes, prefix: str) -> Pa
 
 
 class NotebookViewer:
-    def __init__(self, *, demo_directory: str = "/content/drive/MyDrive/OpenHeadMouse/demo"):
+    def __init__(self, *, demo_directory: str | None = None):
         self.sessions: list[Session] = []
         self.exclusions: dict[str, int] = {}
         self._changing = False
@@ -56,7 +56,8 @@ class NotebookViewer:
         self.message = widgets.HTML()
         self.load_demo = widgets.Checkbox(value=False, description="Load Demo Data", indent=False)
         self.demo_directory = widgets.Text(
-            value=demo_directory, description="Demo folder:", layout=widgets.Layout(width="95%"),
+            value=str(_FOLDER / "demodata") if demo_directory is None else demo_directory,
+            description="Demo folder:", layout=widgets.Layout(width="95%"),
         )
         self._loaded_demo_archives: set[Path] = set()
         self.load_demo.observe(self._load_demo_changed, names="value")
@@ -86,9 +87,9 @@ class NotebookViewer:
         self.session.observe(self._session_changed, names="value")
         self.loading_widget = widgets.VBox([
             self.load_demo, self.demo_directory,
-            widgets.HTML("<p>Demo ZIPs must contain valid root CSV manifests. In Colab, a folder under "
-                         "<code>/content/drive/MyDrive</code> uses authorized Google Drive access. "
-                         "Locally, enter a local folder. Unchecking does not remove imported data.</p>"),
+            widgets.HTML("<p>Load bundled ZIPs from <code>colab_session_viewer/demodata</code>, each with "
+                         "a valid root CSV manifest. No Google Drive authorization is needed. "
+                         "You can also enter another local folder. Unchecking does not remove imported data.</p>"),
             widgets.HTML("<h3>Import recordings</h3><p>Add a head file, a Fitts file, or a matching pair. "
                          "Repeat for additional tests/participants. Names must be unique within each participant.</p>"),
             widgets.HBox([self.import_participant, self.import_session]),
@@ -146,18 +147,6 @@ class NotebookViewer:
             if not text:
                 raise ValueError("Enter the demo ZIP folder first")
             folder = Path(text).expanduser()
-            drive_root = Path("/content/drive")
-            if folder.is_relative_to(drive_root) and not (drive_root / "MyDrive").is_dir():
-                try:
-                    from google.colab import drive
-                except ModuleNotFoundError as error:
-                    if error.name not in ("google", "google.colab"):
-                        raise
-                    raise ValueError("Google Drive is not mounted. Locally, enter a local demo folder.") from error
-                try:
-                    drive.mount(str(drive_root))
-                except (ValueError, RuntimeError) as error:
-                    raise ValueError(f"Could not mount Google Drive: {error}") from error
             if not folder.is_dir():
                 raise ValueError(f"Demo folder does not exist: {folder}")
             archives = sorted(

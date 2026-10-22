@@ -39,19 +39,18 @@ angular/cursor plots and live values use the desktop viewer's recording
 semantics. Browser canvas rendering replaces the desktop's Qt/OpenGL widgets;
 it is not a pixel-identical native UI. No data is resampled or time-stretched.
 
-### Demo data from Google Drive or a local folder
+### Bundled demo data
 
-Set `DEMO_DATA_DIR` in the loading cell, or edit **Demo folder** in the loading
-block. The default is `/content/drive/MyDrive/OpenHeadMouse/demo`. Put demo ZIPs
+Check **Load Demo Data** at the top of the loading block to import ZIPs from
+`colab_session_viewer/demodata` in the current project checkout. This default
+is resolved from the project/module location, not the notebook working directory,
+so it works locally and in Colab. Put demo ZIPs
 directly in that folder, each with a valid root CSV manifest (any CSV filename).
-Then check **Load Demo Data** at the top of the loading block.
-
-In Colab, a path under `/content/drive` requests Google Drive authorization and
-mounts Drive if necessary, only when you check the box. Use a Drive folder you
-can access; shared public URLs are not supported by this folder-based loader.
-Other users must have their own accessible folder/path, for example a copy in
-their My Drive. Locally, set the folder to a local or desktop-synced Drive folder;
-Google Colab authorization is not used for local paths.
+No Google Drive authorization, mounting or public sharing links are needed.
+In Colab, the demo folder must be included in the published checkout or uploaded
+project. Use lowercase `demodata` (Colab paths are case-sensitive).
+To use another local folder, set `DEMO_DATA_DIR` in the loading cell or edit
+**Demo folder** in the loading block.
 
 All ZIPs directly in the folder are validated before any demo sessions are added.
 A missing/invalid manifest, recording or duplicate participant/session rejects
@@ -60,8 +59,8 @@ sent to review; use manual ZIP import to label them first. Loaded ZIP paths are
 remembered for this viewer: unchecking does not delete data, and rechecking skips
 already loaded ZIPs but loads newly added ones. Fix an error and check again to
 retry. Start a new viewer/kernel to reload a modified ZIP at the same path.
-Drive access does not publish or upload demo files elsewhere; use only data
-appropriate for sharing and follow the notebook runtime's privacy policy.
+Bundled demos are distributed with the project; include only data appropriate
+for public sharing and follow the notebook runtime's privacy policy.
 
 For each session, enter participant/session names, upload a head JSON/CSV, a
 Fitts JSON or a matching pair, then click **Add session**. Repeat for any number

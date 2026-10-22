@@ -164,48 +164,26 @@ def test_demo_missing_empty_folder_and_pending_review(tmp_path):
     assert "cancel the current ZIP review" in viewer.message.value
 
 
-@pytest.mark.parametrize("mount_fails", [False, True])
-def test_demo_colab_mount_on_explicit_checkbox_only(tmp_path, monkeypatch, mount_fails):
-    from types import ModuleType
+def test_demo_defaults_to_bundled_folder_independent_of_cwd(tmp_path, monkeypatch):
     from colab_session_viewer.app import NotebookViewer
     import colab_session_viewer.app as app
 
-    drive_root = tmp_path / "drive"
-    folder = drive_root / "MyDrive" / "demo"
+    module_folder = tmp_path / "colab_session_viewer"
+    folder = module_folder / "demodata"
+    folder.mkdir(parents=True)
     content = archive_bytes("participant,session,head_file,fitts_file\nA,Demo,,test.json\n",
                             {"test.json": make_fitts(tmp_path).read_bytes()})
-    calls = []
-
-    def mount(path):
-        calls.append(path)
-        if mount_fails:
-            raise RuntimeError("Authorization cancelled")
-        folder.mkdir(parents=True)
-        (folder / "demo.zip").write_bytes(content)
-
-    google = ModuleType("google")
-    colab = ModuleType("google.colab")
-    drive = ModuleType("google.colab.drive")
-    drive.mount = mount
-    google.colab = colab
-    colab.drive = drive
-    monkeypatch.setitem(sys.modules, "google", google)
-    monkeypatch.setitem(sys.modules, "google.colab", colab)
-    monkeypatch.setitem(sys.modules, "google.colab.drive", drive)
-    monkeypatch.setattr(app, "Path", lambda text: drive_root if text == "/content/drive" else Path(text))
-    viewer = NotebookViewer(demo_directory=str(folder))
-    assert not calls
+    (folder / "demo.zip").write_bytes(content)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(app, "_FOLDER", module_folder)
+    viewer = NotebookViewer()
+    assert Path(viewer.demo_directory.value) == folder
+    assert not viewer.sessions
     viewer.load_demo.value = True
-    assert calls == [str(drive_root)]
-    if mount_fails:
-        assert "Could not mount Google Drive: Authorization cancelled" in viewer.message.value
-        assert not viewer.load_demo.value
-        assert not viewer.sessions
-    else:
-        assert len(viewer.sessions) == 1
-        viewer.load_demo.value = False
-        viewer.load_demo.value = True
-        assert len(calls) == 1
+    assert len(viewer.sessions) == 1
+    viewer.load_demo.value = False
+    viewer.load_demo.value = True
+    assert len(viewer.sessions) == 1
 
 
 def test_notebook_has_separate_loading_and_session_cells():
@@ -213,6 +191,7 @@ def test_notebook_has_separate_loading_and_session_cells():
     cells = {cell["id"]: "".join(cell["source"]) for cell in notebook["cells"]}
     assert "viewer.show_loading()" in cells["loading"]
     assert "DEMO_DATA_DIR =" in cells["loading"]
+    assert "PROJECT_DIR / 'colab_session_viewer' / 'demodata'" in cells["loading"]
     assert cells["viewer"].strip() == "viewer.show_session();"
     assert "NotebookViewer(" not in cells["viewer"]
 
@@ -226,7 +205,7 @@ def test_notebook_loading_and_viewing_cells_execute_and_keep_imports(tmp_path, m
     monkeypatch.setattr(importlib, "reload", lambda module: module)
     shown = []
     monkeypatch.setattr(app, "display", shown.append)
-    namespace = {}
+    namespace = {"PROJECT_DIR": ROOT}
     exec(cells["loading"], namespace)
     viewer = namespace["viewer"]
     viewer.add_session("P", "Test", fitts_path=make_fitts(tmp_path))
