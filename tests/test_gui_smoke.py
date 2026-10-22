@@ -466,23 +466,26 @@ def test_app_wires_mock_provider_through_to_headmouse(qt_app, monkeypatch):
     config.setdefault("ui", {})["calibration_enabled"] = False
     config["ui"]["mouse_control_enabled"] = True
     app = App(config, poll_hz=90.0, auto_start_listeners=False, mouse_controller=FakeMouseController())
+
+    def wait_for_movement(previous):
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            app._poll()
+            position = tuple(app.headmouse._position)
+            if position != previous:
+                return position
+            time.sleep(0.01)
+        pytest.fail(f"Mock provider did not move the fake cursor from {previous} within 5 seconds")
+
     try:
         app._on_start_requested("mock")
         assert app.headmouse._mouse.position == (400.0, 400.0)
-        time.sleep(0.3)  # let the MockProvider thread push a few samples
-
-        app._poll()
+        first_position = wait_for_movement((400.0, 400.0))
         yaw_text = app.window.telemetry._yaw_label.text()
         assert "--" not in yaw_text  # telemetry was actually updated from a real sample
 
         assert app.headmouse.state.value == "active"
-        first_position = tuple(app.headmouse._position)
-
-        time.sleep(0.05)  # ensure a fresh sample is queued before the next poll
-        app._poll()
-        second_position = tuple(app.headmouse._position)
-        # MockProvider is continuously oscillating, so the cursor should have
-        # moved between successive polls once tracking is active.
+        second_position = wait_for_movement(first_position)
         assert first_position != second_position
     finally:
         app._on_stop_requested()
