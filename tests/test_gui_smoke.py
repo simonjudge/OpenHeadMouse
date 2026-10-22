@@ -458,9 +458,10 @@ def test_start_uses_native_geometry_for_window_display(qt_app, monkeypatch):
         app.shutdown()
 
 
-def test_app_wires_mock_provider_through_to_headmouse(qt_app):
+def test_app_wires_mock_provider_through_to_headmouse(qt_app, monkeypatch):
     from main import App, load_config
 
+    monkeypatch.setattr("main._screen_geometry", lambda _screen, window_id=None: (800, 800, 0, 0))
     config = copy.deepcopy(load_config())
     config.setdefault("ui", {})["calibration_enabled"] = False
     config["ui"]["mouse_control_enabled"] = True
