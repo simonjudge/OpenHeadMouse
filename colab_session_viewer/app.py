@@ -46,7 +46,7 @@ def _write_upload(directory: Path, name: str, content: bytes, prefix: str) -> Pa
 
 
 class NotebookViewer:
-    def __init__(self):
+    def __init__(self, *, demo_directory: str = "/content/drive/MyDrive/OpenHeadMouse/demo"):
         self.sessions: list[Session] = []
         self.exclusions: dict[str, int] = {}
         self._changing = False
@@ -54,6 +54,12 @@ class NotebookViewer:
         self.session = widgets.Dropdown(description="Session:")
         self.viewer = widgets.Output(layout=widgets.Layout(width="100%"))
         self.message = widgets.HTML()
+        self.load_demo = widgets.Checkbox(value=False, description="Load Demo Data", indent=False)
+        self.demo_directory = widgets.Text(
+            value=demo_directory, description="Demo folder:", layout=widgets.Layout(width="95%"),
+        )
+        self._loaded_demo_archives: set[Path] = set()
+        self.load_demo.observe(self._load_demo_changed, names="value")
         self.table = widgets.HTML()
         self.pose_zero_controls = {
             axis: widgets.Checkbox(value=False, description=f"Zero {axis}", indent=False,
@@ -78,7 +84,11 @@ class NotebookViewer:
         bulk.on_click(self._import_archive)
         self.participant.observe(self._participant_changed, names="value")
         self.session.observe(self._session_changed, names="value")
-        self.widget = widgets.VBox([
+        self.loading_widget = widgets.VBox([
+            self.load_demo, self.demo_directory,
+            widgets.HTML("<p>Demo ZIPs must contain valid root CSV manifests. In Colab, a folder under "
+                         "<code>/content/drive/MyDrive</code> uses authorized Google Drive access. "
+                         "Locally, enter a local folder. Unchecking does not remove imported data.</p>"),
             widgets.HTML("<h3>Import recordings</h3><p>Add a head file, a Fitts file, or a matching pair. "
                          "Repeat for additional tests/participants. Names must be unique within each participant.</p>"),
             widgets.HBox([self.import_participant, self.import_session]),
@@ -88,6 +98,8 @@ class NotebookViewer:
                          "label participants/sessions, then import and download your manifest.</p>"),
             widgets.HBox([self.archive_upload, bulk]),
             self.archive_review, self.manifest_downloads, self.message,
+        ], layout=widgets.Layout(width="100%"))
+        self.session_widget = widgets.VBox([
             widgets.HTML("<h2>Session viewer</h2>"),
             widgets.HBox([self.participant, self.session]), self.viewer,
             widgets.HTML("<h3>Participant exclusions</h3><p>Exclude the first N completed targets "
@@ -105,11 +117,82 @@ class NotebookViewer:
                          layout=widgets.Layout(flex_flow="row wrap")),
             self.table,
         ], layout=widgets.Layout(width="100%"))
+        self.widget = widgets.VBox(
+            [*self.loading_widget.children, *self.session_widget.children],
+            layout=widgets.Layout(width="100%"),
+        )
         self._show_empty()
 
     def show(self):
         display(self.widget)
         return self
+
+    def show_loading(self):
+        display(self.loading_widget)
+        return self
+
+    def show_session(self):
+        display(self.session_widget)
+        return self
+
+    def _load_demo_changed(self, change):
+        if not change["new"]:
+            return
+        self.load_demo.disabled = self.demo_directory.disabled = True
+        try:
+            if self._pending_dataset is not None:
+                raise ValueError("Import or cancel the current ZIP review before loading demo data")
+            text = self.demo_directory.value.strip()
+            if not text:
+                raise ValueError("Enter the demo ZIP folder first")
+            folder = Path(text).expanduser()
+            drive_root = Path("/content/drive")
+            if folder.is_relative_to(drive_root) and not (drive_root / "MyDrive").is_dir():
+                try:
+                    from google.colab import drive
+                except ModuleNotFoundError as error:
+                    if error.name not in ("google", "google.colab"):
+                        raise
+                    raise ValueError("Google Drive is not mounted. Locally, enter a local demo folder.") from error
+                try:
+                    drive.mount(str(drive_root))
+                except (ValueError, RuntimeError) as error:
+                    raise ValueError(f"Could not mount Google Drive: {error}") from error
+            if not folder.is_dir():
+                raise ValueError(f"Demo folder does not exist: {folder}")
+            archives = sorted(
+                (p.resolve() for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".zip"),
+                key=lambda p: p.name.lower(),
+            )
+            if not archives:
+                raise ValueError(f"No demo ZIPs found in {folder}")
+            pending = [path for path in archives if path not in self._loaded_demo_archives]
+            sessions, datasets, notes = [], [], []
+            for path in pending:
+                try:
+                    dataset = ArchiveDataset.read(path.read_bytes())
+                    if not dataset.has_manifest:
+                        raise ValueError("Demo ZIP needs a valid root CSV manifest; use manual ZIP import for labelling")
+                    sessions.extend(dataset.build_sessions(dataset.assignments))
+                except (ValueError, TypeError, KeyError, OSError, csv.Error, zipfile.BadZipFile) as error:
+                    raise ValueError(f"{path.name}: {error}") from error
+                datasets.append(dataset)
+                notes.extend(f"{path.name}: {warning}" for warning in dataset.warnings)
+            if sessions:
+                self._add_sessions(sessions)
+                for dataset in datasets:
+                    self._save_manifest_link(dataset.assignments)
+                self._loaded_demo_archives.update(pending)
+            self._notify(
+                f"Loaded {len(sessions)} demo session(s) from {len(pending)} ZIP(s). "
+                f"{len(archives) - len(pending)} previously loaded ZIP(s) skipped. "
+                + ("Import notes: " + "; ".join(notes) if notes else "")
+            )
+        except (ValueError, TypeError, KeyError, OSError, csv.Error, zipfile.BadZipFile) as error:
+            self.load_demo.value = False
+            self._notify(f"Demo import failed: {error}", error=True)
+        finally:
+            self.load_demo.disabled = self.demo_directory.disabled = False
 
     def _show_empty(self):
         with self.viewer:

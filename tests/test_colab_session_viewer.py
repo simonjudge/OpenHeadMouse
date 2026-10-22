@@ -70,6 +70,177 @@ def archive_bytes(manifest, files):
     return output.getvalue()
 
 
+def test_loading_and_session_outputs_share_one_viewer(monkeypatch):
+    from colab_session_viewer.app import NotebookViewer
+
+    viewer = NotebookViewer()
+    assert viewer.loading_widget.children[0] is viewer.load_demo
+    assert viewer.archive_review in viewer.loading_widget.children
+    assert viewer.message in viewer.loading_widget.children
+    assert viewer.viewer not in viewer.loading_widget.children
+    assert viewer.viewer in viewer.session_widget.children
+    assert viewer.table in viewer.session_widget.children
+    assert viewer.head_upload not in viewer.session_widget.children
+    outputs = []
+    monkeypatch.setattr("colab_session_viewer.app.display", outputs.append)
+    assert viewer.show_loading() is viewer
+    assert viewer.show_session() is viewer
+    assert outputs == [viewer.loading_widget, viewer.session_widget]
+
+
+def test_demo_loads_multiple_manifest_zips_once_and_can_add_new_zips(tmp_path):
+    from colab_session_viewer.app import NotebookViewer
+
+    files = {"test.json": make_fitts(tmp_path).read_bytes()}
+    for participant in ("A", "B"):
+        (tmp_path / f"{participant}.ZIP").write_bytes(archive_bytes(
+            None, {f"{participant} manifest.csv":
+                   f"participant,session,head_file,fitts_file\n{participant},Demo,,test.json\n", **files},
+        ))
+    viewer = NotebookViewer(demo_directory=str(tmp_path))
+    viewer.load_demo.value = True
+    assert [session.participant for session in viewer.sessions] == ["A", "B"]
+    assert len(viewer.manifest_downloads.children) == 2
+    assert "Loaded 2 demo session(s) from 2 ZIP(s)" in viewer.message.value
+    viewer.load_demo.value = False
+    assert len(viewer.sessions) == 2
+    viewer.load_demo.value = True
+    assert len(viewer.sessions) == 2
+    assert "2 previously loaded ZIP(s) skipped" in viewer.message.value
+    (tmp_path / "C.zip").write_bytes(archive_bytes(
+        "participant,session,head_file,fitts_file\nC,Demo,,test.json\n", files,
+    ))
+    viewer.load_demo.value = False
+    viewer.load_demo.value = True
+    assert len(viewer.sessions) == 3
+    assert len(viewer.manifest_downloads.children) == 3
+    assert not viewer.load_demo.disabled
+    assert not viewer.demo_directory.disabled
+
+
+@pytest.mark.parametrize("failure", ["no_manifest", "broken_zip", "duplicate", "missing_file"])
+def test_demo_batch_errors_are_atomic_and_reported(tmp_path, failure):
+    from colab_session_viewer.app import NotebookViewer
+
+    files = {"test.json": make_fitts(tmp_path).read_bytes()}
+    valid = archive_bytes("participant,session,head_file,fitts_file\nA,Demo,,test.json\n", files)
+    (tmp_path / "A.zip").write_bytes(valid)
+    bad = {
+        "no_manifest": archive_bytes(None, files),
+        "broken_zip": b"not a zip",
+        "duplicate": valid,
+        "missing_file": archive_bytes("participant,session,head_file,fitts_file\nB,Demo,,missing.json\n", files),
+    }[failure]
+    (tmp_path / "B.zip").write_bytes(bad)
+    viewer = NotebookViewer(demo_directory=str(tmp_path))
+    viewer.load_demo.value = True
+    assert not viewer.sessions
+    assert not viewer._loaded_demo_archives
+    assert not viewer.manifest_downloads.children
+    assert not viewer.load_demo.value
+    assert not viewer.load_demo.disabled
+    assert "Demo import failed:" in viewer.message.value
+    assert not viewer._pending_dataset
+    (tmp_path / "B.zip").unlink()
+    viewer.load_demo.value = True
+    assert len(viewer.sessions) == 1
+
+
+def test_demo_missing_empty_folder_and_pending_review(tmp_path):
+    from colab_session_viewer.app import NotebookViewer
+    from colab_session_viewer.archive import ArchiveDataset
+
+    viewer = NotebookViewer(demo_directory="")
+    viewer.load_demo.value = True
+    assert "Enter the demo ZIP folder" in viewer.message.value
+    viewer.demo_directory.value = str(tmp_path / "missing")
+    viewer.load_demo.value = True
+    assert "Demo folder does not exist" in viewer.message.value
+    viewer.demo_directory.value = str(tmp_path)
+    viewer.load_demo.value = True
+    assert "No demo ZIPs" in viewer.message.value
+    viewer._pending_dataset = ArchiveDataset()
+    viewer.load_demo.value = True
+    assert "cancel the current ZIP review" in viewer.message.value
+
+
+@pytest.mark.parametrize("mount_fails", [False, True])
+def test_demo_colab_mount_on_explicit_checkbox_only(tmp_path, monkeypatch, mount_fails):
+    from types import ModuleType
+    from colab_session_viewer.app import NotebookViewer
+    import colab_session_viewer.app as app
+
+    drive_root = tmp_path / "drive"
+    folder = drive_root / "MyDrive" / "demo"
+    content = archive_bytes("participant,session,head_file,fitts_file\nA,Demo,,test.json\n",
+                            {"test.json": make_fitts(tmp_path).read_bytes()})
+    calls = []
+
+    def mount(path):
+        calls.append(path)
+        if mount_fails:
+            raise RuntimeError("Authorization cancelled")
+        folder.mkdir(parents=True)
+        (folder / "demo.zip").write_bytes(content)
+
+    google = ModuleType("google")
+    colab = ModuleType("google.colab")
+    drive = ModuleType("google.colab.drive")
+    drive.mount = mount
+    google.colab = colab
+    colab.drive = drive
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.colab", colab)
+    monkeypatch.setitem(sys.modules, "google.colab.drive", drive)
+    monkeypatch.setattr(app, "Path", lambda text: drive_root if text == "/content/drive" else Path(text))
+    viewer = NotebookViewer(demo_directory=str(folder))
+    assert not calls
+    viewer.load_demo.value = True
+    assert calls == [str(drive_root)]
+    if mount_fails:
+        assert "Could not mount Google Drive: Authorization cancelled" in viewer.message.value
+        assert not viewer.load_demo.value
+        assert not viewer.sessions
+    else:
+        assert len(viewer.sessions) == 1
+        viewer.load_demo.value = False
+        viewer.load_demo.value = True
+        assert len(calls) == 1
+
+
+def test_notebook_has_separate_loading_and_session_cells():
+    notebook = json.loads((ROOT / "colab_session_viewer" / "session_viewer.ipynb").read_text(encoding="utf-8"))
+    cells = {cell["id"]: "".join(cell["source"]) for cell in notebook["cells"]}
+    assert "viewer.show_loading()" in cells["loading"]
+    assert "DEMO_DATA_DIR =" in cells["loading"]
+    assert cells["viewer"].strip() == "viewer.show_session();"
+    assert "NotebookViewer(" not in cells["viewer"]
+
+
+def test_notebook_loading_and_viewing_cells_execute_and_keep_imports(tmp_path, monkeypatch):
+    import importlib
+    import colab_session_viewer.app as app
+
+    notebook = json.loads((ROOT / "colab_session_viewer" / "session_viewer.ipynb").read_text(encoding="utf-8"))
+    cells = {cell["id"]: "".join(cell["source"]) for cell in notebook["cells"]}
+    monkeypatch.setattr(importlib, "reload", lambda module: module)
+    shown = []
+    monkeypatch.setattr(app, "display", shown.append)
+    namespace = {}
+    exec(cells["loading"], namespace)
+    viewer = namespace["viewer"]
+    viewer.add_session("P", "Test", fitts_path=make_fitts(tmp_path))
+    exec(cells["viewer"], namespace)
+    assert shown[-1] is viewer.session_widget
+    exec(cells["loading"], namespace)
+    assert namespace["viewer"] is viewer
+    assert shown[-1] is viewer.loading_widget
+    assert len(viewer.sessions) == 1
+    exec(cells["viewer"], namespace)
+    assert namespace["viewer"] is viewer
+    assert len(viewer.sessions) == 1
+
+
 def test_first_targets_per_file_and_pooled_summary(tmp_path):
     first = Session.load("P01", "Test 1", fitts_path=make_fitts(tmp_path))
     second = Session.load("P01", "Test 2", fitts_path=make_fitts(tmp_path, "test2.json", count=3, offset=2000))
@@ -251,7 +422,8 @@ def test_archive_multiple_datasets_and_atomic_duplicates(tmp_path):
     viewer.session.value = "Test 2"
     children = viewer.widget.children
     assert next(i for i, child in enumerate(children)
-                if getattr(child, "value", "").startswith("<h3>Import recordings")) < children.index(viewer.viewer)
+                if isinstance(getattr(child, "value", None), str)
+                and child.value.startswith("<h3>Import recordings")) < children.index(viewer.viewer)
     assert children.index(viewer.archive_review) < children.index(viewer.viewer) < children.index(viewer.table)
     assert sum(child is viewer.viewer for child in viewer.widget.children) == 1
     viewer.exclusion_controls.children[0].value = 2

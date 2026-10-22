@@ -1,7 +1,7 @@
 # Colab session viewer
 
 Open [session_viewer.ipynb](session_viewer.ipynb) in Google Colab and run the
-setup and viewer cells. Use the notebook's **File > Open notebook > GitHub**
+setup, loading and session-viewer cells. Use the notebook's **File > Open notebook > GitHub**
 option after publishing this folder to a branch, or upload the notebook.
 Set `REVISION` in the setup cell to that published branch/tag. For unpublished
 work, upload the complete changed project to the runtime and set `PROJECT_DIR`
@@ -24,14 +24,44 @@ service. Colab itself receives files you upload; follow your study's data policy
 
 ## Import and playback
 
-The import block (including ZIP review and manifest downloads) appears first,
-followed by the single head/cursor viewer and then the summary tables. Import
+The loading cell displays only import controls, ZIP review and manifest downloads.
+The separate session-viewer cell displays the single head/cursor viewer and summary
+tables. Both share the same `viewer` instance; loading more data updates the viewer
+without rerunning its cell, and rerunning either display cell keeps the collection.
+Restart the kernel to pick up code changes to an existing viewer instance.
+For Python use, `viewer.show_loading()` and `viewer.show_session()` display those
+blocks independently; `viewer.show()` still displays the combined interface.
+Import
 controls do not interrupt the playback/statistics area. Select the viewer's
 participant and session with the two dropdowns. Play/pause, rewind, seek, playback speed,
 graph zoom, head-camera rotation/zoom, cursor trails, target/click markers,
 angular/cursor plots and live values use the desktop viewer's recording
 semantics. Browser canvas rendering replaces the desktop's Qt/OpenGL widgets;
 it is not a pixel-identical native UI. No data is resampled or time-stretched.
+
+### Demo data from Google Drive or a local folder
+
+Set `DEMO_DATA_DIR` in the loading cell, or edit **Demo folder** in the loading
+block. The default is `/content/drive/MyDrive/OpenHeadMouse/demo`. Put demo ZIPs
+directly in that folder, each with a valid root CSV manifest (any CSV filename).
+Then check **Load Demo Data** at the top of the loading block.
+
+In Colab, a path under `/content/drive` requests Google Drive authorization and
+mounts Drive if necessary, only when you check the box. Use a Drive folder you
+can access; shared public URLs are not supported by this folder-based loader.
+Other users must have their own accessible folder/path, for example a copy in
+their My Drive. Locally, set the folder to a local or desktop-synced Drive folder;
+Google Colab authorization is not used for local paths.
+
+All ZIPs directly in the folder are validated before any demo sessions are added.
+A missing/invalid manifest, recording or duplicate participant/session rejects
+the entire new batch with an import error. Manifestless demos are not guessed or
+sent to review; use manual ZIP import to label them first. Loaded ZIP paths are
+remembered for this viewer: unchecking does not delete data, and rechecking skips
+already loaded ZIPs but loads newly added ones. Fix an error and check again to
+retry. Start a new viewer/kernel to reload a modified ZIP at the same path.
+Drive access does not publish or upload demo files elsewhere; use only data
+appropriate for sharing and follow the notebook runtime's privacy policy.
 
 For each session, enter participant/session names, upload a head JSON/CSV, a
 Fitts JSON or a matching pair, then click **Add session**. Repeat for any number
