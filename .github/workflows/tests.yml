@@ -67,6 +67,12 @@ jobs:
       - run: python -m pip check
       - run: python tools/prepare_release.py --assets
       - run: python tools/check_publication.py
+      - name: Verify Linux Qt and OpenGL runtime
+        if: runner.os == 'Linux'
+        run: |
+          plugin=$(python -c "from PySide6.QtCore import QLibraryInfo; print(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath) + '/platforms/libqxcb.so')")
+          ldd "$plugin"
+          xvfb-run -a python -c "import cv2; from PySide6.QtWidgets import QApplication; from PySide6.QtGui import QOpenGLContext; app = QApplication([]); context = QOpenGLContext(); assert context.create(), 'Could not create an OpenGL context'; print('Qt platform:', app.platformName())"
       - name: Python tests (Linux virtual display)
         if: runner.os == 'Linux'
         run: xvfb-run -a python -m pytest -q --junitxml=test-results.xml
