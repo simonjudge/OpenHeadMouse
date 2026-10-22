@@ -82,7 +82,7 @@ const NotebookPlayback = (() => {
         get("title").textContent = data.title + (data.synced ? " (synchronised)" : "");
         get("pretest").innerHTML = data.pretest_html;
         get("session-summary").textContent = Object.entries(data.session_summary)
-            .map(([key, value]) => `${key}: ${typeof value === "number" ? Number(value.toFixed(3)) : value ?? "n/a"}`).join("\n");
+            .map(([key, value]) => `${key}: ${typeof value === "number" ? value.toFixed(1) : value ?? "n/a"}`).join("\n");
         let time = 0, playing = false, zoom = 1, timer = null;
         let cameraYaw = 0, cameraPitch = 0, cameraScale = 1;
         const slider = get("seek"), play = get("play"), speed = get("speed");
@@ -137,11 +137,11 @@ const NotebookPlayback = (() => {
             });
             const f = state.frame;
             get("head-live").textContent = [
-                state.headNote, `Time: ${f.t.toFixed(3)} s`, f.phase,
-                `Quaternion [w,x,y,z]: ${f.quaternion.map(v => v.toFixed(4)).join(", ")}`,
-                `Relative yaw / pitch / roll: ${f.angles.map(v => v.toFixed(2)).join(" / ")} deg`,
-                `Absolute yaw / pitch / roll: ${f.raw_angles.map(v => v.toFixed(2)).join(" / ")} deg`,
-                `Angular speed: ${f.speed.toFixed(2)} deg/s`, `Acceleration: ${f.acceleration.toFixed(2)} deg/s2`,
+                state.headNote, `Time: ${f.t.toFixed(1)} s`, f.phase,
+                `Quaternion [w,x,y,z]: ${f.quaternion.map(v => v.toFixed(1)).join(", ")}`,
+                `Relative yaw / pitch / roll: ${f.angles.map(v => v.toFixed(1)).join(" / ")} deg`,
+                `Absolute yaw / pitch / roll: ${f.raw_angles.map(v => v.toFixed(1)).join(" / ")} deg`,
+                `Angular speed: ${f.speed.toFixed(1)} deg/s`, `Acceleration: ${f.acceleration.toFixed(1)} deg/s2`,
             ].filter(Boolean).join("\n");
         }
         function cursor(state) {
@@ -184,15 +184,15 @@ const NotebookPlayback = (() => {
                 ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2);
                 ctx.fillStyle = "#d62728"; ctx.fill(); ctx.strokeStyle = "#000"; ctx.stroke();
             }
-            const lines = [state.phase, `Time: ${time.toFixed(3)} s`];
+            const lines = [state.phase, `Time: ${time.toFixed(1)} s`];
             if (trial) {
                 lines.push(`Trial: ${state.trialIndex + 1} / ${data.trials.length}`,
                     `${trial.block_type}: ${trial.condition_label}`,
                     `Outcome: ${state.clicked ? trial.hit ? "HIT" : "MISS" : "in progress"}`,
-                    `Elapsed: ${state.elapsed.toFixed(3)} s; MT: ${trial.movement_time_s.toFixed(3)} s`,
+                    `Elapsed: ${state.elapsed.toFixed(1)} s; MT: ${trial.movement_time_s.toFixed(1)} s`,
                     `Cursor: ${state.cursor.map(v => v.toFixed(1)).join(", ")} px`,
                     `Speed: ${state.speed.toFixed(1)} px/s; Distance: ${state.distance.toFixed(1)} px`);
-                for (const [key, value] of Object.entries(state.measures || {})) lines.push(`${key}: ${value.toFixed(3)}`);
+                for (const [key, value] of Object.entries(state.measures || {})) lines.push(`${key}: ${value.toFixed(1)}`);
             } else lines.push(`Cursor points: ${state.points.length}`);
             get("cursor-live").textContent = lines.join("\n");
         }
@@ -211,7 +211,7 @@ const NotebookPlayback = (() => {
                     ctx.fillText(label, 58, 12);
                     ctx.fillText((center + half).toFixed(1), 2, 27);
                     ctx.fillText((center - half).toFixed(1), 2, 88);
-                    ctx.fillText("0 s", 58, 99); ctx.fillText(`${data.duration.toFixed(2)} s`, canvas.width - 65, 99);
+                    ctx.fillText("0.0 s", 58, 99); ctx.fillText(`${data.duration.toFixed(1)} s`, canvas.width - 65, 99);
                     ctx.save(); ctx.beginPath(); ctx.rect(58, 20, canvas.width - 70, 68); ctx.clip();
                     if (isCursor) {
                         for (const trial of data.trials) {
@@ -242,7 +242,7 @@ const NotebookPlayback = (() => {
             const state = stateAt(data, time);
             head(state); cursor(state); drawGraphs(state);
             slider.value = String(time);
-            get("time").textContent = `${time.toFixed(3)} / ${data.duration.toFixed(3)} s`;
+            get("time").textContent = `${time.toFixed(1)} / ${data.duration.toFixed(1)} s`;
         }
         function pause() {
             playing = false; clearInterval(timer); timer = null; play.textContent = "Play";

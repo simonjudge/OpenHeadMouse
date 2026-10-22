@@ -435,7 +435,7 @@ def test_fitts_is_not_started_without_a_recordings_folder(qt_app, tmp_path, monk
         window.close()
 
 
-# -- standalone Fitts test (no HeadMouse window to ask on its behalf) -------
+# -- standalone Fitts test (no OpenHeadMouse window to ask on its behalf) -------
 
 def test_standalone_fitts_asks_for_the_folder_and_remembers_it(qt_app, tmp_path, monkeypatch):
     chosen = tmp_path / "study"
@@ -458,7 +458,7 @@ def test_standalone_fitts_asks_for_the_folder_and_remembers_it(qt_app, tmp_path,
 
         assert len(prompts) == 1
         assert window._logger.output_dir == chosen / "fitts_sessions"
-        # Saved in both places, so neither this window nor the HeadMouse
+        # Saved in both places, so neither this window nor the OpenHeadMouse
         # window asks again.
         assert window._settings.get("recordings_base_dir") == str(chosen)
         assert recording_paths.load_base_dir() == chosen

@@ -49,7 +49,7 @@ class SetupPanel(QWidget):
         self._start_button.setToolTip("Connect to the selected provider and start head tracking.")
         self._stop_button.setToolTip("Stop head tracking (and save the recording if Recording is on).")
         self._close_button = QPushButton("Close")
-        self._close_button.setToolTip("Close the HeadMouse setup window")
+        self._close_button.setToolTip("Close the OpenHeadMouse setup window")
         self._close_button.clicked.connect(lambda: self.window().close())
 
         self._start_button.clicked.connect(self._on_start_clicked)

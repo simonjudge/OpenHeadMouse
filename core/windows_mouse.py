@@ -33,7 +33,7 @@ class WindowsMouseController(mouse.Controller):
         if SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT)) != 1:
             raise OSError(
                 "Windows blocked pointer movement. If the target application is running "
-                "as administrator, run HeadMouse with matching permissions. "
+                "as administrator, run OpenHeadMouse with matching permissions. "
                 "Secure-desktop prompts cannot be controlled."
             )
         self._emit("on_move", x, y, True)

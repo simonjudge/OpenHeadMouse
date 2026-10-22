@@ -253,6 +253,25 @@ def test_typing_mode_groups_results_into_one_row_per_word(qt_app):
     num_words = len({s["repetition_index"] for s in canvas._specs})
     assert window._results_table.rowCount() == num_words + 1
 
+def test_legacy_headmouse_start_mode_uses_openheadmouse_branding(qt_app):
+    from fitts_law import fitts_settings
+
+    fitts_settings._SETTINGS_PATH.parent.mkdir(parents=True)
+    fitts_settings._SETTINGS_PATH.write_text(
+        '{"start_mode": "Start with HeadMouse"}', encoding="utf-8"
+    )
+    window = FittsTestWindow()
+    try:
+        assert START_HEADMOUSE == "Start with OpenHeadMouse"
+        assert window._start_mode_combo.currentText() == START_HEADMOUSE
+        assert window._access_method_combo.currentText() == "OpenHeadMouse"
+        window._save_settings()
+        settings = fitts_settings.FittsSettings()
+        assert settings.get("start_mode") == START_HEADMOUSE
+    finally:
+        window.close()
+
+
 def test_start_with_headmouse_option_is_disabled_without_a_host_app(qt_app):
     window = FittsTestWindow()
 
@@ -283,7 +302,7 @@ def test_start_with_headmouse_starts_the_test_once_tracking_is_ready(qt_app):
     # Nothing starts until the head tracker reports it is ready.
     assert window._canvas is None
     assert window._start_mode_combo.isEnabled() is False
-    assert window._access_method_combo.currentText() == "HeadMouse"
+    assert window._access_method_combo.currentText() == "OpenHeadMouse"
     # Driving the cursor with the head records it too.
     assert pending["mouse_control"] is True
     assert window._record_head_checkbox.isChecked() is True

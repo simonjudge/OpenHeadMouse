@@ -83,6 +83,7 @@ def make_app(qt_app, tmp_path):
         config["ui"]["mouse_control_enabled"] = True
         config["calibration"] = {"read_duration_s": read_s, "capture_duration_s": capture_s}
         config["recorder"]["output_dir"] = str(tmp_path)
+        config["recorder"]["base_dir"] = str(tmp_path)
         config["recorder"]["format"] = "json"
         app = App(config, auto_start_listeners=False, mouse_controller=FakeMouseController())
         apps.append(app)
@@ -121,13 +122,13 @@ def test_calibration_blocks_movement_then_recenters_and_saves(qt_app, make_app, 
     assert app._recorder.sample_count > 0
 
     app.window.setup_panel._on_stop_clicked()
-    files = list(tmp_path.glob("session_*.json"))
+    files = list((tmp_path / "sessions").glob("session_*.json"))
     assert len(files) == 1
     data = json.loads(files[0].read_text())
     assert data["calibration"]["sample_count"] == calibration["sample_count"]
     assert len(data["calibration"]["samples"]) == calibration["sample_count"]
     phases = {
-        sample["metadata"]["task_phase"]
+        sample["metadata"].get("task_phase")
         for sample in data["samples"]
     }
     assert "headmouse_initial_calibration.move" in phases

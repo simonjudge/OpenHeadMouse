@@ -7,36 +7,20 @@ session viewer (session_viewer/session_viewer.py).
 
 from __future__ import annotations
 
-import ssl
-import urllib.request
 from pathlib import Path
 
 import numpy as np
 
-MEDIAPIPE_OBJ_URL = (
-    "https://raw.githubusercontent.com/google-ai-edge/mediapipe/"
-    "master/mediapipe/modules/face_geometry/data/canonical_face_model.obj"
-)
+from core.model_assets import MESH_SHA256, MESH_URL, download_verified
+
+MEDIAPIPE_OBJ_URL = MESH_URL
 MODELS_DIR = Path(__file__).parent.parent / "models"
 OBJ_PATH = MODELS_DIR / "canonical_face_model.obj"
 
 
 def download_mediapipe_model(path: Path = OBJ_PATH) -> Path:
     """Download the official MediaPipe canonical face model if not present."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        print(f"Downloading MediaPipe face model to {path}...")
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        try:
-            with urllib.request.urlopen(MEDIAPIPE_OBJ_URL, context=ctx) as response:
-                with open(path, 'wb') as f:
-                    f.write(response.read())
-        except Exception as e:
-            print(f"Failed to download: {e}")
-            raise
-    return path
+    return download_verified(MEDIAPIPE_OBJ_URL, path, MESH_SHA256)
 
 
 def load_obj_wireframe(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

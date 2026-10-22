@@ -112,9 +112,9 @@ def test_velocity_mode_integrates_deadband_and_gamma():
     engine = DSPEngine(0, 0, SCREEN_W, SCREEN_H, mode="velocity",
                        velocity_kx=2, velocity_ky=1, deadband_deg_s=2, gamma=2)
     engine.process_velocity(qm.IDENTITY_QUATERNION, dt=0.1)
-    q = qm.from_euler_zyx(np.radians(1.0), 0, 0)  # 10 deg/s -> shaped to 8^2
+    q = qm.from_euler_zyx(np.radians(1.0), 0, 0)  # 10 deg/s -> 8 * (1 + 8)
     px, py = engine.process_velocity(q, dt=0.1)
-    assert px == pytest.approx(SCREEN_W / 2 - 2 * 64 * 0.1)
+    assert px == pytest.approx(SCREEN_W / 2 - 2 * 72 * 0.1)
     assert py == pytest.approx(SCREEN_H / 2)
 
 

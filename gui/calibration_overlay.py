@@ -42,7 +42,7 @@ class CalibrationOverlay(QWidget):
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setCursor(Qt.BlankCursor)
-        self.setWindowTitle("HeadMouse Calibration")
+        self.setWindowTitle("OpenHeadMouse Calibration")
         self._close_button = QPushButton("Close", self)
         self._close_button.setCursor(Qt.ArrowCursor)
         self._close_button.clicked.connect(self.close)

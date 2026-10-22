@@ -1,4 +1,4 @@
-"""Quaternion math for the HeadMouse reference frame.
+"""Quaternion math for the OpenHeadMouse reference frame.
 
 Convention: quaternions are represented as numpy arrays ``[w, x, y, z]``
 (scalar-first). This is the OPPOSITE of ``scipy.spatial.transform.Rotation``,

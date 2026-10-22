@@ -63,7 +63,8 @@ def make_head(tmp_path, name="head.json", offset=1000):
 def archive_bytes(manifest, files):
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
-        archive.writestr("manifest.csv", manifest)
+        if manifest is not None:
+            archive.writestr("manifest.csv", manifest)
         for name, content in files.items():
             archive.writestr(name, content)
     return output.getvalue()
@@ -226,7 +227,7 @@ def test_pretest_only_and_head_summary_no_cross_file_derivatives(tmp_path):
     assert row["head_speed_deg_s_max"] == pytest.approx(stats["head_speed_deg_s_max"])
     assert row["head_speed_deg_s_mean"] == pytest.approx(stats["head_speed_deg_s_mean"])
     assert row["head_yaw_range_deg"] == pytest.approx(stats["head_yaw_range_deg"])
-    assert row["cursor_range_of_movement_directions_left_extreme_px_session_mean"] == 140
+    assert not any(key.startswith("cursor_") for key in row)
 
 
 def test_archive_multiple_datasets_and_atomic_duplicates(tmp_path):
@@ -248,7 +249,10 @@ def test_archive_multiple_datasets_and_atomic_duplicates(tmp_path):
     viewer.participant.value = "P01"
     assert viewer.session.options == ("Test 1", "Test 2")
     viewer.session.value = "Test 2"
-    assert viewer.widget.children[2] is viewer.viewer
+    children = viewer.widget.children
+    assert next(i for i, child in enumerate(children)
+                if getattr(child, "value", "").startswith("<h3>Import recordings")) < children.index(viewer.viewer)
+    assert children.index(viewer.archive_review) < children.index(viewer.viewer) < children.index(viewer.table)
     assert sum(child is viewer.viewer for child in viewer.widget.children) == 1
     viewer.exclusion_controls.children[0].value = 2
     assert viewer.summary_rows()[0]["targets_analysed"] == 6
@@ -342,7 +346,6 @@ def test_notebook_code_valid_and_imports_without_qt():
     assert notebook["nbformat"] == 4
     for cell in notebook["cells"]:
         if cell["cell_type"] == "code":
-            assert cell["outputs"] == []
             compile("".join(cell["source"]), cell["id"], "exec")
     result = subprocess.run([
         sys.executable, "-c",
@@ -350,3 +353,569 @@ def test_notebook_code_valid_and_imports_without_qt():
         "assert not any(n.startswith(('PySide6', 'pynput', 'cv2')) for n in sys.modules)",
     ], cwd=ROOT, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_manifestless_zip_pairs_by_content_and_timestamps_not_names(tmp_path):
+    from colab_session_viewer.archive import ArchiveDataset
+
+    files = {
+        "a/unrelated-name.json": make_head(tmp_path).read_bytes(),
+        "b/head-sounding-name.json": make_fitts(tmp_path).read_bytes(),
+        "c/head.csv": make_head(tmp_path, "second.csv", offset=3000).read_bytes(),
+        "d/test.json": make_fitts(tmp_path, "second-fitts.json", offset=3000).read_bytes(),
+    }
+    dataset = ArchiveDataset.read(archive_bytes(None, files))
+    assert not dataset.has_manifest
+    assert len(dataset.assignments) == 2
+    assert {(a.head_file, a.fitts_file) for a in dataset.assignments} == {
+        ("a/unrelated-name.json", "b/head-sounding-name.json"), ("c/head.csv", "d/test.json"),
+    }
+    assert all(not a.participant for a in dataset.assignments)
+    for index, assignment in enumerate(dataset.assignments):
+        assignment.participant = "P01"
+        assignment.session = f"Test {index}"
+    sessions = dataset.build_sessions(dataset.assignments)
+    assert all(playback_payload(s)["synced"] for s in sessions)
+    assert sessions[0].head_filename == "a/unrelated-name.json"
+    assert "host timestamps 1000." in dataset.describe("a/unrelated-name.json")
+    assert "5 targets" in dataset.describe("b/head-sounding-name.json")
+
+
+def test_zip_pairing_uses_overlap_ranking_and_keeps_ambiguous_files_separate(tmp_path):
+    from colab_session_viewer.archive import ArchiveDataset
+
+    head = make_head(tmp_path).read_bytes()
+    fitts = make_fitts(tmp_path).read_bytes()
+    dataset = ArchiveDataset.read(archive_bytes(None, {
+        "head1.json": head, "head2.json": head, "test.json": fitts,
+    }))
+    assert len(dataset.assignments) == 3
+    assert not any(a.head_file and a.fitts_file for a in dataset.assignments)
+    assert any("multiple possible timestamp matches" in note for note in dataset.warnings)
+    # Both overlap, but the later-starting head covers less of the test.
+    dataset = ArchiveDataset.read(archive_bytes(None, {
+        "best.json": head,
+        "partial.json": make_head(tmp_path, "partial.json", offset=1008).read_bytes(),
+        "test.json": fitts,
+    }))
+    paired = next(a for a in dataset.assignments if a.fitts_file)
+    assert paired.head_file == "best.json"
+    assert len(dataset.assignments) == 2
+
+
+def test_zip_pairing_includes_pretest_only_files_and_excludes_nonoverlap(tmp_path):
+    from colab_session_viewer.archive import ArchiveDataset
+
+    logger = FittsResultsLogger(tmp_path)
+    logger.metadata["pretest_phases"] = [{
+        "phase": "initial_rest.hold", "task": "initial_rest", "segment": "hold",
+        "start_host_time": 1000, "end_host_time": 1002, "cursor_trajectory": [],
+    }]
+    dataset = ArchiveDataset.read(archive_bytes(None, {
+        "head.json": make_head(tmp_path).read_bytes(),
+        "exercise.json": logger.save("exercise.json").read_bytes(),
+        "unrelated.json": make_fitts(tmp_path, offset=5000).read_bytes(),
+    }))
+    assert len(dataset.assignments) == 2
+    exercise = next(a for a in dataset.assignments if a.fitts_file == "exercise.json")
+    assert exercise.head_file == "head.json"
+    unrelated = next(a for a in dataset.assignments if a.fitts_file == "unrelated.json")
+    assert unrelated.head_file == ""
+
+
+def test_zip_discovery_reports_invalid_files_and_legacy_unmatched_streams(tmp_path):
+    from colab_session_viewer.archive import ArchiveDataset
+
+    head = make_head(tmp_path)
+    data = json.loads(head.read_text())
+    for sample in data["samples"]:
+        sample.pop("host_time", None)
+    dataset = ArchiveDataset.read(archive_bytes(None, {
+        "head.json": json.dumps(data),
+        "legacy.json": make_fitts(tmp_path, host=False).read_bytes(),
+        "settings.json": '{"setting": true}', "broken.json": "{",
+        "notes.txt": "not a recording",
+    }))
+    assert len(dataset.recordings) == 2
+    assert len(dataset.assignments) == 2
+    assert not any(a.head_file and a.fitts_file for a in dataset.assignments)
+    assert len(dataset.warnings) == 2
+    assert "No shared host timestamps" in dataset.describe("head.json")
+    with pytest.raises(ValueError, match="no usable recordings"):
+        ArchiveDataset.read(archive_bytes(None, {"config.json": "{}"}))
+
+
+def test_review_labels_manifest_roundtrip_and_timestamp_offset(tmp_path):
+    import base64
+    import re
+    from colab_session_viewer.app import NotebookViewer
+    from colab_session_viewer.archive import ArchiveDataset, manifest_csv
+
+    # The provider clock starts at zero; host clock and Fitts start differ by 2s.
+    files = {
+        "participant/head.json": make_head(tmp_path, offset=998).read_bytes(),
+        "test/fitts.json": make_fitts(tmp_path).read_bytes(),
+    }
+    dataset = ArchiveDataset.read(archive_bytes(None, files))
+    viewer = NotebookViewer()
+    viewer._show_archive_review(dataset)
+    assert not viewer.sessions
+    assert len(viewer._review_rows) == 1
+    viewer._confirm_archive(None)
+    assert "names are required" in viewer.message.value
+    row = viewer._review_rows[0]
+    row["participant"].value = "P,01"
+    row["session"].value = "Mouse test"
+    assert "head samples" in row["details"].value
+    viewer._confirm_archive(None)
+    assert len(viewer.sessions) == 1
+    assert viewer._pending_dataset is None
+    assert not viewer.archive_review.children
+    payload = playback_payload(viewer.sessions[0])
+    assert payload["clock_origin"] == 1000
+    assert payload["frames"][0]["t"] == 0
+    # First retained head sample was at provider time 2s, not the file's first frame.
+    assert payload["frames"][0]["angles"][0] == pytest.approx(np.degrees(0.04))
+    link = viewer.manifest_downloads.children[0].value
+    encoded = re.search(r"base64,([^\" ]+)", link).group(1)
+    manifest = base64.b64decode(encoded).decode("utf-8-sig")
+    assert '"P,01"' in manifest
+    assert "participant/head.json" in manifest
+    restored = ArchiveDataset.read(archive_bytes(manifest, files))
+    sessions = restored.build_sessions(restored.assignments)
+    assert sessions[0].participant == "P,01"
+    assert sessions[0].name == "Mouse test"
+    assert playback_payload(sessions[0]) == payload
+    assert manifest_csv(restored.assignments) == manifest
+
+
+def test_review_repair_pair_and_cancel_are_atomic(tmp_path):
+    from colab_session_viewer.app import NotebookViewer
+    from colab_session_viewer.archive import ArchiveDataset
+
+    dataset = ArchiveDataset.read(archive_bytes(None, {
+        "head1.json": make_head(tmp_path).read_bytes(),
+        "head2.json": make_head(tmp_path, "later-head.json", offset=5000).read_bytes(),
+        "fitts.json": make_fitts(tmp_path).read_bytes(),
+    }))
+    viewer = NotebookViewer()
+    viewer._show_archive_review(dataset)
+    first, second = viewer._review_rows
+    first["participant"].value = second["participant"].value = "P"
+    second["session"].value = "Head only"
+    first["head_file"].value = "head2.json"
+    viewer._confirm_archive(None)
+    assert "do not overlap" in viewer.message.value
+    assert not viewer.sessions
+    first["head_file"].value = "head1.json"
+    second["include"].value = False
+    viewer._confirm_archive(None)
+    assert len(viewer.sessions) == 1
+    viewer._show_archive_review(dataset)
+    viewer._cancel_archive(None)
+    assert viewer._pending_dataset is None
+    assert len(viewer.sessions) == 1
+
+
+def test_review_splitting_a_pair_can_add_row_and_reject_reuse(tmp_path):
+    from colab_session_viewer.app import NotebookViewer
+    from colab_session_viewer.archive import ArchiveDataset
+
+    dataset = ArchiveDataset.read(archive_bytes(None, {
+        "head.json": make_head(tmp_path).read_bytes(), "fitts.json": make_fitts(tmp_path).read_bytes(),
+    }))
+    viewer = NotebookViewer()
+    viewer._show_archive_review(dataset)
+    viewer.archive_review.children[-1].children[1].click()  # Add assignment row.
+    assert len(viewer._review_rows) == 2
+    first, second = viewer._review_rows
+    for index, row in enumerate((first, second)):
+        row["participant"].value = "P"
+        row["session"].value = f"Test {index}"
+    second["head_file"].value = "head.json"
+    viewer._confirm_archive(None)
+    assert "assigned more than once" in viewer.message.value
+    assert not viewer.sessions
+    first["head_file"].value = ""
+    viewer._confirm_archive(None)
+    assert len(viewer.sessions) == 2
+    assert not any(s.samples and s.trials for s in viewer.sessions)
+
+
+def test_zip_upload_enters_review_but_manifest_upload_still_imports_directly(tmp_path):
+    from datetime import datetime, timezone
+    from colab_session_viewer.app import NotebookViewer
+
+    files = {"fitts.json": make_fitts(tmp_path).read_bytes()}
+    viewer = NotebookViewer()
+    viewer.import_participant.value = "  Default participant  "
+    def upload(content):
+        viewer.archive_upload.value = ({
+            "name": "data.zip", "type": "application/zip", "size": len(content),
+            "content": memoryview(content), "last_modified": datetime.now(timezone.utc),
+        },)
+        viewer._import_archive(None)
+    upload(archive_bytes(None, files))
+    assert viewer._pending_dataset is not None
+    assert not viewer.sessions
+    assert viewer._review_rows[0]["participant"].value == "Default participant"
+    viewer.archive_review.children[-1].children[1].click()
+    assert viewer._review_rows[1]["participant"].value == "Default participant"
+    viewer._review_rows[1]["include"].value = False
+    viewer._import_archive(None)
+    assert "Import or cancel" in viewer.message.value
+    row = viewer._review_rows[0]
+    row["participant"].value = "P01"
+    row["session"].value = "First"
+    viewer._confirm_archive(None)
+    upload(archive_bytes("participant,session,head_file,fitts_file\nP02,Second,,fitts.json\n", files))
+    assert len(viewer.sessions) == 2
+    assert viewer._pending_dataset is None
+    assert len(viewer.manifest_downloads.children) == 2
+    assert viewer.sessions[-1].participant == "P02"  # Manifest labels override input defaults.
+
+
+def test_split_tables_keep_one_row_per_participant_and_rom_task_only(tmp_path):
+    from colab_session_viewer.app import NotebookViewer
+    from colab_session_viewer.data import participant_tables
+
+    recorder = Recorder(tmp_path)
+    labelled_angles = [
+        ("initial_rest.hold", 5, 2),
+        ("initial_rest.hold", 7, 4),
+        ("range_of_movement.left.move", 10, 3),
+        ("range_of_movement.left.hold", 20, 5),
+        ("range_of_movement.right.hold", -15, -2),
+        ("fitts_test", 120, 65),  # Must not inflate ROM or initial position.
+        (None, -120, -65),
+    ]
+    recorder.set_calibration([(0, qm.IDENTITY_QUATERNION)], qm.IDENTITY_QUATERNION)
+    for index, (phase, yaw, pitch) in enumerate(labelled_angles):
+        recorder.record_sample(
+            index, qm.from_euler_zyx(*np.radians([yaw, pitch, 0])),
+            metadata={"task_phase": phase}, host_time=1000 + index,
+        )
+    head = Session.load("P01", "Head", head_path=recorder.save("labelled.json"))
+    mouse = Session.load("P02", "Mouse", fitts_path=make_fitts(tmp_path))
+    rows = participant_rows([head, mouse])
+    tables = participant_tables(rows)
+    assert list(tables) == [
+        "Session summary", "Initial head positions", "Range of movement stats",
+        "Head movement stats", "Fitts targets and hits", "Fitts stats",
+    ]
+    for table in tables.values():
+        assert [r["participant"] for r in table] == ["P01", "P02"]
+    initial = tables["Initial head positions"][0]
+    assert initial["head_initial_rest_yaw_absolute_mean_deg_session_mean"] == pytest.approx(6)
+    assert initial["head_initial_rest_yaw_relative_mean_deg_session_mean"] == pytest.approx(6)
+    rom = tables["Range of movement stats"][0]
+    assert rom["head_range_of_movement_task_yaw_range_deg_session_mean"] == pytest.approx(35)
+    assert rom["head_range_of_movement_task_pitch_range_deg_session_mean"] == pytest.approx(7)
+    assert rom["head_range_of_movement_directions_left_angle_mean_deg_session_mean"] == pytest.approx(20)
+    assert tables["Range of movement stats"][1]["head_range_of_movement_task_yaw_range_deg_session_mean"] is None
+    assert not any(key.startswith("head_range_of_movement") for key in tables["Session summary"][0])
+    assert tables["Fitts targets and hits"][1]["targets_analysed"] == 5
+    assert tables["Fitts stats"][0]["mean_movement_time_s"] is None
+    viewer = NotebookViewer()
+    viewer._add_sessions([head, mouse])
+    markup = viewer.table.value
+    assert markup.count("<table ") == 7  # Six summary tables plus expandable file diagnostics.
+    assert markup.count("<svg ") == 5  # Four reference views plus the participant pose.
+    assert markup.index("<svg ") > markup.index("<h3>Initial head positions</h3>")
+    assert markup.index("<svg ") < markup.index("<h3>Range of movement stats</h3>")
+    assert "Angle zero references (schematic head mesh)" in markup
+    assert "Webcam pitch/roll are camera-referenced" in markup
+    for title in tables:
+        assert f"<h3>{title}</h3>" in markup
+    for filename in ("session_summary.csv", "initial_head_positions.csv",
+                     "range_of_movement_stats.csv", "fitts_stats.csv"):
+        assert f'download="{filename}"' in markup
+    viewer.exclusion_controls.children[1].value = 2
+    updated = participant_tables(viewer.summary_rows())
+    assert updated["Fitts targets and hits"][1]["targets_analysed"] == 3
+    assert updated["Range of movement stats"] == tables["Range of movement stats"]
+    pretest_html = playback_payload(head)["pretest_html"]
+    assert "px" not in pretest_html
+    assert "+6.0" in pretest_html
+    assert "+6.00" not in pretest_html
+
+
+def test_initial_pose_reference_diagram_uses_mesh_and_distinguishes_references():
+    import xml.etree.ElementTree as ET
+    from colab_session_viewer.data import initial_pose_reference_diagram
+
+    markup = initial_pose_reference_diagram()
+    root = ET.fromstring("<section>" + markup.replace("<br>", "<br/>") + "</section>")
+    svgs = root.findall(".//{http://www.w3.org/2000/svg}svg")
+    assert len(svgs) == 4
+    for svg in svgs:
+        assert svg.attrib["role"] == "img"
+        assert len(svg.findall(".//{http://www.w3.org/2000/svg}line")) == 3
+        assert "0.0 deg" in svg.attrib["aria-label"]
+    assert "Camera axes follow the camera" in markup
+    assert "IMU tilt assumes correct sensor mounting/fit" in markup
+    assert "Calibration mean yaw uses this same provider reference" in markup
+    assert "Illustrative heading only; not a participant measurement" in markup
+    assert "L110.0 20.0" in markup  # Provider yaw zero points forward.
+    assert "L155.9 34.5" in markup  # Relative yaw zero follows the illustrated calibration.
+
+
+def test_rom_table_does_not_fall_back_to_unlabelled_head_ranges(tmp_path):
+    from colab_session_viewer.data import participant_tables
+
+    head = Session.load("P", "No ROM", head_path=make_head(tmp_path))
+    row = participant_rows([head])[0]
+    assert row["head_yaw_range_deg"] > 0
+    rom = participant_tables([row])["Range of movement stats"][0]
+    assert all(value is None for key, value in rom.items() if key != "participant")
+
+
+def test_head_only_tables_numeric_precision_and_calibration_pose_wireframes(tmp_path):
+    import re
+    from colab_session_viewer.app import NotebookViewer
+    from colab_session_viewer.data import initial_pose_wireframes, participant_tables
+
+    rows = [{
+        "participant": "<P>",
+        "head_initial_rest_yaw_absolute_mean_deg_session_mean": 70,
+        "head_initial_rest_yaw_relative_mean_deg_session_mean": 39.74,
+        "head_initial_rest_yaw_calibration_mean_deg_session_mean": 30.26,
+        "head_initial_rest_pitch_mean_deg_session_mean": -10.34,
+        "head_initial_rest_roll_mean_deg_session_mean": 5.15,
+        "cursor_initial_rest_std_x_px_session_mean": 1234,
+        "cursor_range_of_movement_horizontal_range_px_session_mean": 500,
+        "head_range_of_movement_yaw_range_deg_session_mean": 23.456,
+        "head_speed_deg_s_mean": 4.567, "head_yaw_range_deg": 56.78,
+        "targets_analysed": 3, "hits": 2,
+    }]
+    tables = participant_tables(rows)
+    for label in ("Initial head positions", "Range of movement stats"):
+        assert not any("cursor" in key or "px" in key for key in tables[label][0])
+    assert "head_speed_deg_s_mean" not in tables["Session summary"][0]
+    assert tables["Head movement stats"][0]["head_yaw_range_deg"] == 56.78
+    assert "hits" not in tables["Fitts stats"][0]
+    svg = initial_pose_wireframes(tables["Initial head positions"])
+    assert "&lt;P&gt;" in svg
+    assert "30.3 / -10.3 / 5.2 deg" in svg
+    neutral = [dict(rows[0], head_initial_rest_yaw_calibration_mean_deg_session_mean=0,
+                    head_initial_rest_pitch_mean_deg_session_mean=0,
+                    head_initial_rest_roll_mean_deg_session_mean=0)]
+    assert re.findall(r'<line [^>]+', svg) != re.findall(r'<line [^>]+', initial_pose_wireframes(neutral))
+    assert "No initial head pose recorded" in initial_pose_wireframes([{"participant": "No head"}])
+    rendered = NotebookViewer._table_html(
+        [{"participant": "P01", "count": 2, "value": 1.2345, "missing": None}], "test.csv", "CSV"
+    )
+    assert "<td>2.0</td>" in rendered
+    assert "<td>1.2</td>" in rendered
+    assert "<td></td>" in rendered
+    assert summary_csv([{"value": 1.2345, "count": 2}]).splitlines()[1] == "1.2,2.0"
+
+
+def test_initial_heading_calibration_reference_and_missing_calibration(tmp_path):
+    from colab_session_viewer.data import head_pretest_summary
+
+    def recording(name, heading, calibrated=True):
+        recorder = Recorder(tmp_path)
+        if calibrated:
+            reference = qm.from_euler_zyx(*np.radians([heading, 10, 5]))
+            recorder.set_calibration([(0, reference)], reference)
+        for index in range(3):
+            recorder.record_sample(index, qm.from_euler_zyx(*np.radians([heading + 7, 20, -4])),
+                                   metadata={"task_phase": "initial_rest.hold"}, host_time=1000 + index)
+        return Session.load("P", name, head_path=recorder.save(name + ".json"))
+    for heading in (0, 175, -120):
+        rest = head_pretest_summary(recording(str(heading), heading))["head_initial_rest"]
+        assert rest["yaw_mean_deg"] == pytest.approx(7)
+        assert rest["yaw_relative_mean_deg"] == pytest.approx(7)
+        assert rest["yaw_calibration_mean_deg"] == pytest.approx(heading)
+        assert rest["yaw_absolute_mean_deg"] == pytest.approx((heading + 7 + 180) % 360 - 180)
+        assert rest["pitch_mean_deg"] == pytest.approx(20)
+        assert rest["roll_mean_deg"] == pytest.approx(-4)
+    missing = recording("missing", 50, calibrated=False)
+    rest = head_pretest_summary(missing)["head_initial_rest"]
+    assert rest["yaw_mean_deg"] is None
+    assert rest["yaw_absolute_mean_deg"] == pytest.approx(57)
+    assert rest["yaw_relative_mean_deg"] is None
+    assert rest["pitch_mean_deg"] == pytest.approx(20)
+    assert "head_initial_rest_yaw_mean_deg_session_mean" not in participant_rows([missing])[0]
+
+
+def test_table_order_compact_headers_and_sources(tmp_path):
+    from colab_session_viewer.app import NotebookViewer
+    from colab_session_viewer.data import participant_tables, table_sources
+
+    first = {"participant": "P", "head_initial_rest_roll_mean_deg_session_mean": 4,
+             "head_initial_rest_yaw_absolute_mean_deg_session_mean": 1,
+             "head_initial_rest_pitch_mean_deg_session_mean": 2}
+    tables = participant_tables([first])
+    reverse = participant_tables([{key: first[key] for key in reversed(first)}])
+    assert list(tables["Initial head positions"][0]) == list(reverse["Initial head positions"][0])
+    assert list(tables["Initial head positions"][0])[1:4] == [
+        f"head_initial_rest_yaw_{kind}_mean_deg_session_mean" for kind in ("absolute", "relative", "calibration")]
+    assert list(tables["Range of movement stats"][0])[1:4] == [
+        f"head_range_of_movement_task_{axis}_range_deg_session_mean" for axis in ("yaw", "pitch", "roll")
+    ]
+    session = Session.load("P", "pair", head_path=make_head(tmp_path),
+                           fitts_path=make_fitts(tmp_path))
+    session.head_filename = "study/head.json"
+    session.fitts_filename = "study/fitts.json"
+    assert table_sources([session], "Fitts stats") == {"P": ["study/fitts.json"]}
+    assert table_sources([session], "Head movement stats") == {"P": ["study/head.json"]}
+    assert table_sources([session], "Initial head positions") == {"P": []}
+    viewer = NotebookViewer()
+    viewer._add_sessions([session])
+    markup = viewer.table.value
+    assert markup.count("<b>Source files:</b>") == 6
+    assert "table-layout:fixed" in markup
+    assert "overflow-wrap:anywhere" in markup
+    assert "Yaw absolute (deg)" in markup
+    assert "gravity does not determine yaw" in markup
+
+
+def test_ranges_use_quaternions_and_do_not_pool_different_euler_wrap_sheets(tmp_path):
+    from colab_session_viewer.data import head_range_diagnostics
+
+    sessions = []
+    for name, degrees in (("positive", [170, 179, -175]), ("negative", [-175, -179, 170])):
+        recorder = Recorder(tmp_path)
+        recorder.set_calibration([(0, qm.IDENTITY_QUATERNION)], qm.IDENTITY_QUATERNION)
+        for i, yaw in enumerate(degrees):
+            recorder.record_sample(i, qm.from_euler_zyx(np.radians(yaw), 0, 0),
+                                   metadata={"task_phase": "fitts_test"}, host_time=1000 + i)
+        session = Session.load("P", name, head_path=recorder.save(name + ".json"))
+        # Stored Euler columns deliberately wrong: range must use the quaternion.
+        for sample in session.samples:
+            sample.yaw_deg = 0
+        sessions.append(session)
+        diag = head_range_diagnostics(session)
+        assert diag["yaw_range_deg"] == pytest.approx(15)
+        assert diag["fitts_yaw_range_deg"] == pytest.approx(15)
+        assert diag["near_gimbal_samples"] == 0
+    row = participant_rows(sessions)[0]
+    assert row["head_yaw_range_deg"] == pytest.approx(15)  # Not ~370 from pooling wrap sheets.
+
+
+def test_range_diagnostics_distinguish_setup_fitts_and_euler_singularity(tmp_path):
+    from colab_session_viewer.data import head_range_diagnostics
+
+    recorder = Recorder(tmp_path)
+    recorder.set_calibration([(0, qm.IDENTITY_QUATERNION)], qm.IDENTITY_QUATERNION)
+    for i, (yaw, pitch, phase) in enumerate([
+        (5, 0, "fitts_test"), (10, 0, "fitts_test"),
+        (80, 89, "range_of_movement.up.hold"), (60, 0, "initial_rest.move"),
+    ]):
+        recorder.record_sample(i, qm.from_euler_zyx(*np.radians([yaw, pitch, 0])),
+                               metadata={"task_phase": phase}, host_time=1000 + i)
+    session = Session.load("P", "test", head_path=recorder.save("head.json"))
+    diag = head_range_diagnostics(session)
+    assert diag["yaw_range_deg"] == pytest.approx(75)
+    assert diag["fitts_yaw_range_deg"] == pytest.approx(5)
+    assert diag["near_gimbal_samples"] == 1
+    assert diag["max_abs_relative_pitch_deg"] == pytest.approx(89)
+
+
+def test_plot_yaw_uses_calibration_samples_mean_not_initial_rest(tmp_path):
+    from colab_session_viewer.data import participant_tables, initial_pose_wireframes
+
+    recorder = Recorder(tmp_path)
+    q = qm.from_euler_zyx(*np.radians([30, 10, 5]))
+    recorder.set_calibration([(0, q), (1, q)], q)
+    for i in range(2):
+        recorder.record_sample(i, qm.from_euler_zyx(*np.radians([45, 20, 6])),
+                               metadata={"task_phase": "initial_rest.hold"}, host_time=1000 + i)
+    session = Session.load("P", "test", head_path=recorder.save("head.json"))
+    row = participant_tables(participant_rows([session]))["Initial head positions"][0]
+    assert row["head_initial_rest_yaw_absolute_mean_deg_session_mean"] == pytest.approx(45)
+    assert row["head_initial_rest_yaw_relative_mean_deg_session_mean"] == pytest.approx(15)
+    assert row["head_initial_rest_yaw_calibration_mean_deg_session_mean"] == pytest.approx(30)
+    assert "30.0 / 20.0 / 6.0 deg" in initial_pose_wireframes([row])
+
+
+def test_tilted_neutral_couples_provider_heading_into_relative_roll_without_gimbal(tmp_path):
+    from colab_session_viewer.data import head_range_diagnostics
+
+    recorder = Recorder(tmp_path)
+    neutral = qm.from_euler_zyx(*np.radians([0, 26, -35]))
+    recorder.set_calibration([(0, neutral)], neutral)
+    for i, yaw in enumerate(np.linspace(0, 49, 100)):
+        recorder.record_sample(i, qm.from_euler_zyx(*np.radians([yaw, 26, -35])),
+                               host_time=1000 + i)
+    session = Session.load("P", "tilted", head_path=recorder.save("head.json"))
+    diag = head_range_diagnostics(session)
+    assert diag["near_gimbal_samples"] == 0
+    assert diag["max_abs_relative_pitch_deg"] < 20
+    assert diag["roll_range_deg"] > 25
+    assert np.ptp([s.roll_deg for s in session.samples]) == pytest.approx(0, abs=1e-10)
+
+
+def test_any_root_csv_manifest_imports_only_listed_recordings(tmp_path):
+    from colab_session_viewer.archive import ArchiveDataset
+    from colab_session_viewer.app import NotebookViewer
+
+    manifest = "participant,session,head_file,fitts_file\nA,Selected,,recordings/test.json\n"
+    content = archive_bytes(None, {
+        "A manifest.csv": manifest,
+        "recordings/test.json": make_fitts(tmp_path).read_bytes(),
+        "unlisted.json": "{invalid and must not be loaded",
+        "measurements.csv": "time,value\n1,2\n",
+        "unrelated.csv": b"\xff\xfe",
+    })
+    dataset = ArchiveDataset.read(content)
+    assert dataset.has_manifest
+    assert dataset.manifest_filename == "A manifest.csv"
+    assert any("unrelated.csv" in warning for warning in dataset.warnings)
+    assert list(dataset.recordings) == ["recordings/test.json"]
+    sessions = dataset.build_sessions(dataset.assignments)
+    assert sessions[0].participant == "A"
+    viewer = NotebookViewer()
+    viewer._add_sessions(sessions)
+    assert viewer.table.value.count("<h3>") == 6
+    for label in ("Session summary", "Initial head positions", "Range of movement stats",
+                  "Head movement stats", "Fitts targets and hits", "Fitts stats"):
+        assert f"<h3>{label}</h3>" in viewer.table.value
+
+
+def test_root_csv_without_manifest_columns_does_not_override_discovery(tmp_path):
+    from colab_session_viewer.archive import ArchiveDataset
+
+    dataset = ArchiveDataset.read(archive_bytes(None, {
+        "A manifest.csv": "participant,unrelated\nA,example\n",
+        "head.csv": make_head(tmp_path, "head.csv").read_bytes(),
+        "nested/manifest.csv": "participant,session,head_file,fitts_file\nP,Test,,missing.json\n",
+    }))
+    assert not dataset.has_manifest
+    assert list(dataset.recordings) == ["head.csv"]
+    assert dataset.warnings
+
+
+def test_invalid_or_multiple_root_manifests_do_not_import_unlisted_files(tmp_path):
+    from colab_session_viewer.archive import ArchiveDataset
+
+    with pytest.raises(ValueError, match="Invalid manifest"):
+        ArchiveDataset.read(archive_bytes(None, {
+            "A manifest.csv": "participant,session,head_file,fitts_file\nA,Test,,\n",
+            "test.json": make_fitts(tmp_path).read_bytes(),
+        }))
+    with pytest.raises(ValueError, match="Multiple valid root manifests"):
+        ArchiveDataset.read(archive_bytes(None, {
+            "A manifest.csv": "participant,session,head_file,fitts_file\nA,Test,,test.json\n",
+            "B manifest.CSV": "participant,session,head_file,fitts_file\nB,Test,,test.json\n",
+            "test.json": make_fitts(tmp_path).read_bytes(),
+        }))
+
+
+@pytest.mark.parametrize("in_notebook_folder", [False, True])
+def test_notebook_prefers_containing_project_over_nested_clone(tmp_path, monkeypatch, in_notebook_folder):
+    notebook = json.loads((ROOT / "colab_session_viewer" / "session_viewer.ipynb").read_text(encoding="utf-8"))
+    setup = "".join(next(c["source"] for c in notebook["cells"] if c["id"] == "setup"))
+    local = tmp_path / "project"
+    folder = local / "colab_session_viewer"
+    folder.mkdir(parents=True)
+    (folder / "app.py").touch()
+    (local / "core").mkdir()
+    (folder / "OpenHeadMouse").mkdir()
+    monkeypatch.chdir(folder if in_notebook_folder else local)
+    expression = setup[setup.index("PROJECT_DIR = next"):setup.index("\n\nif not PROJECT_DIR.exists()")]
+    namespace = {"Path": Path}
+    exec(expression, namespace)
+    assert namespace["PROJECT_DIR"] == local

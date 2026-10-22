@@ -1,4 +1,4 @@
-"""Run dwell-click independently of HeadMouse."""
+"""Run dwell-click independently of OpenHeadMouse."""
 
 from __future__ import annotations
 
@@ -10,6 +10,9 @@ from dwell_click.tray import DwellTray
 
 
 def main(argv: list[str] | None = None) -> int:
+    from core.diagnostics import configure_frozen_diagnostics
+
+    configure_frozen_diagnostics("DwellClick")
     parser = argparse.ArgumentParser(
         description="Click automatically when the pointer remains within a small area."
     )
@@ -29,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--menu-distance", type=int, default=60, metavar="PIXELS")
     parser.add_argument("--menu-size", type=int, default=54, metavar="PIXELS")
     parser.add_argument("--menu-lock-time", type=float, default=3.0, metavar="SECONDS")
+    parser.add_argument("--smoke-test", action="store_true", help="Validate settings and Qt startup without clicking")
     args = parser.parse_args(argv)
 
     try:
@@ -56,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
     from dwell_click.service import DwellClickService
 
     app = QApplication(sys.argv[:1])
+    if args.smoke_test:
+        return 0
     app.setQuitOnLastWindowClosed(False)
     try:
         service = DwellClickService(settings)

@@ -1,0 +1,32 @@
+name: Bug report
+description: Report a reproducible OpenHeadMouse problem without participant data.
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach participant data, credentials or unredacted logs. Report sensitive vulnerabilities privately.
+  - type: input
+    id: version
+    attributes:
+      label: Version and edition
+      placeholder: 0.2.0-rc.1, Full, installer or portable EXE
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS, architecture and provider
+      placeholder: Windows 11 x64, webcam / xIMU3 USB or Wi-Fi
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include permissions, display count/scaling, expected behaviour and actual behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Inspect logs for personal paths and study data before sharing.

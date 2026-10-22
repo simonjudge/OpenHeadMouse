@@ -187,9 +187,10 @@ def test_session_viewer_offers_three_open_options(qt_app):
     try:
         items = [a.text() for a in window.menuBar().actions()[0].menu().actions() if not a.isSeparator()]
         assert items == [
-            "Open HeadMouse Session...",
+            "Open OpenHeadMouse Session...",
             "Open Synchronised Playback...",
             "Open Fitts Test Only...",
+            "Tile Windows Side by Side",
             "Close",
         ]
         toolbar = window.findChild(QToolBar)

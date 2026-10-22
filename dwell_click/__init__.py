@@ -1,4 +1,4 @@
-"""Standalone dwell-click support for HeadMouse and other pointer inputs."""
+"""Standalone dwell-click support for OpenHeadMouse and other pointer inputs."""
 
 from .engine import DwellEngine, DwellSettings, DwellUpdate
 

@@ -188,6 +188,23 @@ class FittsScreenCanvas(QWidget):
 class FittsPlaybackWindow(QMainWindow):
     """Replays a Fitts session's trajectories with summary and live statistics."""
 
+    @property
+    def _head_window(self) -> QMainWindow | None:
+        window = self._head_window_ref() if self._head_window_ref is not None else None
+        if window is not None:
+            from shiboken6 import isValid
+
+            if not isValid(window):
+                return None
+        return window
+
+    @_head_window.setter
+    def _head_window(self, window: QMainWindow | None) -> None:
+        import weakref
+
+        # A non-owning backlink avoids a cycle between the two QObject trees.
+        self._head_window_ref = weakref.ref(window) if window is not None else None
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Fitts Playback")

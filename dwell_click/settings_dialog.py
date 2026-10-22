@@ -1,4 +1,4 @@
-"""Settings dialog shared by standalone and HeadMouse tray integration."""
+"""Settings dialog shared by standalone and OpenHeadMouse tray integration."""
 
 from __future__ import annotations
 

@@ -4,21 +4,21 @@
             "type": "swift",
             "request": "launch",
             "args": [],
-            "cwd": "${workspaceFolder:headmouse_project}/providers/airpods/swift_src",
-            "name": "Debug AirPodsHeadMouseHelper (providers/airpods/swift_src)",
-            "target": "AirPodsHeadMouseHelper",
+            "cwd": "${workspaceFolder}/providers/airpods/swift_src",
+            "name": "Debug OpenHeadMouseAirPodsHelper (providers/airpods/swift_src)",
+            "target": "OpenHeadMouseAirPodsHelper",
             "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug AirPodsHeadMouseHelper (providers/airpods/swift_src)"
+            "preLaunchTask": "swift: Build Debug OpenHeadMouseAirPodsHelper (providers/airpods/swift_src)"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
-            "cwd": "${workspaceFolder:headmouse_project}/providers/airpods/swift_src",
-            "name": "Release AirPodsHeadMouseHelper (providers/airpods/swift_src)",
-            "target": "AirPodsHeadMouseHelper",
+            "cwd": "${workspaceFolder}/providers/airpods/swift_src",
+            "name": "Release OpenHeadMouseAirPodsHelper (providers/airpods/swift_src)",
+            "target": "OpenHeadMouseAirPodsHelper",
             "configuration": "release",
-            "preLaunchTask": "swift: Build Release AirPodsHeadMouseHelper (providers/airpods/swift_src)"
+            "preLaunchTask": "swift: Build Release OpenHeadMouseAirPodsHelper (providers/airpods/swift_src)"
         }
     ]
 }

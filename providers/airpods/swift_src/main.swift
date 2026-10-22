@@ -13,7 +13,7 @@ extension Double {
     }
 }
 
-/// HeadMouse AirPods Bridge: macOS app that streams CMHeadphoneMotionManager
+/// OpenHeadMouse AirPods Bridge: macOS app that streams CMHeadphoneMotionManager
 /// quaternions as JSON over UDP to 127.0.0.1:5005.
 ///
 /// HARDWARE REQUIREMENTS:
@@ -22,7 +22,7 @@ extension Double {
 ///
 /// Usage:
 ///   1. Build: swift build
-///   2. Run: ./.build/debug/AirPodsHeadMouseHelper
+///   2. Run: ./.build/debug/OpenHeadMouseAirPodsHelper
 ///   3. Grant Microphone permission when prompted
 ///   4. Wear compatible AirPods and start head tracking
 ///   5. Python receiver will connect and begin receiving quaternion packets
@@ -167,7 +167,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem?.button {
-            if let image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "HeadMouse AirPods Helper") {
+            if let image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "OpenHeadMouse AirPods Helper") {
                 image.isTemplate = true
                 button.image = image
                 button.imagePosition = .imageOnly
@@ -176,7 +176,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 button.title = "HM"
                 debugPrint("AppDelegate: status bar button created with HM fallback")
             }
-            button.toolTip = "HeadMouse AirPods Helper"
+            button.toolTip = "OpenHeadMouse AirPods Helper"
         }
         statusItem?.isVisible = true
 

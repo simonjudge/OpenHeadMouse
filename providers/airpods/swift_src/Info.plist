@@ -9,13 +9,13 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>AirPodsHeadMouseHelper</string>
+	<string>OpenHeadMouseAirPodsHelper</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.headmouse.airpods-helper</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>AirPods Helper</string>
+	<string>OpenHeadMouse AirPods Helper</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSUIElement</key>

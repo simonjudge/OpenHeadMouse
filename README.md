@@ -1,65 +1,64 @@
-# HeadMouse
+# OpenHeadMouse
 
-Modular, cross-platform software for recording, visualizing, analyzing, and translating 3D head
-movements into computer cursor control. Normalizes multiple input providers (AirPods CoreMotion,
-xIMU3 IMU, MediaPipe/UniFace webcam pose) into a shared quaternion reference frame, drives a
-configurable DSP engine (absolute or velocity-based cursor mapping), and includes an ISO 9241-411
-Fitts' Law evaluation suite.
+Repository: [simonjudge/OpenHeadMouse](https://github.com/simonjudge/OpenHeadMouse).
 
-## Setup
+The project was previously named HeadMouse. Existing recordings and settings remain
+compatible; the saved Fitts start mode is migrated to **Start with OpenHeadMouse**.
 
-Requires Python 3.12 (mediapipe does not yet publish wheels for 3.13/3.14).
+OpenHeadMouse translates head movements into cursor control and provides tools for
+recording, replaying and analysing pointing performance. Use a webcam, xIMU3, or
+supported AirPods (macOS only), with optional dwell clicking.
 
-```
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python main.py
-```
+**First release in preparation: `0.2.0-rc.1`.** This is experimental assistive and
+research software, not a certified medical device or a validated clinical assessment.
+Keep another way to control the computer available while testing. Stop if movement
+causes discomfort.
 
-## Release editions
+- [Downloads and release notes](https://github.com/simonjudge/OpenHeadMouse/releases):
+  choose **Full** unless you only need a standalone tool. A draft is not a public download.
+- [Windows quick start](#windows-quick-start) | [Source setup](#setup-running-from-source)
+- [Release checklist](RELEASE_CHECKLIST.md) | [Report a problem](CONTRIBUTING.md)
+- [MIT licence](LICENSE) | [Third-party distribution review](THIRD_PARTY_NOTICES.md)
 
-Each tagged GitHub release includes four editions for Windows, Linux, and macOS:
+![OpenHeadMouse setup window, with mouse control and recording disabled](docs/images/main-window.png)
 
-- **Full** — HeadMouse, the Fitts' Law test suite, and the session viewer.
-- **HeadMouse-only** — HeadMouse without the Fitts' Law test suite or session viewer. Their
-  File-menu items are omitted; head-movement recording and its folder setting remain available.
-- **Dwell Click** — the standalone dwell-click tray application, without the HeadMouse interface.
-- **Session Viewer** — standalone head-movement and Fitts' Law playback, without starting
-  head tracking or mouse control.
+The screenshot shows the application alone with no live tracker or participant data.
 
-The Dwell Click edition starts its tray application when launched. Its settings and command-line
-options are the same as the standalone `python -m dwell_click` mode described below.
-Windows executables for all four editions are built without a console window. The Fitts'
-Law suite and session viewer run within the full edition without opening a separate terminal.
-This applies to newly built executables; existing downloads must be rebuilt or replaced.
+### Platform support
 
-To build locally without a console window, build from the checked-in spec files (they set
-`console=False`), for example `pyinstaller OpenHeadMouse.spec`, `pyinstaller
-OpenHeadMouseHeadOnly.spec`, `pyinstaller DwellClick.spec` or `pyinstaller SessionViewer.spec`.
-Running `pyinstaller main.py`
-without `--windowed` overwrites the spec with `console=True`, which brings the terminal back.
+| Platform | First-release status | Notes |
+| --- | --- | --- |
+| Windows x64 | Primary release target; clean-machine/hardware sign-off still required | Test Windows 10/11, permissions, DPI and multiple monitors |
+| macOS 14+, Apple Silicon | Experimental | arm64 builds, not universal/Intel; camera, Accessibility and Input Monitoring permissions; AirPods also require Xcode command-line tools and Terminal Motion permission |
+| Linux x64 | Experimental | Built on Ubuntu 24.04; X11 desktop expected; Wayland global hotkeys/input injection are not supported |
 
-### Building Windows executables and installers locally
+Only claim a tested OS/provider combination after recording its result in the
+[release checklist](RELEASE_CHECKLIST.md). Successful packaging is not hardware validation.
 
-Install [Inno Setup 6](https://jrsoftware.org/isdl.php) and install the Python dependencies
-and PyInstaller into your build environment:
+## Windows quick start
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
-.\build-release.ps1 -Version 0.2.0
-```
+1. When an approved release is available, download the **Full Windows x64 installer**
+   and its `SHA256SUMS-Windows.txt` from the same release. Python is not needed.
+2. Compare the download with its listed checksum:
+   `Get-FileHash .\OpenHeadMouse-windows-amd64-setup.exe -Algorithm SHA256`.
+   A checksum detects changed bytes; it does not replace publisher authentication.
+3. Install and launch OpenHeadMouse. Current installers are **unsigned**. Windows may
+   show an unknown-publisher/SmartScreen warning; do not disable protection globally.
+   If you cannot verify or trust a download, do not run it.
+4. Select your input provider. For a webcam, allow camera access and start tracking
+   with **Mouse Control** and **Dwell Click** off. Confirm the telemetry follows your head.
+5. Enable **Initial Calibration**, sit comfortably facing forward, then enable mouse
+   control when ready. Start with gentle movements; tune gains to your needs.
+6. **Esc pauses/resumes tracking.** Holding the cursor in a screen corner for the
+   configured failsafe time pauses it too. Keep a physical mouse or helper available;
+   verify both pause routes before enabling dwell clicking.
+7. To record, enable **Recording** and choose a folder when prompted. Data is saved
+   beneath its `sessions` and `fitts_sessions` folders. Reopen it from the File menu.
 
-Run these commands in PowerShell from the project root. If script execution is blocked,
-use `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-release.ps1 -Version 0.2.0`.
-The script builds all four editions without console windows, then compiles their installers.
-Executables and `*-setup.exe` installers are written to `dist`. Generated specs and Inno Setup
-definitions go under `build/local-release`, leaving existing root-level specs untouched.
-The face-landmarker model and canonical face mesh must already be present under `models`.
+The portable EXE can be run without installing, but still uses per-user settings.
+Do not expect portable settings alongside the EXE.
 
-By default, the script uses `.venv\Scripts\python.exe` if present, otherwise `python` on PATH.
-Use `-Python "C:\path\to\python.exe"` or `-Iscc "C:\path\to\ISCC.exe"` to override the tools.
-It does not install dependencies or download assets automatically. Installers are unsigned.
+See [coordinate frames](COORDINATE_FRAMES.md) for mounting and movement conventions.
 
 ## Layout
 
@@ -72,6 +71,97 @@ It does not install dependencies or download assets automatically. Installers ar
 - `dwell_click/` — standalone dwell-click engine, translucent progress overlay, and command-line launcher
 - `tests/` — unit tests
 
+## Release editions
+
+Release builds prepare four editions. Tagged builds create a **draft** release;
+publishing it requires manual test and redistribution approval.
+
+- **Full** — OpenHeadMouse, the Fitts' Law test suite, and the session viewer.
+- **HeadMouse-only** — OpenHeadMouse without the Fitts' Law test suite or session viewer. Their
+  File-menu items are omitted; head-movement recording and its folder setting remain available.
+- **Dwell Click** — the standalone dwell-click tray application, without the OpenHeadMouse interface.
+- **Session Viewer** — standalone head-movement and Fitts' Law playback, without starting
+  head tracking or mouse control.
+
+The Dwell Click edition starts its tray application when launched. Its settings and command-line
+options are the same as the standalone `python -m dwell_click` mode described below.
+Windows executables for all four editions are built without a console window. The Fitts'
+Law suite and session viewer run within the full edition without opening a separate terminal.
+This applies to newly built executables; existing downloads must be rebuilt or replaced.
+
+Use the release build script below for consistent Windows packaging. Root-level
+generated spec files are ignored and may contain stale local options; running
+`pyinstaller main.py` directly can produce a console application.
+
+### Building Windows executables and installers locally
+
+Install [Inno Setup 6](https://jrsoftware.org/isdl.php) and install the Python dependencies
+and PyInstaller into your build environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-windows-py312.lock
+.\build-release.ps1 -Version 0.2.0-rc.1
+```
+
+Run these commands in PowerShell from the project root. If script execution is blocked,
+use `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-release.ps1 -Version 0.2.0-rc.1`.
+The script builds all four editions without console windows, then compiles their installers.
+Executables and `*-setup.exe` installers are written to `dist`. Generated specs and Inno Setup
+definitions go under `build/local-release`, leaving existing root-level specs untouched.
+The script downloads missing pinned model assets, verifies their SHA-256 hashes,
+exports dependency versions and discovered licence files, and smoke-tests each EXE
+without starting tracking or clicking. It also writes checksums and a notices ZIP.
+
+By default, the script uses `.venv\Scripts\python.exe` if present, otherwise `python` on PATH.
+Use `-Python "C:\path\to\python.exe"` or `-Iscc "C:\path\to\ISCC.exe"` to override the tools.
+It does not install Python dependencies. Installers are unsigned. Single-file binary
+publication is deferred pending the [LGPL/model review](THIRD_PARTY_NOTICES.md).
+
+## Setup (running from source)
+
+Python 3.12 is the release/CI baseline. PySide6 is kept on the validated 6.11.x
+series. Native crashes exposed a synchronised-window ownership cycle during
+preparation; that lifecycle is now regression-tested. Newer Qt series need their
+own validation before changing the Windows release lock.
+Use a fresh virtual environment rather than modifying a working installation.
+
+Windows PowerShell:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe tools\prepare_release.py --assets
+.\.venv\Scripts\python.exe main.py
+```
+
+macOS/Linux:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python tools/prepare_release.py --assets
+python main.py
+```
+
+Network access is needed for dependency/model setup, not routine desktop tracking
+once the assets are installed. For development, install `requirements-dev.txt`.
+
+### Privacy and diagnostics
+
+Desktop camera processing is local. Recordings contain timestamps, head orientation,
+cursor trajectories and any study notes/labels you enter; treat them as potentially
+sensitive. Do not commit participant recordings, ZIPs or notebook outputs.
+Colab uploads go to Google's runtime: see the [notebook privacy notes](colab_session_viewer/README.md).
+
+Frozen Windows applications write diagnostics to
+`%LOCALAPPDATA%\OpenHeadMouse\logs`; macOS uses `~/Library/Logs/OpenHeadMouse`
+and Linux uses `$XDG_STATE_HOME/OpenHeadMouse/logs` (or `~/.local/state/...`).
+The latest log and one previous run are retained per edition. Logs can include paths
+and exception details: inspect/redact them before attaching them to an issue.
+Source launches keep their usual terminal output.
+
+## MODULE NOTES:
 ### Standalone session viewer
 
 From the repository root, with the dependencies installed, run:
@@ -82,7 +172,7 @@ python -m session_viewer
 
 The viewer opens without a recording loaded. Use its File menu to open a head-movement
 session (JSON or CSV), a Fitts test, or synchronised head/Fitts playback. It does not start
-HeadMouse, connect to a tracker, or control the cursor. The main application's File-menu
+OpenHeadMouse, connect to a tracker, or control the cursor. The main application's File-menu
 viewer continues to work as before.
 
 Opening **Open Synchronised Playback...** automatically tiles the head viewer on the left
@@ -91,14 +181,16 @@ restore this layout after moving or maximising them. The command uses the availa
 of the screen containing the window where it was selected, moving both windows onto that
 screen. It is disabled when the other playback window is closed.
 
-To build the standalone executable locally:
+For a development-only standalone viewer executable:
 
 ```powershell
 python -c "from session_viewer.mesh_visualizer import download_mediapipe_model; download_mediapipe_model()"
 python -m PyInstaller --noconfirm SessionViewer.spec
 ```
 
-On Windows this creates `dist\SessionViewer.exe` without a terminal window. The face mesh
+The versioned viewer spec is the exception to ignored, locally generated root specs.
+For release deliverables, use the Windows build script so notices and smoke tests are included.
+On Windows the spec creates `dist\SessionViewer.exe` without a terminal window. The face mesh
 is bundled, so no model download is needed at runtime. Tagged releases also package the
 viewer as a Windows installer, Linux executable/`.deb`, and macOS executable/`.app`/DMG.
 
@@ -106,9 +198,13 @@ viewer as a Windows installer, Linux executable/`.deb`, and macOS executable/`.a
 
 Open [session_viewer.ipynb](colab_session_viewer/session_viewer.ipynb) in Google Colab
 and run its setup and viewer cells. Import individual head/Fitts recordings or
-multiple ZIP data sets with a participant/session manifest. The single viewer
-at the top switches between participants and sessions; the table below combines
-all tests into one row per participant and exports CSV. Each participant can
+multiple ZIP data sets, with or without a participant/session manifest. ZIPs without
+a manifest offer timestamp-based head/Fitts pairing, editable labels and a
+downloadable manifest for reuse. The single viewer
+follows the import block and switches between participants and sessions. Six
+tables below it summarize sessions, head-only initial positions (with participant
+wireframes), task-only range of movement, whole-session head movement, Fitts
+targets/hits and Fitts performance, with one-decimal display and CSV export. Each participant can
 exclude the first N targets **per Fitts file** from the summary without changing
 playback or removing whole tests. See the [notebook guide](colab_session_viewer/README.md)
 for setup, batch import format, aggregation definitions and data-privacy notes.
@@ -138,7 +234,7 @@ the swatch to open a colour picker). These are saved as `ring_diameter_px`,
 `ring_thickness_px`, and `ring_color` under `ui.dwell_click` in `config.json`, and the same
 options appear in the tray's dwell-click settings dialog.
 
-The module can also run independently of HeadMouse:
+The module can also run independently of OpenHeadMouse:
 
 ```
 python -m dwell_click
@@ -147,11 +243,11 @@ python -m dwell_click --diameter 60 --thickness 8 --color "#00a0ff"
 python -m dwell_click --zoom --zoom-width 300 --zoom-height 200 --zoom-scale 4
 ```
 
-Both standalone mode and HeadMouse provide a cross-platform system-tray icon. Its menu starts
+Both standalone mode and OpenHeadMouse provide a cross-platform system-tray icon. Its menu starts
 or stops dwell clicking, opens the dwell-click settings dialog, and exits standalone mode.
 Left-clicking the tray icon opens the settings dialog directly; right-clicking opens its menu.
 The settings dialog also has a **Start/Stop Dwell Clicking** button. It stays open when
-the button is used and follows changes made through the tray or HeadMouse lifecycle.
+the button is used and follows changes made through the tray or OpenHeadMouse lifecycle.
 
 **Click Context Menu** is optional and disabled by default. Enable it in the main window's
 dwell settings or the tray settings dialog. A completed dwell opens five icons around
@@ -218,7 +314,7 @@ For example, unlocking zoom in the menu leaves the checkbox checked; restarting 
 the configured zoom default. Stopping or changing settings clears remembered selections and
 L/R locks, and reapplies that zoom default.
 
-HeadMouse persists `context_menu_enabled`, `context_menu_distance_px`, `context_menu_size_px`,
+OpenHeadMouse persists `context_menu_enabled`, `context_menu_distance_px`, `context_menu_size_px`,
 and `context_menu_lock_time_s` under `ui.dwell_click`. Standalone mode also accepts
 `--context-menu --menu-distance 60 --menu-size 54 --menu-lock-time 3`.
 After zoom opens, move away from the icon-selection position before dwelling on the image;
@@ -237,7 +333,7 @@ does not complete a click. The same dwell time and tolerance apply to both stage
 **Scale** sets magnification (default 4x, without image smoothing). The box and captured area
 are kept on the pointer's display and the box is reduced to fit smaller screens. These sizes
 use Qt screen coordinates (logical pixels on scaled displays); selection maps back to
-individual captured screen pixels, including on high-DPI displays. HeadMouse saves
+individual captured screen pixels, including on high-DPI displays. OpenHeadMouse saves
 `zoom_enabled`, `zoom_width_px`, `zoom_height_px`, and `zoom_scale` under `ui.dwell_click`
 in `config.json`. Standalone settings apply for the current run, with command-line options
 available as above. Stopping dwell clicking or changing settings cancels any pending zoom click.
@@ -270,6 +366,7 @@ administrator. Requirements:
 Running Dwell Click as administrator is a simpler interim workaround for clicking into
 elevated windows, but it does not lift the menu above taskbar previews or the Start menu.
 
+## GENERAL NOTES:
 ### Coordinate frame and gain signs
 
 All providers emit quaternions in one canonical head frame (+X forward, +Y left, +Z up), so
@@ -291,7 +388,7 @@ filter applies adaptive smoothing in either mode. The main window shows **DSP** 
 while **Mouse Control** is ticked; hiding the settings preserves their values. Velocity mode
 also supports deadband/gamma
 shaping, stationary auto-zero bias, and optional yaw-drift correction. Cursor clamping
-follows the display that contains the HeadMouse window, including displays with negative
+follows the display that contains the OpenHeadMouse window, including displays with negative
 coordinate origins. On Windows, native pixel bounds are used so display scaling does not
 shrink the usable cursor area. The bounds are refreshed and the cursor is centered on that
 display whenever tracking starts.
@@ -304,7 +401,7 @@ Blocked input pauses tracking and displays a permissions warning.
 The real Windows pointer is separate from the dwell ring, zoom box and click-menu overlays.
 Those overlays can be covered by taskbar previews or privileged windows (see UIAccess above);
 UIAccess is not a general fix for an invisible native pointer. If pointer movement or clicking
-is blocked over an application running as administrator, HeadMouse needs matching permissions
+is blocked over an application running as administrator, OpenHeadMouse needs matching permissions
 or an appropriately signed/installed UIAccess build. Secure-desktop prompts remain out of scope.
 
 ### Recordings folder
@@ -317,7 +414,7 @@ together:
 <recordings folder>/fitts_sessions/  Fitts' Law result files
 ```
 
-Set it from the main HeadMouse window with **File → Set Recordings Folder...**; the folder in
+Set it from the main OpenHeadMouse window with **File → Set Recordings Folder...**; the folder in
 use is shown on the **Saving to:** line just below it in the File menu. The chooser opens at the
 current folder, and the new folder applies straight away, including to a session that is
 already being recorded. The choice is saved in `config.json` as `recorder.base_dir` and is shared
@@ -468,7 +565,7 @@ The Fitts window's setup page has a **Record Head Movement** option and a **Star
 button with a start-mode dropdown to its right:
 
 - **Record Head Movement** records head movement alongside the Fitts data, using the tracker,
-  **Initial Calibration** and **Recording** settings of the main HeadMouse window. It turns
+  **Initial Calibration** and **Recording** settings of the main OpenHeadMouse window. It turns
   **Recording** on so the head session is saved. The head session and the Fitts session can then
   be replayed together with **Open Synchronised Playback…**.
 - **Start Test** runs the test with whatever is already driving the OS cursor (head mouse,
@@ -477,20 +574,20 @@ button with a start-mode dropdown to its right:
   **Mouse Control** *off*, so head movement is recorded while the access method being measured
   keeps the cursor. This is how head movement is captured during, say, an eye-gaze or switch run.
 - **Start with dwell click** adds dwell clicking to the current cursor input for the mouse
-  task. When hosted by HeadMouse it reuses the main GUI's dwell timing, tolerance and ring
+  task. When hosted by OpenHeadMouse it reuses the main GUI's dwell timing, tolerance and ring
   settings without changing its enabled checkbox. Standalone runs use the default dwell settings.
-  Dwell clicking (including dwell enabled in the main HeadMouse GUI) is suppressed during
+  Dwell clicking (including dwell enabled in the main OpenHeadMouse GUI) is suppressed during
   tracker startup and all head exercises; it starts only when the mouse task begins.
-  Dwell clicking and HeadMouse stop when the mouse task completes, is cancelled, or the
+  Dwell clicking and OpenHeadMouse stop when the mouse task completes, is cancelled, or the
   window closes. The head recording is saved automatically and retained for playback.
-- **Start with HeadMouse** records head movement *and* drives the cursor with
+- **Start with OpenHeadMouse** records head movement *and* drives the cursor with
   it. It starts the chosen provider exactly as the setup panel's **Start** button would, ticking
   **Record Head Movement** and switching **Mouse Control** on. If initial calibration is enabled,
   the calibration overlay runs first and the trials only begin once the neutral pose has been
   captured and tracking is live. If the tracker is already running, the test starts straight away.
-  It respects the main GUI's dwell-click enabled setting, sets **Access method** to HeadMouse,
+  It respects the main GUI's dwell-click enabled setting, sets **Access method** to OpenHeadMouse,
   and is disabled when the Fitts window is run
-  standalone (`python fitts_law/fitts_test.py`), where there is no HeadMouse app to drive.
+  standalone (`python fitts_law/fitts_test.py`), where there is no OpenHeadMouse app to drive.
 
 Either way the head recording covers the whole run, so its samples can be labelled by phase (see
 below). `metadata.record_head_movement` in the Fitts file records which mode was used.
@@ -503,7 +600,7 @@ require valid mouse-task settings.
 
 - **Initial Rest Position (Calibration)** gives the participant the configured move/read time
   to adopt a comfortable neutral pose, then records it for the configured hold time. It uses the
-  same neutral-pose calculation as the main HeadMouse calibration. If HeadMouse is running, its
+  same neutral-pose calculation as the main OpenHeadMouse calibration. If OpenHeadMouse is running, its
   cursor is paused during the task and the held pose recentres it before the next task.
 - **Range Of Movement Task** asks for maximum comfortable movement in this order: left, right,
   up, down. For each direction a red band marks the corresponding screen edge. The participant
@@ -516,7 +613,7 @@ At completion the test window closes before its results are saved. If saving fai
 explains the error and a folder chooser lets you retry (the JSON is saved directly in the selected
 folder). Cancelling the chooser reopens the results window with the data still in memory, so
 **File > Save Results As…** can be used later. Both mouse trials and head-only task records are
-saved. When hosted by HeadMouse, reopen the Fitts window from the File menu to inspect the results.
+saved. When hosted by OpenHeadMouse, reopen the Fitts window from the File menu to inspect the results.
 Use **File > Close** or `Ctrl+W` to stop a run midway. Head tracking
 and dwell clicking stop, partial mouse trials/head-task phases are saved, and unfinished phases
 are marked as cancelled. The setup window and both playback windows have the same Close controls;
@@ -541,7 +638,7 @@ top-level `calibration` section for existing calibration analysis.
 
 The session viewer's File menu has three ways to open a recording:
 
-- **Open HeadMouse Session…** (`Ctrl+O`) opens a head-movement recording on its own.
+- **Open OpenHeadMouse Session…** (`Ctrl+O`) opens a head-movement recording on its own.
 - **Open Synchronised Playback…** (`Ctrl+Shift+O`) asks for a head-movement session and then a
   Fitts session. The two windows are then driven by one shared playback clock, so Play, the slider
   or the speed control in either window moves both. Playback covers the head-movement exercise
@@ -604,7 +701,7 @@ the summary (it is hidden for sessions without that data). It is built from
   phase, plus the overall horizontal and vertical cursor ranges in px.
 
 The cursor position is sampled on every exercise tick (about 20 Hz). Mouse-move events alone
-were not reliably delivered while HeadMouse moved the hidden cursor, so earlier recordings may
+were not reliably delivered while OpenHeadMouse moved the hidden cursor, so earlier recordings may
 hold few or no cursor points.
 
 The head session's samples are also passed to the Fitts window. In **Open Synchronised
@@ -635,11 +732,18 @@ overlap in time. You can still play the Fitts session on its own.
 
 ## Validation
 
-Run the headless test suite from `headmouse_project/`:
+Install development dependencies and run checks from the repository root:
 
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q
+node --test .\colab_session_viewer\viewer.test.cjs
+.\.venv\Scripts\python.exe tools\check_publication.py
 ```
-QT_QPA_PLATFORM=offscreen python -m pytest -q
-```
+
+Tests configure offscreen Qt and have a per-test timeout. On Linux, run under
+`xvfb-run -a` for libraries that also require an X display. CI runs these checks
+before packaging. The publication check is pattern-based and not an exhaustive audit.
 
 Camera, xIMU3, AirPods, global hotkey, and native Swift helper behavior require the
 corresponding hardware and macOS permissions; the protocol and provider unit tests run
@@ -649,21 +753,12 @@ Press **Esc** to pause or resume cursor tracking.
 
 On macOS, the global toggle uses `Cmd+Option+M` (`<cmd>+<alt>+m`). Grant Accessibility
 and Input Monitoring permission to the executable that actually runs the app (usually
-the project virtual-environment Python, not just VS Code), then restart HeadMouse.
+the project virtual-environment Python, not just VS Code), then restart OpenHeadMouse.
 If registration is denied, the main window displays the reason instead of silently
 claiming the hotkey is active.
 
-TODO:
-TEST - add centre point to detect headpose and tremor etc.
+## Contributing and support
 
-IDEAS:
- * recentering tool for absolute mode
- * snap to object
- *  FUSION MODE - camera+IMU
-   * Use for recentering? Work out centre from camera, but only re-centre/adjust when at edges (hard to reach)????
- * calibration - establish ROM - work out the gains...
-
- * Head joystick - movement threshold ->  mouse movement.....
-
- * Generic switch - detect movement over threshold... -> switch signal
-  
+Use the [bug-report guidance](CONTRIBUTING.md), include your edition, version,
+OS and provider, and share only anonymised/reproducible examples.
+For potentially sensitive vulnerabilities, follow the [private reporting guidance](SECURITY.md).

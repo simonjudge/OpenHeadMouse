@@ -1,4 +1,4 @@
-"""Abstract base class for HeadMouse input providers.
+"""Abstract base class for OpenHeadMouse input providers.
 
 Every provider (UniFace, xIMU3, AirPods, and test/mock providers) normalizes
 its raw signal into the shared quaternion reference frame documented in

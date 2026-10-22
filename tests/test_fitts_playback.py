@@ -229,6 +229,7 @@ def test_synchronised_playback_shares_one_clock(qt_app):
     try:
         fitts_window = viewer.open_synchronised(head, None, "head", logger, "fitts")
         assert fitts_window is not None and fitts_window.clock is viewer.clock
+        assert fitts_window.clock.parent() is fitts_window
         # Only the Fitts test period (1000-1003) is played back; head data
         # outside it (999-1000) is dropped and times are relative to the test start.
         assert (viewer.clock.t_min, viewer.clock.t_max) == pytest.approx((1000.0, 1003.0))
@@ -250,6 +251,28 @@ def test_synchronised_playback_shares_one_clock(qt_app):
         fitts_window.close()
     finally:
         viewer.close()
+
+
+def test_synchronised_windows_can_be_garbage_collected_repeatedly(qt_app):
+    import gc
+    import weakref
+    from session_viewer.session_viewer import SessionVisualizerWindow
+
+    for _ in range(5):
+        viewer = SessionVisualizerWindow()
+        logger = FittsResultsLogger()
+        logger.trials = _fitts_trials(1000.0)
+        fitts = viewer.open_synchronised(
+            _head_samples([999.0 + 0.1 * i for i in range(40)]),
+            None, "head", logger, "fitts",
+        )
+        viewer_ref, fitts_ref = weakref.ref(viewer), weakref.ref(fitts)
+        fitts.close()
+        viewer.close()
+        del fitts, viewer
+        gc.collect()
+        assert viewer_ref() is None
+        assert fitts_ref() is None
 
 
 def test_synchronised_playback_tiles_by_default_and_from_either_file_menu(qt_app, monkeypatch):

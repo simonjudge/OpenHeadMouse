@@ -2,12 +2,15 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.ipynb_checkpoints/
+colab_session_viewer/OpenHeadMouse/
 sessions/
 fitts_sessions/
 *.egg-info/
 .DS_Store
 *.iss
 *.spec
+!SessionViewer.spec
 
 build/
 dist/

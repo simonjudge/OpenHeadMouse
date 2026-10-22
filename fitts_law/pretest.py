@@ -84,7 +84,7 @@ class PreTestTaskOverlay(QWidget):
         self._clock = clock
         self._host_clock = host_clock
         # Polled every tick: mouse-move events are not reliably delivered while
-        # HeadMouse (or another access method) moves the hidden cursor.
+        # OpenHeadMouse (or another access method) moves the hidden cursor.
         self._cursor_position = cursor_position or (lambda: self.mapFromGlobal(QCursor.pos()))
         self._index = -1
         self._phase_start = 0.0

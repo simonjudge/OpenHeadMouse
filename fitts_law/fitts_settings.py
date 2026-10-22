@@ -25,7 +25,7 @@ DEFAULT_SETTINGS = {
     "pretest_move_duration_s": 5.0,
     "pretest_hold_duration_s": 5.0,
     # Mirrors config.json's recorder.base_dir so a standalone run (no
-    # HeadMouse window) still only asks for the folder once.
+    # OpenHeadMouse window) still only asks for the folder once.
     "recordings_base_dir": None,
 }
 
@@ -41,6 +41,8 @@ class FittsSettings:
             try:
                 with open(_SETTINGS_PATH) as f:
                     loaded = json.load(f)
+                if loaded.get("start_mode") == "Start with HeadMouse":
+                    loaded["start_mode"] = "Start with OpenHeadMouse"
                 if "task_selection" not in loaded:
                     loaded["task_selection"] = (
                         "HeadMovement and Mouse Task"

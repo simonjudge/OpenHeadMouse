@@ -245,12 +245,17 @@ def summarise_pretest(metadata: dict | None, head_samples=None) -> dict:
     return summary
 
 
-def _fmt(value, spec: str, unit: str = "") -> str:
+def _format_measure(value, spec: str, unit: str = "") -> str:
     return "n/a" if value is None else f"{value:{spec}}{unit}"
 
 
-def format_pretest_summary_html(summary: dict) -> str:
+def format_pretest_summary_html(summary: dict, *, decimal_places: int | None = None) -> str:
     """Render `summarise_pretest` output for the Fitts playback side panel."""
+    def _fmt(value, spec: str, unit: str = "") -> str:
+        if decimal_places is not None:
+            spec = ("+" if spec.startswith("+") else "") + f".{decimal_places}f"
+        return _format_measure(value, spec, unit)
+
     if not summary.get("available"):
         return (
             "No initial rest position or range of movement data was recorded "

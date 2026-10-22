@@ -63,10 +63,24 @@ def test_full_menu_includes_research_tools(qt_app):
 
     window = HeadMouseWindow(initial_kx=1.0, initial_ky=1.0)
 
+    assert window.windowTitle() == "OpenHeadMouse"
     file_menu = window.menuBar().actions()[0].menu()
     action_texts = [action.text() for action in file_menu.actions()]
     assert "Open Session Viewer..." in action_texts
     assert "Open Fitts' Law Test..." in action_texts
+
+
+def test_session_viewer_uses_openheadmouse_branding(qt_app):
+    from session_viewer.session_viewer import SessionVisualizerWindow
+
+    window = SessionVisualizerWindow()
+    try:
+        file_menu = window.menuBar().actions()[0].menu()
+        action_texts = [action.text() for action in file_menu.actions()]
+        assert "Open OpenHeadMouse Session..." in action_texts
+        assert "Open HeadMouse Session..." not in action_texts
+    finally:
+        window.close()
 
 
 def test_setup_panel_only_shows_airpods_when_enabled(qt_app):
@@ -449,6 +463,7 @@ def test_app_wires_mock_provider_through_to_headmouse(qt_app):
 
     config = copy.deepcopy(load_config())
     config.setdefault("ui", {})["calibration_enabled"] = False
+    config["ui"]["mouse_control_enabled"] = True
     app = App(config, poll_hz=90.0, auto_start_listeners=False, mouse_controller=FakeMouseController())
     try:
         app._on_start_requested("mock")

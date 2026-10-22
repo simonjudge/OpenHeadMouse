@@ -169,7 +169,7 @@ class HeadMouse:
         except Exception as e:
             self._hotkey_error = str(e)
             print(f"✗ Failed to register hotkey '{self._hotkey_str}': {e}")
-            print("  On macOS, allow the executable running HeadMouse in System Settings >")
+            print("  On macOS, allow the executable running OpenHeadMouse in System Settings >")
             print("  Privacy & Security > Accessibility, then restart the application.")
             self._hotkey_listener = None
         try:
@@ -193,7 +193,7 @@ class HeadMouse:
         if not Quartz.CGPreflightListenEventAccess():
             raise PermissionError(
                 "macOS denied keyboard monitoring; grant Accessibility/Input Monitoring "
-                "to the Python executable running HeadMouse"
+                "to the Python executable running OpenHeadMouse"
             )
 
     def stop(self) -> None:

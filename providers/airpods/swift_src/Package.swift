@@ -2,13 +2,13 @@
 import PackageDescription
 
 let package = Package(
-    name: "AirPodsHeadMouseHelper",
+    name: "OpenHeadMouseAirPodsHelper",
     platforms: [
         .macOS(.v14)
     ],
     targets: [
         .executableTarget(
-            name: "AirPodsHeadMouseHelper",
+            name: "OpenHeadMouseAirPodsHelper",
             dependencies: [],
             path: ".",
             exclude: ["BUILD.md", "Info.plist"],

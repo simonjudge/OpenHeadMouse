@@ -1,4 +1,4 @@
-"""Main HeadMouse window (spec gui/headmouse_gui.py)."""
+"""Main OpenHeadMouse window (spec gui/headmouse_gui.py)."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ class HeadMouseWindow(QMainWindow):
     ):
         super().__init__(parent)
         self._close_handler = None
-        self.setWindowTitle("HeadMouse")
+        self.setWindowTitle("OpenHeadMouse")
         self.tracking_state_changed.connect(self.set_status)
 
         self._create_menu(research_tools_enabled)

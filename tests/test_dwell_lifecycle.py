@@ -34,7 +34,7 @@ def make_app(qt_app, dwell_enabled: bool):
 
 
 def drive_cursor(app, timestamp: float = 0.0) -> None:
-    """Deliver one provider sample, so HeadMouse is actually moving the cursor."""
+    """Deliver one provider sample, so OpenHeadMouse is actually moving the cursor."""
     from core import quaternion_math as qm
     from providers.base_provider import ProviderSample
 

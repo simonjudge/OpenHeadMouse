@@ -7,6 +7,23 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def headless_native_geometry(monkeypatch):
+    """Offscreen Qt windows do not have Windows monitor handles."""
+    if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+        monkeypatch.setattr("main._windows_monitor_geometry", lambda window_id=None: None)
+
+
+@pytest.fixture(autouse=True)
+def unexpected_critical_dialog(monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    def fail(parent, title, message, *args, **kwargs):
+        pytest.fail(f"Unexpected critical dialog: {title}: {message}")
+
+    monkeypatch.setattr(QMessageBox, "critical", fail)
+
+
 @pytest.fixture(scope="session")
 def qt_app():
     from PySide6.QtWidgets import QApplication

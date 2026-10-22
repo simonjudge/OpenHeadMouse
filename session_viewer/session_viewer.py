@@ -2,7 +2,7 @@
 
 Uses PyQtGraph for fast, responsive line charts and pyqtgraph.opengl for native,
 flicker-free 3D mesh rendering. Opens as a standalone window with no session
-loaded; use File > Open HeadMouse Session (or the toolbar button) to load a
+loaded; use File > Open OpenHeadMouse Session (or the toolbar button) to load a
 recording. File > Open Fitts Test Only opens a Fitts' Law trial playback window
 on its own, and File > Open Synchronised Playback opens a head session plus a
 Fitts session recorded at the same time, driven by one shared playback clock.
@@ -253,7 +253,7 @@ class SessionVisualizerWindow(QMainWindow):
 
     def _create_menu_and_toolbar(self):
         """Create the File menu and toolbar buttons for opening session files."""
-        open_action = QAction("Open HeadMouse Session...", self)
+        open_action = QAction("Open OpenHeadMouse Session...", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self._on_open_session)
 
@@ -632,7 +632,7 @@ class SessionVisualizerWindow(QMainWindow):
             time_origin_host=t0, reference_samples=samples,
         )
         fitts_window = self._open_fitts_window(logger, fitts_name, samples)
-        shared = PlaybackClock(self)
+        shared = PlaybackClock(fitts_window)
         self._attach_clock(shared, self._host_frame_times)
         fitts_window.attach_clock(shared, synced=True)
         self._linked_fitts_window = fitts_window

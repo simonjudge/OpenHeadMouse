@@ -140,7 +140,7 @@
     }
   },
   "recorder": {
-    "base_dir": "C:\\Users\\judges.BDGH\\Documents\\sessions",
+    "base_dir": null,
     "output_dir": "sessions/",
     "format": "json"
   }

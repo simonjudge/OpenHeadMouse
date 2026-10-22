@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+(\.\d+)?$')]
-    [string]$Version = "0.2.0",
+    [ValidatePattern('^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$')]
+    [string]$Version = "0.2.0-rc.1",
     [string]$Python = "",
     [string]$Iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 )
@@ -29,6 +29,15 @@ try {
     & $pythonCommand -c "import PyInstaller"
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller is missing. Install requirements.txt and pyinstaller into the selected Python environment."
+    }
+    $appVersion = & $pythonCommand main.py --version
+    if ($LASTEXITCODE -ne 0 -or $appVersion -ne $Version) {
+        throw "Requested installer version '$Version' does not match the application version '$appVersion'. Update main.py before building a new version."
+    }
+
+    & $pythonCommand (Join-Path $PSScriptRoot "tools\prepare_release.py") --assets --notices (Join-Path $PSScriptRoot "build\release-notices")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Asset verification or licence export failed."
     }
 
     foreach ($asset in @(
@@ -90,7 +99,8 @@ try {
             "--distpath", $distDir,
             "--workpath", (Join-Path $buildDir "work"),
             "--specpath", $specDir,
-            "--paths", $PSScriptRoot
+            "--paths", $PSScriptRoot,
+            "--add-data", "$(Join-Path $PSScriptRoot 'build\release-notices');release-notices"
         )
         if ($edition.HeadTracking) {
             $buildArgs += @(
@@ -117,6 +127,22 @@ try {
             throw "PyInstaller did not produce the expected executable: $binaryPath"
         }
 
+        $smokeConfig = Join-Path $buildDir "smoke-config.json"
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "config.json") -Destination $smokeConfig -Force
+        $smokeArgs = @("--smoke-test")
+        if ($edition.HeadTracking) {
+            $smokeArgs += @("--config", ('"{0}"' -f $smokeConfig))
+        }
+        $smoke = Start-Process -FilePath $binaryPath -ArgumentList $smokeArgs -PassThru
+        if (-not $smoke.WaitForExit(60000)) {
+            Stop-Process -Id $smoke.Id
+            throw "Packaged smoke test timed out for $($edition.Name)."
+        }
+        $smoke.Refresh()
+        if ($smoke.ExitCode -ne 0) {
+            throw "Packaged smoke test failed for $($edition.Name): exit $($smoke.ExitCode)."
+        }
+
         $scriptPath = Join-Path $installerDir "$($edition.Id).iss"
         @"
 [Setup]
@@ -134,6 +160,7 @@ UninstallDisplayIcon={app}\$($edition.Id).exe
 
 [Files]
 Source: "$binaryPath"; DestDir: "{app}"; Flags: ignoreversion
+Source: "$(Join-Path $PSScriptRoot 'build\release-notices\*')"; DestDir: "{app}\release-notices"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\$($edition.Name)"; Filename: "{app}\$($edition.Id).exe"
@@ -151,7 +178,20 @@ Name: "{autodesktop}\$($edition.Name)"; Filename: "{app}\$($edition.Id).exe"
         Write-Host "Created $installerPath"
     }
 
+    $noticesZip = Join-Path $distDir "release-notices-Windows.zip"
+    Compress-Archive -Path (Join-Path $PSScriptRoot "build\release-notices\*") -DestinationPath $noticesZip -Force
+    $outputs = @($noticesZip)
+    foreach ($edition in $editions) {
+        $outputs += Join-Path $distDir "$($edition.Id).exe"
+        $outputs += Join-Path $distDir "$($edition.Setup).exe"
+    }
+    $checksums = foreach ($output in $outputs) {
+        $hash = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$hash  $(Split-Path $output -Leaf)"
+    }
+    $checksums | Set-Content -LiteralPath (Join-Path $distDir "SHA256SUMS-Windows.txt") -Encoding ASCII
     Write-Host "All four executables and installers are available in $distDir"
+    Write-Warning "Unsigned development builds only. Do not publish binaries until the LGPL and model redistribution review is complete."
 } finally {
     Pop-Location
 }

@@ -6,19 +6,27 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  checks:
+    uses: ./.github/workflows/tests.yml
+
   build:
     name: Build ${{ matrix.platform }} editions
     runs-on: ${{ matrix.os }}
+    needs: checks
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
             platform: Windows
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             platform: Linux
-          - os: macos-latest
+          - os: macos-14
             platform: macOS
 
     steps:
@@ -32,12 +40,17 @@ jobs:
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             RAW="${GITHUB_REF_NAME}"
             CLEAN="${RAW#v}"
+            if [[ ! "$CLEAN" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "Invalid release version" >&2
+              exit 1
+            fi
           else
             RAW="manual-${GITHUB_RUN_NUMBER}"
             CLEAN="0.0.${GITHUB_RUN_NUMBER}"
           fi
           echo "raw=$RAW" >> "$GITHUB_OUTPUT"
-          echo "clean=$CLEAN" >> "$GITHUB_OUTPUT"
+          echo "version=$CLEAN" >> "$GITHUB_OUTPUT"
+          echo "clean=${CLEAN%%-*}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -48,32 +61,35 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            python -m pip install -r requirements-windows-py312.lock
+          else
+            python -m pip install -r requirements-build.txt
+          fi
+          python -m pip check
 
-      - name: Download FaceLandmarker Model
+      - name: Install Linux GUI libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+
+      - name: Verify assets and collect licences
         shell: bash
         run: |
-          mkdir -p models
-          curl --fail --location --retry 3 \
-            --output models/face_landmarker.task \
-            https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task
-          python -c "import hashlib, pathlib; p = pathlib.Path('models/face_landmarker.task'); actual = hashlib.sha256(p.read_bytes()).hexdigest(); expected = '64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff'; assert actual == expected, f'FaceLandmarker model checksum mismatch: {actual}'"
+          python tools/prepare_release.py --assets --notices build/release-notices
 
-      - name: Download Session Viewer Mesh
+      - name: Check tag matches application version
+        if: github.ref_type == 'tag'
         shell: bash
-        run: |
-          curl --fail --location --retry 3 \
-            --output models/canonical_face_model.obj \
-            https://raw.githubusercontent.com/google-ai-edge/mediapipe/master/mediapipe/modules/face_geometry/data/canonical_face_model.obj
-          python -c "import hashlib, pathlib; p = pathlib.Path('models/canonical_face_model.obj'); actual = hashlib.sha256(p.read_bytes()).hexdigest(); expected = '8bac80443397e113f41a8b565ea72c59390bc031d9defab289dba7bc0c54e618'; assert actual == expected, f'Session Viewer mesh checksum mismatch: {actual}'"
+        run: test "$(python main.py --version)" = "${{ steps.ver.outputs.version }}"
 
       - name: Build all editions
         shell: bash
         run: |
           mkdir -p dist
           for EDITION in full headmouse-only dwell-click session-viewer; do
-            PYINSTALLER_ARGS=(--onefile)
+            PYINSTALLER_ARGS=(--noconfirm --clean --onefile)
             if [ "$RUNNER_OS" = "Windows" ]; then
               PYINSTALLER_ARGS+=(--windowed)
             fi
@@ -99,6 +115,11 @@ jobs:
             esac
 
             PYINSTALLER_ARGS+=(--name "$APP_NAME")
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              PYINSTALLER_ARGS+=(--add-data "build/release-notices;release-notices")
+            else
+              PYINSTALLER_ARGS+=(--add-data "build/release-notices:release-notices")
+            fi
             if [ "$EDITION" = "full" ] || [ "$EDITION" = "headmouse-only" ]; then
               if [ "$RUNNER_OS" = "Windows" ]; then
                 PYINSTALLER_ARGS+=(
@@ -110,6 +131,9 @@ jobs:
                   --add-data "config.json:."
                   --add-data "models/face_landmarker.task:models"
                 )
+              fi
+              if [ "$RUNNER_OS" = "macOS" ]; then
+                PYINSTALLER_ARGS+=(--add-data "providers/airpods/swift_src/main.swift:providers/airpods/swift_src")
               fi
               PYINSTALLER_ARGS+=(
                 --hidden-import mediapipe.tasks.c
@@ -123,7 +147,11 @@ jobs:
                 PYINSTALLER_ARGS+=(--add-data "models/canonical_face_model.obj:models")
               fi
             fi
-            pyinstaller "${PYINSTALLER_ARGS[@]}" "$ENTRY_POINT"
+            if [ "$RUNNER_OS" = "Linux" ]; then
+              xvfb-run -a python -m PyInstaller "${PYINSTALLER_ARGS[@]}" "$ENTRY_POINT"
+            else
+              python -m PyInstaller "${PYINSTALLER_ARGS[@]}" "$ENTRY_POINT"
+            fi
 
             if [ "$RUNNER_OS" = "Windows" ]; then
               EXTENSION=".exe"
@@ -144,14 +172,29 @@ jobs:
             else
               EXTENSION=""
               case "$EDITION" in
-                full) BINARY_NAME="OpenHeadMouse-macos-universal" ;;
-                headmouse-only) BINARY_NAME="OpenHeadMouse-headmouse-only-macos-universal" ;;
-                dwell-click) BINARY_NAME="DwellClick-macos-universal" ;;
-                session-viewer) BINARY_NAME="SessionViewer-macos-universal" ;;
+                full) BINARY_NAME="OpenHeadMouse-macos-arm64" ;;
+                headmouse-only) BINARY_NAME="OpenHeadMouse-headmouse-only-macos-arm64" ;;
+                dwell-click) BINARY_NAME="DwellClick-macos-arm64" ;;
+                session-viewer) BINARY_NAME="SessionViewer-macos-arm64" ;;
               esac
+              test "$(uname -m)" = "arm64"
+              test "$(lipo -archs "dist/${APP_NAME}")" = "arm64"
             fi
             mv "dist/${APP_NAME}${EXTENSION}" "dist/${BINARY_NAME}"
           done
+
+      - name: Smoke test packaged apps without input control
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          export LOCALAPPDATA="$RUNNER_TEMP/openheadmouse-smoke"
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/openheadmouse-smoke"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a python tools/smoke_release.py dist
+          else
+            python tools/smoke_release.py dist
+          fi
 
       - name: Build Windows Installers (Inno Setup)
         if: runner.os == 'Windows'
@@ -207,6 +250,7 @@ jobs:
 
           [Files]
           Source: "dist\$($edition.Binary)"; DestDir: "{app}"; DestName: "$($edition.ExeName)"; Flags: ignoreversion
+          Source: "build\release-notices\*"; DestDir: "{app}\release-notices"; Flags: ignoreversion recursesubdirs createallsubdirs
 
           [Icons]
           Name: "{group}\$($edition.AppName)"; Filename: "{app}\$($edition.ExeName)"
@@ -255,11 +299,13 @@ jobs:
                 PACKAGE_NAME="session-viewer"
                 OUTPUT_NAME="SessionViewer-linux-amd64.deb"
                 EXECUTABLE_NAME="SessionViewer"
-                DESCRIPTION="HeadMouse Session Viewer standalone application"
+                DESCRIPTION="OpenHeadMouse Session Viewer standalone application"
                 ;;
             esac
             cp "dist/${BINARY_NAME}" "pkg/usr/local/bin/${EXECUTABLE_NAME}"
             chmod +x "pkg/usr/local/bin/${EXECUTABLE_NAME}"
+            mkdir -p "pkg/usr/share/doc/${PACKAGE_NAME}"
+            cp -R build/release-notices/. "pkg/usr/share/doc/${PACKAGE_NAME}/"
             fpm -s dir -t deb \
               -n "$PACKAGE_NAME" \
               -v "$VERSION" \
@@ -267,7 +313,8 @@ jobs:
               --description "$DESCRIPTION" \
               -C pkg \
               -p "dist/${OUTPUT_NAME}" \
-              "usr/local/bin/${EXECUTABLE_NAME}"
+              "usr/local/bin/${EXECUTABLE_NAME}" \
+              "usr/share/doc/${PACKAGE_NAME}"
           done
 
       - name: Build macOS .app bundles and DMGs
@@ -281,39 +328,39 @@ jobs:
           for EDITION in full headmouse-only dwell-click session-viewer; do
             case "$EDITION" in
               full)
-                BINARY_NAME="OpenHeadMouse-macos-universal"
+                BINARY_NAME="OpenHeadMouse-macos-arm64"
                 APP_NAME="OpenHeadMouse"
                 DISPLAY_NAME="OpenHeadMouse"
                 BUNDLE_ID="io.github.simonjudge.openheadmouse"
                 EXECUTABLE_NAME="OpenHeadMouse"
-                DMG_NAME="OpenHeadMouse-macos-universal.dmg"
+                DMG_NAME="OpenHeadMouse-macos-arm64.dmg"
                 VOLUME_NAME="OpenHeadMouse"
                 ;;
               headmouse-only)
-                BINARY_NAME="OpenHeadMouse-headmouse-only-macos-universal"
+                BINARY_NAME="OpenHeadMouse-headmouse-only-macos-arm64"
                 APP_NAME="OpenHeadMouse-HeadMouse-only"
                 DISPLAY_NAME="OpenHeadMouse HeadMouse-only"
                 BUNDLE_ID="io.github.simonjudge.openheadmouse.headmouseonly"
                 EXECUTABLE_NAME="OpenHeadMouse"
-                DMG_NAME="OpenHeadMouse-headmouse-only-macos-universal.dmg"
+                DMG_NAME="OpenHeadMouse-headmouse-only-macos-arm64.dmg"
                 VOLUME_NAME="OpenHeadMouse HeadMouse-only"
                 ;;
               dwell-click)
-                BINARY_NAME="DwellClick-macos-universal"
+                BINARY_NAME="DwellClick-macos-arm64"
                 APP_NAME="DwellClick"
                 DISPLAY_NAME="Dwell Click"
                 BUNDLE_ID="io.github.simonjudge.dwellclick"
                 EXECUTABLE_NAME="DwellClick"
-                DMG_NAME="DwellClick-macos-universal.dmg"
+                DMG_NAME="DwellClick-macos-arm64.dmg"
                 VOLUME_NAME="Dwell Click"
                 ;;
               session-viewer)
-                BINARY_NAME="SessionViewer-macos-universal"
+                BINARY_NAME="SessionViewer-macos-arm64"
                 APP_NAME="SessionViewer"
                 DISPLAY_NAME="Session Viewer"
                 BUNDLE_ID="io.github.simonjudge.sessionviewer"
                 EXECUTABLE_NAME="SessionViewer"
-                DMG_NAME="SessionViewer-macos-universal.dmg"
+                DMG_NAME="SessionViewer-macos-arm64.dmg"
                 VOLUME_NAME="Session Viewer"
                 ;;
             esac
@@ -322,6 +369,7 @@ jobs:
             mkdir -p "$APP_ROOT/Contents/MacOS" "$APP_ROOT/Contents/Resources"
             cp "dist/${BINARY_NAME}" "$APP_ROOT/Contents/MacOS/${EXECUTABLE_NAME}"
             chmod +x "$APP_ROOT/Contents/MacOS/${EXECUTABLE_NAME}"
+            cp -R build/release-notices "$APP_ROOT/Contents/Resources/"
 
             cat > "$APP_ROOT/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
@@ -335,7 +383,9 @@ jobs:
             <key>CFBundleShortVersionString</key><string>${VERSION}</string>
             <key>CFBundleExecutable</key><string>${EXECUTABLE_NAME}</string>
             <key>CFBundlePackageType</key><string>APPL</string>
-            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>LSMinimumSystemVersion</key><string>14.0</string>
+            <key>NSCameraUsageDescription</key><string>Estimate head movements locally from your camera.</string>
+            <key>NSMotionUsageDescription</key><string>Read AirPods head movements through the motion helper.</string>
             <key>NSHighResolutionCapable</key><true/>
           </dict>
           </plist>
@@ -354,11 +404,19 @@ jobs:
               "$DMG_ROOT"
           done
 
+      - name: Package notices and checksums
+        shell: bash
+        run: |
+          python -c "import shutil; shutil.make_archive('dist/release-notices-${{ matrix.platform }}', 'zip', 'build/release-notices')"
+          python -c "import hashlib, pathlib; root = pathlib.Path('dist'); files = sorted(p for p in root.iterdir() if p.is_file()); (root / 'SHA256SUMS-${{ matrix.platform }}.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n' for p in files), encoding='utf-8')"
+
       - name: Upload Release Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}-release-assets
-          path: dist/*
+          path: |
+            dist/*
+            !dist/*.app/**
           if-no-files-found: error
 
   release:
@@ -372,6 +430,7 @@ jobs:
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: "*-release-assets"
           path: release-assets
           merge-multiple: true
 
@@ -379,5 +438,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          body: |
+            Windows-first release candidate. Linux and macOS arm64 builds are experimental.
+            Do not publish this draft until the release checklist and LGPL/model redistribution review are complete.
+            Downloads are unsigned. Verify SHA-256 checksums before running.
         env:
           GITHUB_TOKEN: ${{ github.token }}

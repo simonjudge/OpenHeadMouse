@@ -1,11 +1,11 @@
 """Standalone Fitts' Law test suite window.
 
 Run directly (`python fitts_law/fitts_test.py`) or launch from the main
-HeadMouse window's File menu (see main.py's _on_fitts_test_requested).
+OpenHeadMouse window's File menu (see main.py's _on_fitts_test_requested).
 Deliberately has zero coupling to core/headmouse.py - it only reacts to
 ordinary Qt mouse events on its own canvas, agnostic to whatever is actually
 driving the OS cursor (head tracking, a trackpad, a switch, etc).
-The "Start with HeadMouse" mode and the "Record Head Movement" option keep
+The "Start with OpenHeadMouse" mode and the "Record Head Movement" option keep
 that separation: the host application registers a callable
 (set_head_start_provider) that starts its own tracker, with or without letting
 it drive the cursor.
@@ -78,7 +78,7 @@ TASK_MOUSE_ONLY = "Mouse Task only"
 
 START_NORMAL = "Start test"
 START_DWELL = "Start with dwell click"
-START_HEADMOUSE = "Start with HeadMouse"
+START_HEADMOUSE = "Start with OpenHeadMouse"
 
 
 def _parse_number_list(text: str) -> list[float]:
@@ -298,10 +298,10 @@ class TypingTrialCanvas(QWidget):
 class FittsTestWindow(QMainWindow):
     _RECORD_HEAD_TOOLTIP = (
         "Record head movement alongside the Fitts data, using the tracker, "
-        "calibration and recording settings of the HeadMouse window.\n"
+        "calibration and recording settings of the OpenHeadMouse window.\n"
         "Start Test records head movement without driving the cursor, so the "
         "test is done with the access method being measured; Start with "
-        "HeadMouse records it and drives the cursor with the head.\n"
+        "OpenHeadMouse records it and drives the cursor with the head.\n"
         "Selecting HeadMovement tasks also requests head recording."
     )
 
@@ -323,7 +323,7 @@ class FittsTestWindow(QMainWindow):
         # Set by the host application (see main.py) so this window can stop and
         # save a running head recording before replaying it. Returns its path.
         self._head_session_provider = None
-        # Set by the host application so the "Start with HeadMouse" button can
+        # Set by the host application so the "Start with OpenHeadMouse" button can
         # bring up the selected head tracker before the test begins.
         self._head_start_provider = None
         self._head_phase_provider = None
@@ -449,7 +449,7 @@ class FittsTestWindow(QMainWindow):
     def set_recordings_dir_provider(self, provider) -> None:
         """Register ``provider(prompt: bool) -> Path | None`` for the base folder.
 
-        It returns the recordings folder chosen in the HeadMouse window,
+        It returns the recordings folder chosen in the OpenHeadMouse window,
         asking the user for one when `prompt` is True and none has been set.
         Without a provider this window asks (and remembers the answer)
         itself, so a standalone run behaves the same way.
@@ -474,10 +474,10 @@ class FittsTestWindow(QMainWindow):
         return base_dir
 
     def _standalone_base_dir(self, *, prompt: bool):
-        """The recordings folder when running without a HeadMouse window.
+        """The recordings folder when running without an OpenHeadMouse window.
 
         The shared config.json is read first so a folder chosen in the
-        HeadMouse GUI is honoured, then this window's own settings. With
+        OpenHeadMouse GUI is honoured, then this window's own settings. With
         `prompt` the folder is made ready, asking for one when it is unset or
         unusable, and the answer is saved to both so it is only asked once.
         """
@@ -501,7 +501,7 @@ class FittsTestWindow(QMainWindow):
         """Remember the folder for the next standalone run."""
         self._settings.set("recordings_base_dir", str(base_dir))
         self._settings.save()
-        # Best effort: sharing it through config.json keeps the HeadMouse
+        # Best effort: sharing it through config.json keeps the OpenHeadMouse
         # window and this one pointing at the same folder.
         recording_paths.save_base_dir(base_dir)
 
@@ -524,7 +524,7 @@ class FittsTestWindow(QMainWindow):
                 self._RECORD_HEAD_TOOLTIP
                 if available
                 else self._RECORD_HEAD_TOOLTIP + "\n\nUnavailable here: open this window "
-                "from the HeadMouse app (File > Fitts' Law Test) to record head movement. "
+                "from the OpenHeadMouse app (File > Fitts' Law Test) to record head movement. "
                 "The pre-test tasks still record the cursor into the Fitts session file."
             )
 
@@ -580,7 +580,7 @@ class FittsTestWindow(QMainWindow):
         self._task_combo.setCurrentText(self._settings.get("task_selection", TASK_MOUSE_ONLY))
         self._task_combo.setToolTip(
             "HeadMovement includes both the initial rest position and range-of-movement "
-            "tasks, and records the head tracker when launched from HeadMouse."
+            "tasks, and records the head tracker when launched from OpenHeadMouse."
         )
         form.addRow("Tasks", self._task_combo)
         self._mode_combo = QComboBox()
@@ -693,8 +693,8 @@ class FittsTestWindow(QMainWindow):
 
         form.addRow(QLabel(""))  # blank separator line
         self._access_method_combo = QComboBox()
-        self._access_method_combo.addItems(["HeadMouse", "EyeGaze", "Mouse", "Other"])
-        self._access_method_combo.setCurrentText("HeadMouse")
+        self._access_method_combo.addItems(["OpenHeadMouse", "EyeGaze", "Mouse", "Other"])
+        self._access_method_combo.setCurrentText("OpenHeadMouse")
         self._access_method_combo.currentTextChanged.connect(self._update_access_method_visibility)
         form.addRow("Access method", self._access_method_combo)
 
@@ -731,7 +731,7 @@ class FittsTestWindow(QMainWindow):
         self._start_mode_combo.addItems([START_NORMAL, START_DWELL, START_HEADMOUSE])
         self._start_mode_combo.setCurrentText(self._settings.get("start_mode", START_NORMAL))
         self._start_mode_combo.setToolTip(
-            "Use the current cursor input, add dwell clicking, or start HeadMouse "
+            "Use the current cursor input, add dwell clicking, or start OpenHeadMouse "
             "using the main GUI settings (including its dwell-click setting)."
         )
         self._start_mode_combo.currentTextChanged.connect(lambda _: self._save_settings())
@@ -811,21 +811,21 @@ class FittsTestWindow(QMainWindow):
         return CircleStimulus()
 
     def _on_start_with_headmouse_clicked(self) -> None:
-        """Bring up the head tracker selected in the HeadMouse window, then run the test."""
+        """Bring up the head tracker selected in the OpenHeadMouse window, then run the test."""
         if self._head_start_provider is None:
             QMessageBox.information(
                 self,
-                "HeadMouse unavailable",
-                "Open this window from the HeadMouse app (File > Fitts' Law Test) to start "
+                "OpenHeadMouse unavailable",
+                "Open this window from the OpenHeadMouse app (File > Fitts' Law Test) to start "
                 "the head tracker from here.",
             )
             self._stop_run_input()
             return
 
-        self._access_method_combo.setCurrentText("HeadMouse")
+        self._access_method_combo.setCurrentText("OpenHeadMouse")
         # Driving the cursor with the head always records it too.
         self._record_head_checkbox.setChecked(True)
-        self._start_button.setText("Starting HeadMouse...")
+        self._start_button.setText("Starting OpenHeadMouse...")
         self._head_tracking_started = True
         if not self._request_head_tracking(mouse_control=True):
             self._head_tracking_started = False
@@ -849,7 +849,7 @@ class FittsTestWindow(QMainWindow):
             )
         except Exception as exc:
             self._reset_headmouse_button()
-            QMessageBox.critical(self, "Could not start HeadMouse", str(exc))
+            QMessageBox.critical(self, "Could not start OpenHeadMouse", str(exc))
             return False
         if started is False:
             self._reset_headmouse_button()
@@ -871,7 +871,7 @@ class FittsTestWindow(QMainWindow):
             self._stop_run_input()
             QMessageBox.warning(
                 self,
-                "HeadMouse not started",
+                "OpenHeadMouse not started",
                 "Head tracking was cancelled or stopped, so the test has not been started.",
             )
             return
@@ -916,7 +916,7 @@ class FittsTestWindow(QMainWindow):
                 self,
                 "No recordings folder",
                 "No usable recordings folder was chosen, so the test has not been started.\n\n"
-                "Choose a folder when asked (or in HeadMouse: File > Set Recordings Folder...).",
+                "Choose a folder when asked (or in OpenHeadMouse: File > Set Recordings Folder...).",
             )
             return
         self._screen_w, self._screen_h = self._current_screen_geometry()

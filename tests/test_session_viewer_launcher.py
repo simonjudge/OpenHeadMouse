@@ -84,6 +84,12 @@ def test_bundled_mesh_is_loaded_without_network_or_writes(tmp_path, monkeypatch)
     mesh = tmp_path / "models" / "canonical_face_model.obj"
     mesh.parent.mkdir()
     mesh.write_text("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n")
+    import hashlib
+
+    monkeypatch.setattr(
+        "session_viewer.mesh_visualizer.MESH_SHA256",
+        hashlib.sha256(mesh.read_bytes()).hexdigest(),
+    )
 
     def no_download(*args, **kwargs):
         raise AssertionError("A bundled mesh must not be downloaded")

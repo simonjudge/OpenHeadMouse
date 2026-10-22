@@ -8,7 +8,7 @@ can be copied or backed up in one piece:
     <base folder>/fitts_sessions/  Fitts' Law result files
 
 The choice is stored in config.json under ``recorder.base_dir`` so the
-HeadMouse window and the Fitts test (usually launched from it) agree on it.
+OpenHeadMouse window and the Fitts test (usually launched from it) agree on it.
 Whoever asks for the folder first saves it there, so the question is only
 asked once per machine even when the Fitts test is run on its own.
 """
@@ -58,7 +58,7 @@ def _read_config(path: Path) -> dict:
 def load_base_dir(config_path: str | Path | None = None) -> Path | None:
     """Read the base folder straight from config.json.
 
-    Used by the Fitts test when it runs standalone, with no HeadMouse window
+    Used by the Fitts test when it runs standalone, with no OpenHeadMouse window
     to ask. A missing or unreadable config simply means "not chosen yet".
     """
     path = Path(config_path) if config_path is not None else default_config_path()
@@ -69,7 +69,7 @@ def save_base_dir(base_dir: str | Path, config_path: str | Path | None = None) -
     """Store the chosen base folder in config.json; True when it was written.
 
     Lets a standalone Fitts test remember the folder in the same place the
-    HeadMouse window reads it from, instead of asking again on every run.
+    OpenHeadMouse window reads it from, instead of asking again on every run.
     Other settings in the file are preserved.
     """
     path = Path(config_path) if config_path is not None else default_config_path()
@@ -97,7 +97,7 @@ def prompt_for_base_dir(parent=None, reason: str = "", start_dir=None) -> Path |
     """Ask for the base folder; returns None if the user cancelled."""
     from PySide6.QtWidgets import QFileDialog
 
-    title = "Choose a folder for HeadMouse recordings"
+    title = "Choose a folder for OpenHeadMouse recordings"
     if reason:
         title = f"{title} ({reason})"
     start = Path(start_dir) if start_dir is not None else Path.home()

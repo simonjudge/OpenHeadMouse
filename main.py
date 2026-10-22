@@ -1,4 +1,4 @@
-"""Central application launcher for the HeadMouse system.
+"""Central application launcher for the OpenHeadMouse system.
 
 Wires: [provider thread] -> dsp_engine.py -> headmouse.py -> OS
 cursor, polled by a QTimer at a fixed rate (default 90Hz, within the spec's
@@ -27,7 +27,7 @@ import numpy as np
 
 from core import recording_paths
 
-__version__ = "0.2.0"
+__version__ = "0.2.0-rc.1"
 
 _BUNDLED_CONFIG_PATH = Path(__file__).parent / "config.json"
 
@@ -231,7 +231,7 @@ class App:
         self._last_sample = None
         self._mouse_was_active = False
         # True once a provider sample has moved the cursor since mouse control last became
-        # active; HeadMouse dwell clicking waits for this rather than just the ACTIVE state.
+        # active; OpenHeadMouse dwell clicking waits for this rather than just the ACTIVE state.
         self._cursor_driven = False
         self._session_viewer_window = None  # keep a reference so Qt/PySide doesn't GC it
         self._fitts_test_window = None  # keep a reference so Qt/PySide doesn't GC it
@@ -290,7 +290,7 @@ class App:
         try:
             self._dwell_settings = DwellSettings.from_config(dwell_config)
         except ValueError as exc:
-            print(f"[HeadMouse] Invalid dwell click settings ({exc}); using defaults")
+            print(f"[OpenHeadMouse] Invalid dwell click settings ({exc}); using defaults")
             self._dwell_settings = DwellSettings()
         self._dwell_click = DwellClickService(
             self._dwell_settings,
@@ -392,7 +392,7 @@ class App:
         try:
             self.stop_tracking_and_save()
         except (OSError, RuntimeError) as exc:
-            QMessageBox.critical(self.window, "Could not close HeadMouse", str(exc))
+            QMessageBox.critical(self.window, "Could not close OpenHeadMouse", str(exc))
             return False
         if self._provider is not None:
             return False
@@ -422,7 +422,7 @@ class App:
             self._recordings_base_dir, self.window, "needed before anything can be recorded"
         )
         if ready is None:
-            print("[HeadMouse] No usable recordings folder chosen; nothing will be recorded")
+            print("[OpenHeadMouse] No usable recordings folder chosen; nothing will be recorded")
             return None
         if ready != self._recordings_base_dir:
             self.set_recordings_base_dir(ready)
@@ -442,7 +442,7 @@ class App:
             # embedded App), so write the folder to the shared default config
             # instead of asking for it again next time.
             recording_paths.save_base_dir(base_dir)
-        print(f"[HeadMouse] Recordings folder set to {base_dir}")
+        print(f"[OpenHeadMouse] Recordings folder set to {base_dir}")
 
     def _on_choose_recordings_dir(self) -> None:
         while True:
@@ -500,6 +500,25 @@ class App:
                 layout.addWidget(ok_button)
                 layout.addWidget(cancel_button)
 
+                direct_device = None
+                direct_error = ""
+                wifi = self._config.get("providers", {}).get("ximu3", {})
+                try:
+                    address = str(ip_address(wifi.get("wifi_ip_address", "192.168.1.1")))
+                    send_port = int(wifi.get("wifi_port_send", 9000))
+                    receive_port = int(wifi.get("wifi_port_receive", 8001))
+                    if not (1 <= send_port <= 65535 and 1 <= receive_port <= 65535):
+                        raise ValueError("UDP ports must be between 1 and 65535")
+                    direct_device = DiscoveredDevice(
+                        name=f"Configured Wi-Fi: {address}:{send_port}",
+                        connection_type="wifi_ap", ip_address=address,
+                        port=send_port, receive_port=receive_port,
+                    )
+                    combo.addItem(direct_device.name, userData=direct_device)
+                    ok_button.setEnabled(True)
+                except (ValueError, TypeError) as exc:
+                    direct_error = f"Configured Wi-Fi unavailable: {exc}"
+
                 scan_results = queue.Queue()
                 scanning = False
 
@@ -531,13 +550,22 @@ class App:
                         combo.removeItem(0)
                     for device in devices:
                         combo.addItem(device.name, userData=device)
+                    if direct_device is not None and not any(
+                        device.connection_type == "wifi_ap"
+                        and device.ip_address == direct_device.ip_address
+                        and device.port == direct_device.port
+                        and device.receive_port == direct_device.receive_port
+                        for device in devices
+                    ):
+                        combo.addItem(direct_device.name, userData=direct_device)
                     ok_button.setEnabled(combo.count() > 0)
                     if selected is not None:
                         for i in range(combo.count()):
                             if combo.itemData(i) == selected:
                                 combo.setCurrentIndex(i)
                                 break
-                    scan_status.setText("; ".join(errors) or f"{len(devices)} device(s) discovered.")
+                    messages = [*errors, direct_error] if direct_error else errors
+                    scan_status.setText("; ".join(messages) or f"{len(devices)} device(s) discovered.")
 
                 timer = QTimer(dialog)
                 timer.timeout.connect(collect_scan)
@@ -621,7 +649,7 @@ class App:
             screen = QGuiApplication.screenAt(self.window.frameGeometry().center())
         screen = screen or QGuiApplication.primaryScreen()
         if screen is None:
-            raise RuntimeError("Could not determine the display containing the HeadMouse window")
+            raise RuntimeError("Could not determine the display containing the OpenHeadMouse window")
 
         window_id = int(self.window.winId()) if sys.platform == "win32" else None
         width, height, origin_x, origin_y = _screen_geometry(screen, window_id)
@@ -697,7 +725,7 @@ class App:
                 QMessageBox.StandardButton.No,
             )
             if answer == QMessageBox.StandardButton.Yes:
-                print("[HeadMouse] Head-movement session discarded (not saved)")
+                print("[OpenHeadMouse] Head-movement session discarded (not saved)")
                 return None
 
     # -- external tracking control -----------------------------------------
@@ -737,7 +765,7 @@ class App:
         if recording and not self.window.controls.recording_enabled:
             # Without this the tracker would run but nothing would be saved.
             self.window.controls.set_recording_enabled(True)
-            print("[HeadMouse] Recording enabled so head movement is saved")
+            print("[OpenHeadMouse] Recording enabled so head movement is saved")
 
         if self.window.controls.mouse_control_enabled != mouse_control:
             # Without this the tracker would run but nothing would move the
@@ -745,9 +773,9 @@ class App:
             # the input device actually being tested.
             self.window.controls.set_mouse_control_enabled(mouse_control)
             print(
-                "[HeadMouse] Mouse control enabled so head movement can drive the cursor"
+                "[OpenHeadMouse] Mouse control enabled so head movement can drive the cursor"
                 if mouse_control
-                else "[HeadMouse] Mouse control disabled; head movement is only recorded"
+                else "[OpenHeadMouse] Mouse control disabled; head movement is only recorded"
             )
 
         if self._provider is None:
@@ -762,9 +790,9 @@ class App:
 
         self._flush_tracking_ready()
         if self.window.controls.recording_enabled:
-            print("[HeadMouse] Head-movement recording is active for this run")
+            print("[OpenHeadMouse] Head-movement recording is active for this run")
         else:
-            print("[HeadMouse] Recording is disabled; no head session will be saved")
+            print("[OpenHeadMouse] Recording is disabled; no head session will be saved")
         return True
 
     def _tracking_is_ready(self) -> bool:
@@ -791,7 +819,7 @@ class App:
             try:
                 callback(started)
             except Exception as exc:  # a caller's failure must not kill the poll loop
-                print(f"[HeadMouse] tracking-ready callback failed: {exc}")
+                print(f"[OpenHeadMouse] tracking-ready callback failed: {exc}")
 
     def stop_tracking_and_save(self):
         """Stop a running provider and save its recording; returns the file path.
@@ -813,7 +841,7 @@ class App:
         """Label live head samples with the current Fitts/pre-test phase.
 
         Transitions are also saved as events. Ending ``initial_rest.hold``
-        applies the held pose as the HeadMouse neutral calibration.
+        applies the held pose as the OpenHeadMouse neutral calibration.
         """
         if self._provider is None:
             self._fitts_recording_phase = None
@@ -1336,7 +1364,7 @@ class App:
     def _on_recording_toggled(self, enabled: bool) -> None:
         if enabled and self.ensure_recordings_base_dir() is None:
             # Recording is only left on once there is somewhere to save it.
-            print("[HeadMouse] Recording switched off: no recordings folder chosen")
+            print("[OpenHeadMouse] Recording switched off: no recordings folder chosen")
             self.window.controls.set_recording_enabled(False)
             return
         self._config.setdefault("ui", {})["recording_enabled"] = enabled
@@ -1382,7 +1410,7 @@ class App:
     def _sync_dwell_click(self) -> None:
         """Dwell follows head mouse control, or a temporary Fitts dwell request.
 
-        HeadMouse dwell only starts once the input provider is actually moving the cursor.
+        OpenHeadMouse dwell only starts once the input provider is actually moving the cursor.
         """
         from core.headmouse import TrackingState
 
@@ -1408,7 +1436,7 @@ class App:
     def set_fitts_mouse_task_active(self, active: bool | None) -> None:
         """Suppress all dwell clicking outside a Fitts run's mouse task.
 
-        None returns dwell control to the normal HeadMouse lifecycle.
+        None returns dwell control to the normal OpenHeadMouse lifecycle.
         """
         self._fitts_mouse_task_active = active
         self._sync_dwell_click()
@@ -1595,9 +1623,13 @@ class App:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="HeadMouse: head-movement recording and cursor control")
+    from core.diagnostics import configure_frozen_diagnostics
+
+    configure_frozen_diagnostics("OpenHeadMouse")
+    parser = argparse.ArgumentParser(description="OpenHeadMouse: head-movement recording and cursor control")
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--config", default=str(CONFIG_PATH))
+    parser.add_argument("--smoke-test", action="store_true", help="Create the UI without trackers or input listeners, then exit")
     args = parser.parse_args(argv)
 
     config_path = Path(args.config)
@@ -1607,6 +1639,12 @@ def main(argv=None) -> int:
     from PySide6.QtWidgets import QApplication
 
     qt_app = QApplication(sys.argv[:1])
+    if args.smoke_test:
+        from gui.headmouse_gui import HeadMouseWindow
+
+        window = HeadMouseWindow(initial_kx=1.0, initial_ky=1.0)
+        window.close()
+        return 0
     app = App(config, config_path=config_path)
     app.show()
     return qt_app.exec()

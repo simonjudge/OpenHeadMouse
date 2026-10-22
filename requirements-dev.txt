@@ -1,0 +1,5 @@
+-r requirements.txt
+-r colab_session_viewer/requirements.txt
+pytest>=8.0
+pytest-timeout>=2.3
+PyYAML>=6.0
