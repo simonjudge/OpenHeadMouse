@@ -168,6 +168,15 @@ def make_provider(name: str, config: dict):
             model_path=provider_config.get("landmarker_model_path", "models/face_landmarker.task"),
             tracking_lost_hold_ms=provider_config.get("tracking_lost_hold_ms", 500.0),
         )
+    if name == "openseeface":
+        from providers.openSeeFace import OpenSeeFaceProvider
+
+        return OpenSeeFaceProvider(
+            udp_host=provider_config.get("udp_host", "127.0.0.1"),
+            udp_port=provider_config.get("udp_port", 11573),
+            face_id=provider_config.get("face_id", 0),
+            tracking_lost_hold_ms=provider_config.get("tracking_lost_hold_ms", 500.0),
+        )
     if name == "ximu3":
         from providers.ximu3_provider import Ximu3Provider
 
@@ -1541,6 +1550,13 @@ class App:
     def _poll(self) -> None:
         from core.headmouse import TrackingState
         from providers.base_provider import ProviderState
+
+        if self._active_provider_name == "openseeface" and self._provider is not None:
+            self.window.setup_panel.set_connection_status(
+                f"OpenSeeFace: {self._provider.state.value}"
+            )
+            if self._provider.state == ProviderState.ERROR:
+                return
 
         if self._ximu_wifi_provider and self._provider is not None:
             status = self._provider.link_status

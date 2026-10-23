@@ -135,7 +135,7 @@ def test_app_persists_legacy_profile_migration(qt_app, tmp_path):
     try:
         migrated = json.loads(config_path.read_text())
         assert "dsp" not in migrated
-        assert set(migrated["mouse_profiles"]) == {"uniface", "ximu3", "airpods"}
+        assert set(migrated["mouse_profiles"]) == {"uniface", "openseeface", "ximu3", "airpods"}
     finally:
         app.shutdown()
 

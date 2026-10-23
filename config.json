@@ -37,6 +37,12 @@
       "landmarker_model_path": "models/face_landmarker.task",
       "tracking_lost_hold_ms": 500
     },
+    "openseeface": {
+      "udp_host": "127.0.0.1",
+      "udp_port": 11573,
+      "face_id": 0,
+      "tracking_lost_hold_ms": 500
+    },
     "ximu3": {
       "connection_type": "wifi_ap",
       "port_name": "",
@@ -55,6 +61,34 @@
   },
   "mouse_profiles": {
     "uniface": {
+      "mode": "velocity",
+      "absolute": {
+        "kx": 90.0,
+        "ky": 90.0
+      },
+      "velocity": {
+        "kx": 50,
+        "ky": 50,
+        "gamma": 1.1,
+        "deadband_deg_s": 0.15
+      },
+      "one_euro_filter": {
+        "enabled": true,
+        "min_cutoff": 2.0,
+        "beta": 0.5,
+        "d_cutoff": 1.0
+      },
+      "auto_zero": {
+        "enabled": false,
+        "stationary_window_ms": 200,
+        "stationary_threshold_deg_s": 2.0
+      },
+      "yaw_drift_correction": {
+        "enabled": false,
+        "time_constant_s": 20.0
+      }
+    },
+    "openseeface": {
       "mode": "velocity",
       "absolute": {
         "kx": 90.0,

@@ -65,6 +65,21 @@ Code: `providers/uniface_provider.py` (`_CAMERA_TO_HEAD_FRAME`),
 MediaPipe coordinates, so it maps canonical rotations back with the UniFace matrix
 (`session_viewer/mesh_visualizer.py`).
 
+### OpenSeeFace camera alignment
+
+[providers/openSeeFace.py](providers/openSeeFace.py) receives the upstream XYZW
+quaternion, which represents the inverse PnP rotation, not a conventional active
+model-to-camera quaternion. PnP also uses swapped image coordinates (row, column).
+The adapter inverts the wire rotation and removes the frontal half-turn about
+`(1, -1, 0)` before converting to canonical FLU.
+
+The face model's anatomical axes are X right, Y up, Z forward. Its polar-vector
+mapping to FLU is a reflection, so the quaternion vector part uses the proper
+axial-vector mapping `det(M)*M`: rows `[0,0,-1]; [1,0,0]; [0,-1,0]`.
+This is not the MediaPipe conversion. Synthetic PnP projections test frontal
+alignment, combined rotations and all three physical motion signs; a real webcam
+check is still needed before claiming hardware validation.
+
 ### xIMU3 hardware set-up
 
 The xIMU3 is configured on the device with AHRS axes convention `2` (NED) and an
@@ -124,6 +139,7 @@ match the comment header in `providers/ximu3_provider.py`.
 
 ```bash
 python test_orientation.py --provider uniface --duration 20
+python test_orientation.py --provider openseeface --duration 20
 python test_orientation.py --provider airpods --duration 20
 python test_orientation.py --provider ximu3   --duration 20
 ```

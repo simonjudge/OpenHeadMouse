@@ -32,11 +32,13 @@ class SetupPanel(QWidget):
 
         self._provider_combo = QComboBox()
         self._provider_combo.addItem("UniFace (webcam)", userData="uniface")
+        self._provider_combo.addItem("OpenSeeFace (UDP webcam)", userData="openseeface")
         self._provider_combo.addItem("xIMU3 (IMU)", userData="ximu3")
         if show_airpods:
             self._provider_combo.addItem("AirPods (CoreMotion)", userData="airpods")
         self._provider_combo.setToolTip(
-            "Head-tracking input: UniFace uses the webcam, xIMU3 a head-mounted IMU"
+            "Head-tracking input: UniFace uses the webcam; OpenSeeFace receives "
+            "UDP from a separately running OpenSeeFace tracker; xIMU3 uses a head-mounted IMU"
             + (", AirPods their motion sensors." if show_airpods else ".")
         )
         provider_index = self._provider_combo.findData(initial_provider)

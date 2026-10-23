@@ -63,13 +63,51 @@ See [coordinate frames](COORDINATE_FRAMES.md) for mounting and movement conventi
 ## Layout
 
 - `core/` — quaternion math, absolute/velocity DSP engine and filters, recorder, OS cursor control
-- `providers/` — input drivers (UniFace/MediaPipe, xIMU3, AirPods)
+- `providers/` — input drivers (UniFace/MediaPipe, OpenSeeFace UDP, xIMU3, AirPods)
 - `gui/` — PySide6 setup and DSP tuning UI
 - `session_viewer/` — standalone pyqtgraph session viewer (mesh + line-graph playback), opened from the main window's File menu; also replays Fitts sessions, optionally synchronised with a head recording (see below)
 - `colab_session_viewer/` — [Colab notebook viewer](colab_session_viewer/README.md) with one head/cursor playback panel, multiple participants/sessions, pooled summaries and per-participant first-target exclusions
 - `fitts_law/` — standalone ISO 9241-411 Fitts' Law test suite (circular + edge-target tasks, pluggable stimuli, Random Path and Typing Test modes), opened from the main window's File menu
 - `dwell_click/` — standalone dwell-click engine, translucent progress overlay, and command-line launcher
 - `tests/` — unit tests
+
+### OpenSeeFace webcam provider
+
+The self-contained adapter in [providers/openSeeFace.py](providers/openSeeFace.py)
+receives pose data from a separately running
+[OpenSeeFace tracker](https://github.com/emilianavt/OpenSeeFace). It does not import,
+install, download or launch OpenSeeFace, and adds no Python dependencies to this
+project. OpenSeeFace itself still needs its executable/dependencies and models.
+
+1. Obtain OpenSeeFace from its upstream project. On Windows, run its tracker
+   executable with its model assets, for example:
+   `.\facetracker.exe -c 0 --faces 1 -i 127.0.0.1 -p 11573`.
+   Alternatively, run upstream `facetracker.py` in its own compatible environment
+   with the same arguments. Do not replace this project's dependencies with
+   OpenSeeFace's older pinned Python dependencies.
+2. In OpenHeadMouse, select **OpenSeeFace (UDP webcam)** and click **Start**.
+   Keep mouse control off while checking movement directions, then calibrate
+   facing forward before enabling it. Do not run UniFace on the same camera.
+3. For a console-only check from this repository's root, run
+   `python -m providers.openSeeFace --port 11573 --face-id 0`.
+   Turn left, look up and tilt the left ear down: yaw, pitch and roll respectively
+   should increase. Physical webcam validation is still required.
+
+The `providers.openseeface` settings in `config.json` accept `udp_host`, `udp_port`,
+`face_id` (default `0`) and `tracking_lost_hold_ms` (default `500`). The tracker
+must send to that address/port and use the selected face ID. Localhost is the
+default; this UDP protocol is unauthenticated, so do not expose it to untrusted
+networks. No OpenSeeFace binaries or models are bundled with OpenHeadMouse.
+
+Only successful 3D fits generate samples. On startup or after the configured
+interval without a fresh valid pose, the provider reports `TRACKING_LOST`; it
+resumes on the next valid sample without inventing capture timestamps or held
+pose samples. Source timestamps come from OpenSeeFace's post-capture,
+pre-inference wall clock. Duplicates and backwards timestamps are discarded;
+restart the provider after resetting the sender clock. A socket/bind failure is
+reported as an error, while malformed datagrams are logged and discarded.
+Each provider gets an independent mouse profile, initially copied from the active
+profile when no saved profile exists.
 
 ## Release editions
 

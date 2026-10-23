@@ -1,6 +1,6 @@
 """Abstract base class for OpenHeadMouse input providers.
 
-Every provider (UniFace, xIMU3, AirPods, and test/mock providers) normalizes
+Every provider (UniFace, OpenSeeFace, xIMU3, AirPods, and test/mock providers) normalizes
 its raw signal into the shared quaternion reference frame documented in
 core/quaternion_math.py and pushes samples onto a thread-safe queue as
 :class:`ProviderSample` instances. Each provider runs its own acquisition
