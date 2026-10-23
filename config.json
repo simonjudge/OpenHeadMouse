@@ -7,10 +7,10 @@
   "hotkeys": {
     "toggle_tracking": "<esc>"
   },
-  "active_provider": "uniface",
+  "active_provider": "openseeface",
   "ui": {
     "recording_enabled": false,
-    "mouse_control_enabled": false,
+    "mouse_control_enabled": true,
     "calibration_enabled": false,
     "dwell_click": {
       "enabled": true,
@@ -41,7 +41,10 @@
       "udp_host": "127.0.0.1",
       "udp_port": 11573,
       "face_id": 0,
-      "tracking_lost_hold_ms": 500
+      "tracking_lost_hold_ms": 500,
+      "tracker_command": [],
+      "camera": 0,
+      "tracker_args": ["--faces", "1"]
     },
     "ximu3": {
       "connection_type": "wifi_ap",

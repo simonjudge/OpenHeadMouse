@@ -176,6 +176,9 @@ def make_provider(name: str, config: dict):
             udp_port=provider_config.get("udp_port", 11573),
             face_id=provider_config.get("face_id", 0),
             tracking_lost_hold_ms=provider_config.get("tracking_lost_hold_ms", 500.0),
+            tracker_command=provider_config.get("tracker_command"),
+            camera=provider_config.get("camera", 0),
+            tracker_args=provider_config.get("tracker_args"),
         )
     if name == "ximu3":
         from providers.ximu3_provider import Ximu3Provider
@@ -1553,7 +1556,7 @@ class App:
 
         if self._active_provider_name == "openseeface" and self._provider is not None:
             self.window.setup_panel.set_connection_status(
-                f"OpenSeeFace: {self._provider.state.value}"
+                f"OpenSeeFace: {self._provider.status_text}"
             )
             if self._provider.state == ProviderState.ERROR:
                 return

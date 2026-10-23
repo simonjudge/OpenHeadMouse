@@ -74,27 +74,38 @@ See [coordinate frames](COORDINATE_FRAMES.md) for mounting and movement conventi
 ### OpenSeeFace webcam provider
 
 The self-contained adapter in [providers/openSeeFace.py](providers/openSeeFace.py)
-receives pose data from a separately running
-[OpenSeeFace tracker](https://github.com/emilianavt/OpenSeeFace). It does not import,
-install, download or launch OpenSeeFace, and adds no Python dependencies to this
-project. OpenSeeFace itself still needs its executable/dependencies and models.
+receives pose data from an
+[OpenSeeFace tracker](https://github.com/emilianavt/OpenSeeFace). The tracker,
+not OpenHeadMouse, opens the webcam: until it sends packets the status reads
+"waiting for ... facetracker". The adapter does not import, install or download
+OpenSeeFace, and adds no Python dependencies to this project; it can optionally
+launch a tracker you have installed.
 
-1. Obtain OpenSeeFace from its upstream project. On Windows, run its tracker
-   executable with its model assets, for example:
-   `.\facetracker.exe -c 0 --faces 1 -i 127.0.0.1 -p 11573`.
-   Alternatively, run upstream `facetracker.py` in its own compatible environment
-   with the same arguments. Do not replace this project's dependencies with
-   OpenSeeFace's older pinned Python dependencies.
+1. Obtain OpenSeeFace from its upstream project (on Windows, the release zip
+   contains `Binary\facetracker.exe` and its models). Either:
+   - let OpenHeadMouse launch it by setting `tracker_command` in
+     `config.json`, e.g. `"tracker_command": ["C:/OpenSeeFace/Binary/facetracker.exe"]`
+     (or `["C:/path/to/python.exe", "C:/OpenSeeFace/facetracker.py"]`). It is
+     started with `-c <camera> -i <udp_host> -p <udp_port>` plus `tracker_args`
+     (default `--faces 1`), its output goes to the log, and it is stopped with
+     the provider. If it exits, the status shows its exit code and last output; or
+   - run it yourself: `.\facetracker.exe -c 0 --faces 1 -i 127.0.0.1 -p 11573`.
+
+   Do not replace this project's dependencies with OpenSeeFace's older pinned
+   Python dependencies; run `facetracker.py` in its own environment.
 2. In OpenHeadMouse, select **OpenSeeFace (UDP webcam)** and click **Start**.
    Keep mouse control off while checking movement directions, then calibrate
    facing forward before enabling it. Do not run UniFace on the same camera.
 3. For a console-only check from this repository's root, run
-   `python -m providers.openSeeFace --port 11573 --face-id 0`.
+   `python -m providers.openSeeFace --port 11573 --face-id 0`
+   (add `--tracker C:/OpenSeeFace/Binary/facetracker.exe` to launch it too).
    Turn left, look up and tilt the left ear down: yaw, pitch and roll respectively
    should increase. Physical webcam validation is still required.
 
 The `providers.openseeface` settings in `config.json` accept `udp_host`, `udp_port`,
-`face_id` (default `0`) and `tracking_lost_hold_ms` (default `500`). The tracker
+`face_id` (default `0`), `tracking_lost_hold_ms` (default `500`), `tracker_command`
+(default `[]`, i.e. not launched), `camera` (default `0`) and `tracker_args`.
+An externally run tracker
 must send to that address/port and use the selected face ID. Localhost is the
 default; this UDP protocol is unauthenticated, so do not expose it to untrusted
 networks. No OpenSeeFace binaries or models are bundled with OpenHeadMouse.

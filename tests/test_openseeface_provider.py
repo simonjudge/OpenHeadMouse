@@ -5,6 +5,7 @@ import copy
 import queue
 import socket
 import struct
+import sys
 import time
 
 import cv2
@@ -255,7 +256,8 @@ def test_socket_bind_failure_is_reported_and_not_swallowed(caplog):
             provider._run_wrapper()
     assert provider.state == ProviderState.ERROR
     assert provider._sock is None
-    assert "UDP receiver failed" in caplog.text
+    assert "OpenSeeFace provider failed" in caplog.text
+    assert provider.status_text.startswith("error: cannot listen on UDP 127.0.0.1:")
 
 
 def test_factory_and_selection(qt_app):
@@ -317,20 +319,24 @@ def test_app_receives_udp_pose_and_displays_link_state(qt_app, tmp_path):
         assert isinstance(provider, OpenSeeFaceProvider)
         _wait_until(lambda: provider._sock is not None)
         app._poll()
-        assert app.window.setup_panel._connection_status.text() == "OpenSeeFace: tracking_lost"
+        assert app.window.setup_panel._connection_status.text().startswith(
+            "OpenSeeFace: waiting for OpenSeeFace facetracker"
+        )
         wire, _ = _projected_wire_pose(20, 10, -5)
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
             sender.sendto(_packet(timestamp=123.25, quaternion=wire), provider._sock.getsockname())
         _wait_until(lambda: not provider.output_queue.empty())
         app._poll()
         assert app._last_sample.timestamp == 123.25
-        assert app.window.setup_panel._connection_status.text() == "OpenSeeFace: running"
+        assert app.window.setup_panel._connection_status.text() == "OpenSeeFace: tracking"
         np.testing.assert_allclose(
             app.dsp.relative_euler_deg(app._last_sample.quaternion), [20, 10, -5], atol=1e-5
         )
         _wait_until(lambda: provider.state == ProviderState.TRACKING_LOST)
         app._poll()
-        assert app.window.setup_panel._connection_status.text() == "OpenSeeFace: tracking_lost"
+        assert app.window.setup_panel._connection_status.text() == (
+            "OpenSeeFace: tracking lost (no valid pose for face 0)"
+        )
         app.window.setup_panel._stop_button.click()
         assert app._provider is None
         assert not provider._thread.is_alive()
@@ -344,3 +350,76 @@ def test_queue_overflow_keeps_latest_pose():
     assert provider.output_queue.get_nowait().timestamp == 101
     with pytest.raises(queue.Empty):
         provider.output_queue.get_nowait()
+
+_FAKE_TRACKER = r"""
+import socket, struct, sys, time
+template = open(sys.argv[1], "rb").read()
+args = sys.argv[2:]
+host, port = args[args.index("-i") + 1], int(args[args.index("-p") + 1])
+print("fake tracker args:", " ".join(args), flush=True)
+if "--fail" in args:
+    print("camera could not be opened", flush=True)
+    sys.exit(3)
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+    stamp = 1000.0
+    while True:
+        stamp += 0.02
+        sock.sendto(struct.pack("<d", stamp) + template[8:], (host, port))
+        time.sleep(0.02)
+"""
+
+
+def _fake_tracker_command(tmp_path):
+    script = tmp_path / "fake_facetracker.py"
+    script.write_text(_FAKE_TRACKER)
+    template = tmp_path / "packet.bin"
+    template.write_bytes(_packet())
+    return [sys.executable, str(script), str(template)]
+
+
+def test_launched_tracker_receives_camera_and_address_and_is_stopped(tmp_path):
+    provider = OpenSeeFaceProvider(
+        udp_port=_free_udp_port(), tracker_command=_fake_tracker_command(tmp_path), camera=2,
+    )
+    assert provider._tracker_argv()[-8:] == [
+        "-c", "2", "-i", "127.0.0.1", "-p", str(provider.udp_port), "--faces", "1",
+    ]
+    provider.start()
+    try:
+        _wait_until(lambda: provider.state == ProviderState.RUNNING, timeout=10.0)
+        assert provider.status_text == "tracking"
+        process = provider._tracker
+        assert process is not None and process.poll() is None
+    finally:
+        provider.stop(timeout=5.0)
+    assert process.poll() is not None
+    assert provider._tracker is None
+
+
+def test_tracker_exit_is_reported_as_error(tmp_path, caplog):
+    provider = OpenSeeFaceProvider(
+        udp_port=0, tracker_command=_fake_tracker_command(tmp_path), tracker_args=["--fail"],
+    )
+    with caplog.at_level(logging.ERROR, logger="providers.openSeeFace"):
+        provider.start()
+        _wait_until(lambda: provider.state == ProviderState.ERROR, timeout=10.0)
+        provider._thread.join(timeout=5.0)
+    assert "exited with code 3" in provider.status_text
+    assert "camera could not be opened" in provider.status_text
+
+
+def test_missing_tracker_executable_is_reported_as_error(tmp_path):
+    provider = OpenSeeFaceProvider(
+        udp_port=0, tracker_command=[str(tmp_path / "missing" / "facetracker.exe")],
+    )
+    provider.start()
+    _wait_until(lambda: provider.state == ProviderState.ERROR)
+    provider._thread.join(timeout=5.0)
+    assert provider.status_text.startswith("error:")
+    assert provider._tracker is None
+
+
+def _free_udp_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]

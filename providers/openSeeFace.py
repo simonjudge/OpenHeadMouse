@@ -1,9 +1,13 @@
 """OpenSeeFace UDP head-pose provider, without OpenSeeFace Python dependencies.
 
-Run OpenSeeFace separately, sending its standard binary packets to
-127.0.0.1:11573 (the upstream default). All receiver/adapter logic lives here;
-only the project's shared provider interface and quaternion helpers are used.
-For a console-only pose check, run ``python -m providers.openSeeFace``.
+OpenSeeFace's facetracker (not this module) opens the webcam and sends its
+standard binary packets to 127.0.0.1:11573 (the upstream default). Either run
+it yourself, or set ``tracker_command`` (e.g. ``["C:/OpenSeeFace/Binary/
+facetracker.exe"]``) so this provider launches it with ``-c <camera> -i <host>
+-p <port>`` plus ``tracker_args`` and stops it again. All receiver/adapter
+logic lives here; only the project's shared provider interface and quaternion
+helpers are used. For a console-only pose check, run
+``python -m providers.openSeeFace``.
 
 Protocol reference: emilianavt/OpenSeeFace's facetracker.py and Unity/OpenSee.cs.
 Each little-endian face record is 1785 bytes; multiple records may share a
@@ -26,10 +30,15 @@ clock reset. Missing/invalid tracking never generates synthetic pose samples.
 from __future__ import annotations
 
 import argparse
+import collections
 import logging
+import os
 import queue
 import socket
 import struct
+import subprocess
+import sys
+import threading
 import time
 
 import numpy as np
@@ -75,7 +84,18 @@ class OpenSeeFaceProvider(BaseProvider):
         face_id: int = 0,
         tracking_lost_hold_ms: float = 500.0,
         queue_maxsize: int = 256,
+        tracker_command: list[str] | str | None = None,
+        camera: int | str = 0,
+        tracker_args: list[str] | None = None,
     ):
+        if isinstance(tracker_command, str):
+            tracker_command = [tracker_command] if tracker_command else []
+        tracker_command = list(tracker_command or [])
+        tracker_args = ["--faces", "1"] if tracker_args is None else list(tracker_args)
+        if not all(isinstance(part, str) and part for part in tracker_command):
+            raise ValueError("tracker_command must be a list of nonempty strings")
+        if not all(isinstance(part, str) for part in tracker_args):
+            raise ValueError("tracker_args must be a list of strings")
         if not udp_host:
             raise ValueError("udp_host must not be empty")
         if not isinstance(udp_port, int) or not 0 <= udp_port <= 65535:
@@ -91,9 +111,89 @@ class OpenSeeFaceProvider(BaseProvider):
         self.udp_port = udp_port
         self.face_id = face_id
         self.tracking_lost_hold_ms = tracking_lost_hold_ms
+        self.tracker_command = tracker_command
+        self.camera = camera
+        self.tracker_args = tracker_args
         self._sock: socket.socket | None = None
         self._last_timestamp: float | None = None
         self._last_valid_monotonic: float | None = None
+        self._packets_received = 0
+        self._error_message = ""
+        self._tracker: subprocess.Popen | None = None
+        self._tracker_output: collections.deque[str] = collections.deque(maxlen=20)
+
+    @property
+    def status_text(self) -> str:
+        """Human-readable status for the GUI, explaining why no pose is available."""
+        state = self.state
+        if state == ProviderState.ERROR:
+            return f"error: {self._error_message or 'see log'}"
+        if state == ProviderState.STOPPED:
+            return "stopped"
+        if state == ProviderState.RUNNING:
+            return "tracking"
+        if self._packets_received == 0:
+            source = "facetracker" if self.tracker_command else "OpenSeeFace facetracker (start it separately)"
+            return f"waiting for {source} on {self.udp_host}:{self.udp_port}"
+        return f"tracking lost (no valid pose for face {self.face_id})"
+
+    def _tracker_argv(self) -> list[str]:
+        return [
+            *self.tracker_command,
+            "-c", str(self.camera),
+            "-i", self.udp_host,
+            "-p", str(self.udp_port),
+            *self.tracker_args,
+        ]
+
+    def _start_tracker(self) -> None:
+        argv = self._tracker_argv()
+        _LOGGER.info("Launching OpenSeeFace tracker: %s", subprocess.list2cmdline(argv))
+        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        self._tracker_output.clear()
+        self._tracker = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            creationflags=creationflags,
+        )
+        threading.Thread(
+            target=self._pump_tracker_output, args=(self._tracker,), daemon=True,
+            name="OpenSeeFaceTrackerOutput",
+        ).start()
+
+    def _pump_tracker_output(self, process: subprocess.Popen) -> None:
+        for line in process.stdout:
+            line = line.rstrip()
+            if line:
+                self._tracker_output.append(line)
+                _LOGGER.info("facetracker: %s", line)
+
+    def _check_tracker(self) -> None:
+        if self._tracker is None:
+            return
+        code = self._tracker.poll()
+        if code is not None:
+            time.sleep(0.2)  # let the output pump collect the final lines
+            tail = " | ".join(list(self._tracker_output)[-3:])
+            raise RuntimeError(
+                f"OpenSeeFace tracker exited with code {code}" + (f": {tail}" if tail else "")
+            )
+
+    def _stop_tracker(self) -> None:
+        process, self._tracker = self._tracker, None
+        if process is None or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=3.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=3.0)
 
     def _update_tracking_state(self) -> None:
         if (
@@ -168,6 +268,8 @@ class OpenSeeFaceProvider(BaseProvider):
     def _run(self) -> None:
         self._last_timestamp = None
         self._last_valid_monotonic = None
+        self._packets_received = 0
+        self._error_message = ""
         self._state = ProviderState.TRACKING_LOST
         while True:
             try:
@@ -176,26 +278,41 @@ class OpenSeeFaceProvider(BaseProvider):
                 break
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.bind((self.udp_host, self.udp_port))
+                try:
+                    sock.bind((self.udp_host, self.udp_port))
+                except OSError as exc:
+                    raise OSError(
+                        f"cannot listen on UDP {self.udp_host}:{self.udp_port} "
+                        f"(is another OpenHeadMouse or tracker client using it?): {exc}"
+                    ) from exc
                 sock.settimeout(0.05)
                 self._sock = sock
                 _LOGGER.info("Listening for OpenSeeFace on %s:%s", *sock.getsockname())
+                if self.tracker_command:
+                    self._start_tracker()
                 while not self._stop_event.is_set():
+                    self._check_tracker()
                     try:
                         data, _ = sock.recvfrom(65535)
                     except socket.timeout:
                         self._update_tracking_state()
                         continue
+                    except ConnectionResetError:
+                        # Windows reports ICMP port-unreachable on UDP sockets; ignore.
+                        continue
+                    self._packets_received += 1
                     try:
                         self._process_packet(data)
                     except ValueError as exc:
                         _LOGGER.warning("Discarding malformed OpenSeeFace packet: %s", exc)
                         self._update_tracking_state()
-        except OSError:
-            _LOGGER.exception("OpenSeeFace UDP receiver failed")
+        except (OSError, RuntimeError) as exc:
+            self._error_message = str(exc)
+            _LOGGER.exception("OpenSeeFace provider failed")
             raise
         finally:
             self._sock = None
+            self._stop_tracker()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -204,10 +321,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=11573)
     parser.add_argument("--face-id", type=int, default=0)
+    parser.add_argument(
+        "--tracker", nargs="+", default=None, metavar="ARG",
+        help="launch facetracker, e.g. --tracker C:/OpenSeeFace/Binary/facetracker.exe",
+    )
+    parser.add_argument("--camera", default="0")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
     try:
-        provider = OpenSeeFaceProvider(udp_host=args.host, udp_port=args.port, face_id=args.face_id)
+        provider = OpenSeeFaceProvider(
+            udp_host=args.host, udp_port=args.port, face_id=args.face_id,
+            tracker_command=args.tracker, camera=args.camera,
+        )
     except ValueError as exc:
         parser.error(str(exc))
     provider.start()
