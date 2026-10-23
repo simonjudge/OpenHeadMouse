@@ -22,7 +22,9 @@ cycler==0.12.1
 executing==2.3.0
     # via stack-data
 flatbuffers==25.12.19
-    # via mediapipe
+    # via
+    #   mediapipe
+    #   onnxruntime
 fonttools==4.67.0
     # via matplotlib
 iniconfig==2.3.1
@@ -54,9 +56,12 @@ numpy==2.5.4
     #   contourpy
     #   matplotlib
     #   mediapipe
+    #   onnxruntime
     #   opencv-contrib-python
     #   pyqtgraph
     #   scipy
+onnxruntime==1.31.0
+    # via -r requirements.txt
 opencv-contrib-python==5.0.0.93
     # via
     #   -r requirements.txt
@@ -64,6 +69,7 @@ opencv-contrib-python==5.0.0.93
 packaging==26.3
     # via
     #   matplotlib
+    #   onnxruntime
     #   pyinstaller
     #   pyinstaller-hooks-contrib
     #   pytest
@@ -77,6 +83,8 @@ pluggy==1.7.0
     # via pytest
 prompt-toolkit==3.0.53
     # via ipython
+protobuf==7.36.2
+    # via onnxruntime
 psutil==7.2.2
     # via ipython
 pure-eval==0.2.4

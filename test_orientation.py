@@ -68,7 +68,7 @@ def run_test(provider_instance, duration_sec=10, sample_rate_hz=30):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Test head orientation mapping")
-    parser.add_argument("--provider", choices=["uniface", "ximu3", "airpods"], 
+    parser.add_argument("--provider", choices=["uniface", "openseeface", "ximu3", "airpods"],
                        default="uniface", help="Which provider to test")
     parser.add_argument("--duration", type=int, default=15, 
                        help="Test duration in seconds")

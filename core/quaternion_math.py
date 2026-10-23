@@ -13,6 +13,7 @@ Canonical head frame (right-handed "FLU"; see COORDINATE_FRAMES.md):
 Every provider MUST emit quaternions in this frame (use :func:`change_basis`
 to convert from a device's native axes):
   - UniFace (webcam): MediaPipe camera space re-expressed via a fixed permutation
+  - OpenSeeFace (UDP webcam): inverse PnP pose, frontal alignment and model-axis conversion
   - xIMU3 (IMU): device configured for NED/FRD body axes, converted in software
   - AirPods (CoreMotion): headphone frame (X right, Y forward, Z up) converted in software
 

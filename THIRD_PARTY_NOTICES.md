@@ -22,6 +22,8 @@ licence files and refuse to overwrite an unrecognised nonempty directory.
 | pyqtgraph | MIT |
 | OpenCV / opencv-python | Apache-2.0 for current releases; preserve third-party notices and review included codecs |
 | MediaPipe | Apache-2.0; preserve its LICENSE and NOTICE |
+| ONNX Runtime | MIT; preserve its ThirdPartyNotices |
+| OpenSeeFace (ported head-pose code and ONNX models) | BSD-2-Clause; see below |
 | pynput | LGPL-3.0 |
 | ximu3 | MIT |
 | PyOpenGL | BSD-style licence |
@@ -55,6 +57,46 @@ Verify and retain the licence/model-card terms applicable to the complete
 Face Landmarker bundle, not just MediaPipe's software licence. See the
 [official model documentation](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker).
 Asset redistribution approval is a release gate until this is recorded.
+
+## OpenSeeFace code and models
+
+`providers/openSeeFace.py` contains a port of OpenSeeFace's face detection,
+landmark decoding and 3D face-model PnP fitting, plus its UDP packet layout. It
+uses OpenSeeFace's ONNX models from commit
+`50c09741897010faad721a218b2bbe14ecad6251` of
+[emilianavt/OpenSeeFace](https://github.com/emilianavt/OpenSeeFace). Source
+checkouts download those models on first use, and they are verified against the
+SHA-256 hashes in that file. Release builds bundle `mnv3_detection_opt.onnx` and
+`lm_model3_opt.onnx`. The repository, including its models, is distributed under
+this licence:
+
+```text
+BSD 2-Clause License
+
+Copyright (c) 2019, Emiliana (https://twitter.com/Emiliana_vt / https://github.com/emilianavt/)
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+```
 
 ## Binary release gate: not yet approved
 

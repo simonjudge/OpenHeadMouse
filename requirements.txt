@@ -5,6 +5,7 @@ PySide6>=6.11,<6.12
 pyqtgraph>=0.13
 opencv-contrib-python>=4.10
 mediapipe>=0.10.21
+onnxruntime>=1.20
 pynput>=1.7
 ximu3>=1.9.1
 pyopengl>=3.1.6

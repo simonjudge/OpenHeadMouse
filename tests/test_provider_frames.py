@@ -38,6 +38,11 @@ PHYSICAL_MOTIONS = {
         "look_up": ([1, 0, 0], -1),
         "left_ear_down": ([0, 0, 1], -1),
     },
+    "openseeface": {
+        "turn_left": ([0, 1, 0], -1),
+        "look_up": ([1, 0, 0], -1),
+        "left_ear_down": ([0, 0, 1], +1),
+    },
 }
 
 EXPECTED_INDEX = {"turn_left": 0, "look_up": 1, "left_ear_down": 2}  # yaw, pitch, roll
@@ -68,7 +73,20 @@ def _uniface_to_head(q_raw):
     return _transformation_matrix_to_head_quaternion(matrix)
 
 
-CONVERTERS = {"airpods": _airpods_to_head, "ximu3": _ximu3_to_head, "uniface": _uniface_to_head}
+def _openseeface_to_head(q_model):
+    from providers.openSeeFace import _wire_quaternion_to_head
+
+    frontal = _axis_angle([1, -1, 0], 180)
+    wire = qm.inverse(qm.multiply(frontal, q_model))
+    return _wire_quaternion_to_head(wire[[1, 2, 3, 0]])
+
+
+CONVERTERS = {
+    "airpods": _airpods_to_head,
+    "ximu3": _ximu3_to_head,
+    "uniface": _uniface_to_head,
+    "openseeface": _openseeface_to_head,
+}
 
 
 @pytest.mark.parametrize("provider", sorted(PHYSICAL_MOTIONS))

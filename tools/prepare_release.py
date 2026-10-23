@@ -14,6 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from core.model_assets import FACE_SHA256, FACE_URL, MESH_SHA256, MESH_URL, download_verified
+from providers.openSeeFace import (
+    BUNDLED_MODEL as OPENSEEFACE_MODEL, MODEL_SHA256 as OPENSEEFACE_SHA256, ensure_models,
+)
+
+OPENSEEFACE_ASSETS = ("mnv3_detection_opt.onnx", f"lm_model{OPENSEEFACE_MODEL}_opt.onnx")
 
 
 def export_notices(destination: Path) -> None:
@@ -60,7 +65,10 @@ def export_notices(destination: Path) -> None:
         "generated_by": "OpenHeadMouse prepare_release",
         "python": platform.python_version(), "platform": platform.platform(),
         "packages": packages,
-        "assets": {"face_landmarker.task": FACE_SHA256, "canonical_face_model.obj": MESH_SHA256},
+        "assets": {
+            "face_landmarker.task": FACE_SHA256, "canonical_face_model.obj": MESH_SHA256,
+            **{f"openseeface/{name}": OPENSEEFACE_SHA256[name] for name in OPENSEEFACE_ASSETS},
+        },
     }
     (destination / "build-environment.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
@@ -77,6 +85,7 @@ def main() -> None:
     if args.assets:
         download_verified(FACE_URL, ROOT / "models" / "face_landmarker.task", FACE_SHA256)
         download_verified(MESH_URL, ROOT / "models" / "canonical_face_model.obj", MESH_SHA256)
+        ensure_models(ROOT / "models" / "openseeface", OPENSEEFACE_MODEL)
         print("Pinned model assets verified.")
     if args.notices is not None:
         export_notices(args.notices)
