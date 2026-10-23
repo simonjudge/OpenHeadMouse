@@ -172,13 +172,20 @@ def make_provider(name: str, config: dict):
         from providers.openSeeFace import OpenSeeFaceProvider
 
         return OpenSeeFaceProvider(
+            source=provider_config.get("source", "camera"),
             udp_host=provider_config.get("udp_host", "127.0.0.1"),
             udp_port=provider_config.get("udp_port", 11573),
             face_id=provider_config.get("face_id", 0),
             tracking_lost_hold_ms=provider_config.get("tracking_lost_hold_ms", 500.0),
-            tracker_command=provider_config.get("tracker_command"),
-            camera=provider_config.get("camera", 0),
-            tracker_args=provider_config.get("tracker_args"),
+            camera_index=provider_config.get("camera_index", 0),
+            target_fps=provider_config.get("target_fps", 30),
+            frame_width=provider_config.get("frame_width", 640),
+            frame_height=provider_config.get("frame_height", 480),
+            model=provider_config.get("model", 3),
+            model_dir=provider_config.get("model_dir", "models/openseeface"),
+            detection_threshold=provider_config.get("detection_threshold", 0.6),
+            landmark_threshold=provider_config.get("landmark_threshold", 0.6),
+            threads=provider_config.get("threads", 2),
         )
     if name == "ximu3":
         from providers.ximu3_provider import Ximu3Provider
@@ -1554,7 +1561,8 @@ class App:
         from core.headmouse import TrackingState
         from providers.base_provider import ProviderState
 
-        if self._active_provider_name == "openseeface" and self._provider is not None:
+        openseeface = sys.modules.get("providers.openSeeFace")
+        if openseeface is not None and isinstance(self._provider, openseeface.OpenSeeFaceProvider):
             self.window.setup_panel.set_connection_status(
                 f"OpenSeeFace: {self._provider.status_text}"
             )

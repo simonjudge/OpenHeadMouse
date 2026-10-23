@@ -38,13 +38,20 @@
       "tracking_lost_hold_ms": 500
     },
     "openseeface": {
+      "source": "camera",
+      "camera_index": 0,
+      "target_fps": 30,
+      "frame_width": 640,
+      "frame_height": 480,
+      "model": 3,
+      "model_dir": "models/openseeface",
+      "detection_threshold": 0.6,
+      "landmark_threshold": 0.6,
+      "threads": 2,
       "udp_host": "127.0.0.1",
       "udp_port": 11573,
       "face_id": 0,
-      "tracking_lost_hold_ms": 500,
-      "tracker_command": [],
-      "camera": 0,
-      "tracker_args": ["--faces", "1"]
+      "tracking_lost_hold_ms": 500
     },
     "ximu3": {
       "connection_type": "wifi_ap",

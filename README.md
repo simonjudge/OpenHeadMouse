@@ -63,7 +63,7 @@ See [coordinate frames](COORDINATE_FRAMES.md) for mounting and movement conventi
 ## Layout
 
 - `core/` — quaternion math, absolute/velocity DSP engine and filters, recorder, OS cursor control
-- `providers/` — input drivers (UniFace/MediaPipe, OpenSeeFace UDP, xIMU3, AirPods)
+- `providers/` — input drivers (UniFace/MediaPipe, OpenSeeFace, xIMU3, AirPods)
 - `gui/` — PySide6 setup and DSP tuning UI
 - `session_viewer/` — standalone pyqtgraph session viewer (mesh + line-graph playback), opened from the main window's File menu; also replays Fitts sessions, optionally synchronised with a head recording (see below)
 - `colab_session_viewer/` — [Colab notebook viewer](colab_session_viewer/README.md) with one head/cursor playback panel, multiple participants/sessions, pooled summaries and per-participant first-target exclusions

@@ -43,7 +43,9 @@ try {
     foreach ($asset in @(
         "config.json",
         "models\face_landmarker.task",
-        "models\canonical_face_model.obj"
+        "models\canonical_face_model.obj",
+        "models\openseeface\mnv3_detection_opt.onnx",
+        "models\openseeface\lm_model3_opt.onnx"
     )) {
         if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
             throw "Required build asset is missing: $asset"
@@ -106,8 +108,11 @@ try {
             $buildArgs += @(
                 "--add-data", "$(Join-Path $PSScriptRoot 'config.json');.",
                 "--add-data", "$(Join-Path $PSScriptRoot 'models\face_landmarker.task');models",
+                "--add-data", "$(Join-Path $PSScriptRoot 'models\openseeface\mnv3_detection_opt.onnx');models\openseeface",
+                "--add-data", "$(Join-Path $PSScriptRoot 'models\openseeface\lm_model3_opt.onnx');models\openseeface",
                 "--hidden-import", "mediapipe.tasks.c",
-                "--collect-binaries", "mediapipe"
+                "--collect-binaries", "mediapipe",
+                "--collect-binaries", "onnxruntime"
             )
             if (-not $edition.Viewer) {
                 $buildArgs += @("--exclude-module", "fitts_law", "--exclude-module", "session_viewer")

@@ -67,8 +67,9 @@ MediaPipe coordinates, so it maps canonical rotations back with the UniFace matr
 
 ### OpenSeeFace camera alignment
 
-[providers/openSeeFace.py](providers/openSeeFace.py) receives the upstream XYZW
-quaternion, which represents the inverse PnP rotation, not a conventional active
+[providers/openSeeFace.py](providers/openSeeFace.py) uses the upstream XYZW
+quaternion, whether it is computed in-process from the camera or received over
+UDP. That quaternion represents the inverse PnP rotation, not a conventional active
 model-to-camera quaternion. PnP also uses swapped image coordinates (row, column).
 The adapter inverts the wire rotation and removes the frontal half-turn about
 `(1, -1, 0)` before converting to canonical FLU.
@@ -77,8 +78,10 @@ The face model's anatomical axes are X right, Y up, Z forward. Its polar-vector
 mapping to FLU is a reflection, so the quaternion vector part uses the proper
 axial-vector mapping `det(M)*M`: rows `[0,0,-1]; [1,0,0]; [0,-1,0]`.
 This is not the MediaPipe conversion. Synthetic PnP projections test frontal
-alignment, combined rotations and all three physical motion signs; a real webcam
-check is still needed before claiming hardware validation.
+alignment, combined rotations and all three physical motion signs, both for UDP
+quaternions and for the in-process solver, and the in-process pipeline gives
+mirror-symmetric yaw on a real face photo. A live webcam check is still needed
+before claiming hardware validation.
 
 ### xIMU3 hardware set-up
 

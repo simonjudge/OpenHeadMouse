@@ -7,6 +7,7 @@ import socket
 import struct
 import sys
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -204,7 +205,9 @@ def test_zero_hold_allows_valid_pose_then_immediate_loss():
 @pytest.mark.parametrize("kwargs", [
     {"udp_host": ""}, {"udp_port": -1}, {"udp_port": 65536}, {"udp_port": 1.5},
     {"face_id": -1}, {"face_id": 0.5}, {"tracking_lost_hold_ms": -1},
-    {"tracking_lost_hold_ms": np.nan}, {"queue_maxsize": 0},
+    {"tracking_lost_hold_ms": np.nan}, {"queue_maxsize": 0}, {"source": "webcam"},
+    {"model": 5}, {"model": -1}, {"camera_index": -1}, {"threads": 0},
+    {"frame_width": 0}, {"target_fps": -1}, {"detection_threshold": 1.5},
 ])
 def test_invalid_configuration_is_rejected(kwargs):
     with pytest.raises(ValueError):
@@ -212,7 +215,7 @@ def test_invalid_configuration_is_rejected(kwargs):
 
 
 def test_real_udp_loss_recovery_stop_and_restart(caplog):
-    provider = OpenSeeFaceProvider(udp_port=0, tracking_lost_hold_ms=60)
+    provider = OpenSeeFaceProvider(source="udp", udp_port=0, tracking_lost_hold_ms=60)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
         with caplog.at_level(logging.WARNING):
             provider.start()
@@ -251,7 +254,7 @@ def test_real_udp_loss_recovery_stop_and_restart(caplog):
 def test_socket_bind_failure_is_reported_and_not_swallowed(caplog):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as occupied:
         occupied.bind(("127.0.0.1", 0))
-        provider = OpenSeeFaceProvider(udp_port=occupied.getsockname()[1])
+        provider = OpenSeeFaceProvider(source="udp", udp_port=occupied.getsockname()[1])
         with caplog.at_level(logging.ERROR), pytest.raises(OSError):
             provider._run_wrapper()
     assert provider.state == ProviderState.ERROR
@@ -267,6 +270,7 @@ def test_factory_and_selection(qt_app):
     config = {
         "active_provider": "uniface",
         "providers": {"openseeface": {
+            "source": "udp", "camera_index": 2, "model": 1,
             "udp_host": "127.0.0.2", "udp_port": 12345,
             "face_id": 4, "tracking_lost_hold_ms": 250,
         }},
@@ -275,6 +279,7 @@ def test_factory_and_selection(qt_app):
     provider = make_provider("openseeface", config)
     assert isinstance(provider, OpenSeeFaceProvider)
     assert (provider.udp_host, provider.udp_port, provider.face_id) == ("127.0.0.2", 12345, 4)
+    assert (provider.source, provider.camera_index, provider.model) == ("udp", 2, 1)
     assert provider.tracking_lost_hold_ms == 250
     profiles = ensure_mouse_profiles(config)
     assert profiles["openseeface"] == profiles["uniface"]
@@ -291,6 +296,7 @@ def test_factory_works_without_new_settings_in_existing_user_config():
     from main import make_provider
 
     provider = make_provider("openseeface", {})
+    assert (provider.source, provider.camera_index, provider.model) == ("camera", 0, 3)
     assert provider.udp_host == "127.0.0.1"
     assert provider.udp_port == 11573
     assert provider.face_id == 0
@@ -305,7 +311,7 @@ def test_app_receives_udp_pose_and_displays_link_state(qt_app, tmp_path):
 
     config = copy.deepcopy(load_config())
     config["active_provider"] = "openseeface"
-    config["providers"]["openseeface"].update(udp_port=0, tracking_lost_hold_ms=60)
+    config["providers"]["openseeface"].update(source="udp", udp_port=0, tracking_lost_hold_ms=60)
     config["ui"].update(
         recording_enabled=False, mouse_control_enabled=False, calibration_enabled=False,
     )
@@ -351,75 +357,146 @@ def test_queue_overflow_keeps_latest_pose():
     with pytest.raises(queue.Empty):
         provider.output_queue.get_nowait()
 
-_FAKE_TRACKER = r"""
-import socket, struct, sys, time
-template = open(sys.argv[1], "rb").read()
-args = sys.argv[2:]
-host, port = args[args.index("-i") + 1], int(args[args.index("-p") + 1])
-print("fake tracker args:", " ".join(args), flush=True)
-if "--fail" in args:
-    print("camera could not be opened", flush=True)
-    sys.exit(3)
-with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-    stamp = 1000.0
-    while True:
-        stamp += 0.02
-        sock.sendto(struct.pack("<d", stamp) + template[8:], (host, port))
-        time.sleep(0.02)
-"""
+
+def _synthetic_landmarks(yaw, pitch, roll, offset=(0.3, -0.2), distance=4.0):
+    """Project upstream's contour model for a physical pose into (row, column) pixels."""
+    model = openSeeFace._CONTOUR_MODEL
+    head_points = np.column_stack([model[:, 2], -model[:, 0], model[:, 1]])
+    rotation = Rotation.from_euler("ZYX", [yaw, -pitch, -roll], degrees=True)
+    moved = rotation.apply(head_points)
+    camera = np.column_stack([
+        moved[:, 1] + offset[0], -moved[:, 2] + offset[1], distance - moved[:, 0],
+    ])
+    columns = camera[:, 0] / camera[:, 2] * 640.0 + 320.0
+    rows = camera[:, 1] / camera[:, 2] * 640.0 + 240.0
+    lms = np.zeros((66, 3))
+    lms[openSeeFace._CONTOUR_LANDMARKS] = np.column_stack([rows, columns, np.ones_like(rows)])
+    return lms
 
 
-def _fake_tracker_command(tmp_path):
-    script = tmp_path / "fake_facetracker.py"
-    script.write_text(_FAKE_TRACKER)
-    template = tmp_path / "packet.bin"
-    template.write_bytes(_packet())
-    return [sys.executable, str(script), str(template)]
+@pytest.mark.parametrize("angles", [
+    (0, 0, 0), (25, 0, 0), (-25, 0, 0), (0, 15, 0), (0, -15, 0),
+    (0, 0, 20), (0, 0, -20), (20, -10, 15), (-35, 20, -10),
+])
+def test_camera_pnp_recovers_physical_pose(angles):
+    estimator = object.__new__(openSeeFace._CameraPoseEstimator)
+    estimator.reset()
+    for _ in range(2):  # cold start from the bounding box, then from the previous fit
+        wire, error = estimator.solve_pose(_synthetic_landmarks(*angles), (480, 640, 3))
+        result = _wire_quaternion_to_head(wire)
+        np.testing.assert_allclose(np.degrees(qm.to_euler_zyx(result)), angles, atol=1e-3)
+        assert error < 1e-3
 
 
-def test_launched_tracker_receives_camera_and_address_and_is_stopped(tmp_path):
-    provider = OpenSeeFaceProvider(
-        udp_port=_free_udp_port(), tracker_command=_fake_tracker_command(tmp_path), camera=2,
+class _FakeCapture:
+    instances = []
+
+    def __init__(self, index, opened=True):
+        self.index, self.opened, self.released, self.settings = index, opened, False, {}
+        _FakeCapture.instances.append(self)
+
+    def isOpened(self):
+        return self.opened
+
+    def set(self, prop, value):
+        self.settings[prop] = value
+
+    def read(self):
+        return True, np.zeros((480, 640, 3), np.uint8)
+
+    def release(self):
+        self.released = True
+
+
+class _FakeEstimator:
+    poses = []
+
+    def __init__(self, detection, landmark, **kwargs):
+        assert (detection.name, landmark.name) == ("det.onnx", "lm.onnx")
+        self.kwargs = kwargs
+
+    def process(self, frame):
+        return _FakeEstimator.poses.pop(0) if _FakeEstimator.poses else None
+
+
+def _fake_camera(monkeypatch, opened=True):
+    import cv2
+
+    _FakeCapture.instances = []
+    monkeypatch.setattr(cv2, "VideoCapture", lambda index, *backend: _FakeCapture(index, opened))
+    monkeypatch.setattr(
+        openSeeFace, "ensure_models",
+        lambda model_dir, model: (Path(model_dir) / "det.onnx", Path(model_dir) / "lm.onnx"),
     )
-    assert provider._tracker_argv()[-8:] == [
-        "-c", "2", "-i", "127.0.0.1", "-p", str(provider.udp_port), "--faces", "1",
+    monkeypatch.setattr(openSeeFace, "_CameraPoseEstimator", _FakeEstimator)
+
+
+def test_camera_source_emits_only_valid_poses_and_reports_status(monkeypatch):
+    _fake_camera(monkeypatch)
+    wire, _ = _projected_wire_pose(20, 10, -5)
+    _FakeEstimator.poses = [
+        {"wire_quaternion": wire, "confidence": 0.9, "fit_error": 1.5}, None,
     ]
+    provider = OpenSeeFaceProvider(
+        camera_index=3, target_fps=200, frame_width=320, frame_height=240,
+        tracking_lost_hold_ms=0,
+    )
     provider.start()
     try:
-        _wait_until(lambda: provider.state == ProviderState.RUNNING, timeout=10.0)
-        assert provider.status_text == "tracking"
-        process = provider._tracker
-        assert process is not None and process.poll() is None
+        sample = provider.output_queue.get(timeout=3.0)
+        np.testing.assert_allclose(np.degrees(qm.to_euler_zyx(sample.quaternion)), [20, 10, -5], atol=1e-5)
+        assert sample.raw_metadata == {
+            "source": "openseeface", "face_id": 0, "camera_resolution": [640, 480],
+            "fit_3d_error": 1.5, "confidence": 0.9,
+        }
+        _wait_until(lambda: provider.status_text == "no face detected (camera 3)")
+        assert provider.output_queue.empty()
+        capture = _FakeCapture.instances[0]
+        assert capture.index == 3
+        assert {320, 240, 200} <= set(capture.settings.values())
     finally:
-        provider.stop(timeout=5.0)
-    assert process.poll() is not None
-    assert provider._tracker is None
+        provider.stop()
+    assert capture.released
+    assert provider.status_text == "stopped"
 
 
-def test_tracker_exit_is_reported_as_error(tmp_path, caplog):
-    provider = OpenSeeFaceProvider(
-        udp_port=0, tracker_command=_fake_tracker_command(tmp_path), tracker_args=["--fail"],
-    )
-    with caplog.at_level(logging.ERROR, logger="providers.openSeeFace"):
-        provider.start()
-        _wait_until(lambda: provider.state == ProviderState.ERROR, timeout=10.0)
-        provider._thread.join(timeout=5.0)
-    assert "exited with code 3" in provider.status_text
-    assert "camera could not be opened" in provider.status_text
-
-
-def test_missing_tracker_executable_is_reported_as_error(tmp_path):
-    provider = OpenSeeFaceProvider(
-        udp_port=0, tracker_command=[str(tmp_path / "missing" / "facetracker.exe")],
-    )
+def test_camera_open_failure_is_reported(monkeypatch):
+    _fake_camera(monkeypatch, opened=False)
+    provider = OpenSeeFaceProvider(camera_index=5)
     provider.start()
     _wait_until(lambda: provider.state == ProviderState.ERROR)
-    provider._thread.join(timeout=5.0)
-    assert provider.status_text.startswith("error:")
-    assert provider._tracker is None
+    provider._thread.join(timeout=3.0)
+    assert provider.status_text == "error: could not open camera 5"
+    assert _FakeCapture.instances[0].released
 
 
-def _free_udp_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+def test_models_are_pinned_and_verified(monkeypatch, tmp_path):
+    import core.model_assets
+
+    calls = []
+    monkeypatch.setattr(
+        core.model_assets, "download_verified",
+        lambda url, path, expected: calls.append((url, path, expected)) or path,
+    )
+    detection, landmark = openSeeFace.ensure_models(tmp_path, 1)
+    assert (detection, landmark) == (
+        tmp_path / "mnv3_detection_opt.onnx", tmp_path / "lm_model1_opt.onnx"
+    )
+    for url, path, expected in calls:
+        assert url.endswith(f"/{openSeeFace._MODEL_COMMIT}/models/{path.name}")
+        assert expected == openSeeFace.MODEL_SHA256[path.name]
+    assert len(calls) == 2
+
+
+def test_real_models_run_and_find_no_face_in_blank_frame():
+    pytest.importorskip("onnxruntime")
+    model_dir = openSeeFace._resolve_model_dir("models/openseeface")
+    detection = model_dir / openSeeFace._DETECTION_MODEL
+    landmark = model_dir / f"lm_model{openSeeFace.BUNDLED_MODEL}_opt.onnx"
+    if not (detection.is_file() and landmark.is_file()):
+        pytest.skip("OpenSeeFace models not downloaded")
+    estimator = openSeeFace._CameraPoseEstimator(detection, landmark)
+    assert estimator.process(np.zeros((480, 640, 3), np.uint8)) is None
+    result = estimator.landmarks(np.full((480, 640, 3), 128, np.uint8), (200, 120, 240, 240))
+    confidence, lms = result
+    assert lms.shape == (66, 3) and np.all(np.isfinite(lms))
