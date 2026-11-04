@@ -112,7 +112,8 @@ try {
                 "--add-data", "$(Join-Path $PSScriptRoot 'models\openseeface\lm_model3_opt.onnx');models\openseeface",
                 "--hidden-import", "mediapipe.tasks.c",
                 "--collect-binaries", "mediapipe",
-                "--collect-binaries", "onnxruntime"
+                "--collect-binaries", "onnxruntime",
+                "--add-data", "$(Join-Path $PSScriptRoot 'native\sony-head-tracker\archives');native\sony-head-tracker\archives"
             )
             if (-not $edition.Viewer) {
                 $buildArgs += @("--exclude-module", "fitts_law", "--exclude-module", "session_viewer")

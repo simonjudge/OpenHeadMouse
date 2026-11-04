@@ -17,6 +17,7 @@ from core.model_assets import FACE_SHA256, FACE_URL, MESH_SHA256, MESH_URL, down
 from providers.openSeeFace import (
     BUNDLED_MODEL as OPENSEEFACE_MODEL, MODEL_SHA256 as OPENSEEFACE_SHA256, ensure_models,
 )
+from providers.sony_bridge import ASSETS as SONY_ASSETS, VERSION as SONY_VERSION, ensure_bridge
 
 OPENSEEFACE_ASSETS = ("mnv3_detection_opt.onnx", f"lm_model{OPENSEEFACE_MODEL}_opt.onnx")
 
@@ -70,6 +71,15 @@ def export_notices(destination: Path) -> None:
             **{f"openseeface/{name}": OPENSEEFACE_SHA256[name] for name in OPENSEEFACE_ASSETS},
         },
     }
+    if sys.platform in SONY_ASSETS:
+        bridge = ROOT / "native" / "sony-head-tracker" / SONY_VERSION
+        if (bridge / "LICENSE").is_file():
+            target = destination / "licenses" / "sony-head-tracker"
+            target.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(bridge / "LICENSE", target / "LICENSE")
+            manifest["assets"]["sony-head-tracker"] = {
+                "version": SONY_VERSION, **SONY_ASSETS[sys.platform],
+            }
     (destination / "build-environment.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
@@ -86,7 +96,9 @@ def main() -> None:
         download_verified(FACE_URL, ROOT / "models" / "face_landmarker.task", FACE_SHA256)
         download_verified(MESH_URL, ROOT / "models" / "canonical_face_model.obj", MESH_SHA256)
         ensure_models(ROOT / "models" / "openseeface", OPENSEEFACE_MODEL)
-        print("Pinned model assets verified.")
+        if sys.platform in SONY_ASSETS:
+            ensure_bridge()
+        print("Pinned model and native bridge assets verified.")
     if args.notices is not None:
         export_notices(args.notices)
         print(f"Licences and build versions exported to {args.notices}. Manual review is still required.")

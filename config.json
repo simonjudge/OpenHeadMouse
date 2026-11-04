@@ -7,11 +7,11 @@
   "hotkeys": {
     "toggle_tracking": "<esc>"
   },
-  "active_provider": "openseeface",
+  "active_provider": "sony",
   "ui": {
     "recording_enabled": false,
     "mouse_control_enabled": true,
-    "calibration_enabled": false,
+    "calibration_enabled": true,
     "dwell_click": {
       "enabled": true,
       "dwell_time_s": 1.8,

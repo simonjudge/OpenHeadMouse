@@ -40,8 +40,8 @@ class SetupPanel(QWidget):
         self._provider_combo.setToolTip(
             "Head-tracking input: UniFace uses the webcam with MediaPipe; OpenSeeFace "
             "uses the webcam with OpenSeeFace's models; xIMU3 uses a head-mounted IMU; "
-            "Sony requires a separately running Sony Head Tracker bridge "
-            "(XYZ axes, no inversions, JSON UDP port 4243)"
+            "Sony starts its bundled Sony Head Tracker bridge and waits for tracking "
+            "(JSON UDP port 4243; Windows 11/macOS 14+)"
             + (", AirPods their motion sensors." if show_airpods else ".")
         )
         provider_index = self._provider_combo.findData(initial_provider)

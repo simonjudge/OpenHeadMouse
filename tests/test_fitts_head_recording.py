@@ -195,6 +195,7 @@ def _make_tracking_app(*, recording: bool, mouse_control: bool) -> App:
     app._tracking_ready_callbacks = []
     app._calibrating = False
     app._ximu_waiting_to_start = False
+    app._sony_waiting_to_start = False
     app._last_sample = SimpleNamespace(timestamp=1.0)
     # The recordings folder is covered in test_recordings_folder; here it is
     # simply already chosen and ready.

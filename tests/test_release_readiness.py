@@ -173,3 +173,25 @@ def test_notice_export_does_not_erase_unmanaged_files(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="unmanaged"):
         prepare_release.export_notices(destination)
     assert existing.read_text() == "keep"
+
+
+def test_notice_export_includes_native_sony_license_and_pins(tmp_path, monkeypatch):
+    from tools import prepare_release
+
+    root = tmp_path / "source"
+    root.mkdir()
+    for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
+        (root / name).write_text("application notice", encoding="utf-8")
+    native = root / "native" / "sony-head-tracker" / prepare_release.SONY_VERSION
+    native.mkdir(parents=True)
+    (native / "LICENSE").write_text("native MIT licence", encoding="utf-8")
+    monkeypatch.setattr(prepare_release, "ROOT", root)
+    monkeypatch.setattr(prepare_release, "distributions", lambda: [])
+    monkeypatch.setattr(sys, "platform", "win32")
+    destination = tmp_path / "notices"
+    prepare_release.export_notices(destination)
+    assert (destination / "licenses" / "sony-head-tracker" / "LICENSE").read_text() == "native MIT licence"
+    manifest = json.loads((destination / "build-environment.json").read_text())
+    assert manifest["assets"]["sony-head-tracker"] == {
+        "version": prepare_release.SONY_VERSION, **prepare_release.SONY_ASSETS["win32"],
+    }

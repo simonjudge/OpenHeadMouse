@@ -9,3 +9,4 @@ onnxruntime>=1.20
 pynput>=1.7
 ximu3>=1.9.1
 pyopengl>=3.1.6
+# Native Sony bridge: installed/verified by tools\prepare_release.py --assets.
