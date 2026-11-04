@@ -1,6 +1,6 @@
 """Abstract base class for OpenHeadMouse input providers.
 
-Every provider (UniFace, OpenSeeFace, xIMU3, AirPods, and test/mock providers) normalizes
+Every provider (UniFace, OpenSeeFace, xIMU3, AirPods, Sony, and test/mock providers) normalizes
 its raw signal into the shared quaternion reference frame documented in
 core/quaternion_math.py and pushes samples onto a thread-safe queue as
 :class:`ProviderSample` instances. Each provider runs its own acquisition
@@ -11,6 +11,9 @@ Timestamps MUST be the provider's own native/hardware/capture-time clock,
 not wall-clock arrival time at the consumer — computing angular velocity
 from arrival-time deltas introduces derivative spikes from network/OS
 scheduling jitter (see spec section 4).
+
+Sony is an explicit exception: upstream JSON v2 exposes no native timestamp.
+It uses monotonic socket-receive time and labels this in raw_metadata.
 """
 
 from __future__ import annotations

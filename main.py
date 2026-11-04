@@ -208,6 +208,14 @@ def make_provider(name: str, config: dict):
             udp_host=provider_config.get("udp_host", "127.0.0.1"),
             udp_port=provider_config.get("udp_port", 5005),
         )
+    if name == "sony":
+        from providers.sony_provider import SonyProvider
+
+        return SonyProvider(
+            udp_host=provider_config.get("udp_host", "127.0.0.1"),
+            udp_port=provider_config.get("udp_port", 4243),
+            tracking_lost_hold_ms=provider_config.get("tracking_lost_hold_ms", 500.0),
+        )
     if name == "mock":
         from providers.mock_provider import MockProvider
 
@@ -1567,6 +1575,15 @@ class App:
                 f"OpenSeeFace: {self._provider.status_text}"
             )
             if self._provider.state == ProviderState.ERROR:
+                return
+
+        sony = sys.modules.get("providers.sony_provider")
+        if sony is not None and isinstance(self._provider, sony.SonyProvider):
+            self.window.setup_panel.set_connection_status(f"Sony: {self._provider.status_text}")
+            if self._provider.state != ProviderState.RUNNING:
+                self._last_sample = None
+                self._mouse_was_active = False
+                self._set_cursor_driven(False)
                 return
 
         if self._ximu_wifi_provider and self._provider is not None:
