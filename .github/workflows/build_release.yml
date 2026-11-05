@@ -308,11 +308,24 @@ jobs:
             chmod +x "pkg/usr/local/bin/${EXECUTABLE_NAME}"
             mkdir -p "pkg/usr/share/doc/${PACKAGE_NAME}"
             cp -R build/release-notices/. "pkg/usr/share/doc/${PACKAGE_NAME}/"
+            DEB_DEPENDENCIES=(
+              --depends libegl1
+              --depends libgl1
+              --depends libxcb-cursor0
+              --depends libxcb-icccm4
+              --depends libxcb-keysyms1
+              --depends libxcb-shape0
+              --depends libxkbcommon-x11-0
+            )
+            if [[ "$EDITION" == "full" || "$EDITION" == "dwell-click" ]]; then
+              DEB_DEPENDENCIES+=(--depends libatspi2.0-0)
+            fi
             fpm -s dir -t deb \
               -n "$PACKAGE_NAME" \
               -v "$VERSION" \
               --architecture amd64 \
               --description "$DESCRIPTION" \
+              "${DEB_DEPENDENCIES[@]}" \
               -C pkg \
               -p "dist/${OUTPUT_NAME}" \
               "usr/local/bin/${EXECUTABLE_NAME}" \

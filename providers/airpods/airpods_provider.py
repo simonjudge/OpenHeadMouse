@@ -49,6 +49,7 @@ UDP JSON schema (shared with tests/test_udp.py):
 from __future__ import annotations
 
 import json
+import os
 import socket
 import time
 
@@ -83,15 +84,22 @@ class AirPodsProvider(BaseProvider):
 
     def _run(self) -> None:
         """Listen on UDP socket for JSON packets from the Swift helper until stop is requested."""
+        packet_count = 0
         try:
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if os.name == "nt":
+                # Windows SO_REUSEADDR permits competing UDP binds; reserve the
+                # helper's port instead so datagrams cannot be split silently.
+                self._sock.setsockopt(
+                    socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1
+                )
+            else:
+                self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._sock.bind((self.udp_host, self.udp_port))
             self._sock.settimeout(0.5)  # 500ms timeout so we can check stop_event regularly
             print(f"✓ Listening for AirPods on {self.udp_host}:{self.udp_port}")
             self._state = ProviderState.RUNNING
 
-            packet_count = 0
             while not self._stop_event.is_set():
                 try:
                     data, addr = self._sock.recvfrom(4096)

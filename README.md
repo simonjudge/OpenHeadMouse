@@ -29,11 +29,19 @@ The screenshot shows the application alone with no live tracker or participant d
 | Platform | First-release status | Notes |
 | --- | --- | --- |
 | Windows x64 | Primary release target; clean-machine/hardware sign-off still required | Test Windows 10/11, permissions, DPI and multiple monitors |
-| macOS 14+, Apple Silicon | Experimental | arm64 builds, not universal/Intel; camera, Accessibility and Input Monitoring permissions; AirPods also require Xcode command-line tools and Terminal Motion permission |
+| macOS 14+, Apple Silicon | Experimental | arm64 builds, not universal/Intel; camera, Accessibility and Input Monitoring permissions; zoom also needs Screen Recording; AirPods also require Xcode command-line tools and Terminal Motion permission |
 | Linux x64 | Experimental | Built on Ubuntu 24.04; X11 desktop expected; Wayland global hotkeys/input injection are not supported |
 
 Only claim a tested OS/provider combination after recording its result in the
 [release checklist](RELEASE_CHECKLIST.md). Successful packaging is not hardware validation.
+
+Core tracking, calibration, recording, dwell clicking, Fitts tasks and session playback
+are intended for all three platforms, subject to the permissions and runtime dependencies
+above. This does not imply feature parity with unsupported environments: AirPods CoreMotion
+is macOS-only; global pointer control and hotkeys require X11 on Linux; the 3D viewer needs
+a working desktop OpenGL context; Snap to can only detect controls exposed by accessibility
+APIs. Windows elevated/secure desktops and taskbar previews have additional restrictions
+described below. Native hardware and packaged-app checks remain necessary on each OS.
 
 ## Windows quick start
 
@@ -297,12 +305,16 @@ or stops dwell clicking, opens the dwell-click settings dialog, and exits standa
 Left-clicking the tray icon opens the settings dialog directly; right-clicking opens its menu.
 The settings dialog also has a **Start/Stop Dwell Clicking** button. It stays open when
 the button is used and follows changes made through the tray or OpenHeadMouse lifecycle.
+On desktops without a system tray, standalone mode opens the settings window instead;
+**Apply** keeps those controls open, and **Close** exits the application. Errors use a dialog
+when tray notifications are unavailable.
 
 **Click Context Menu** is optional and disabled by default. Enable it in the main window's
-dwell settings or the tray settings dialog. A completed dwell opens five icons around
+dwell settings or the tray settings dialog. A completed dwell opens six icons around
 the original click point: **left click** at 135 degrees (upper-left), **zoom** at 90 degrees
 (above), **right click** at 45 degrees (upper-right), **double click** at 225 degrees
-(lower-left), and **pause** at 315 degrees (lower-right). Dwell on an icon to choose it.
+(lower-left), **pause** at 315 degrees (lower-right), and **Snap to** at 270 degrees
+(below). Dwell on an icon to choose it.
 Each icon samples the screen beneath it when the menu opens: dark backgrounds use white
 artwork and a 20%-opacity white backing; light backgrounds use dark artwork and a
 20%-opacity black backing. Rounded corners remain transparent and active choices have a
@@ -338,7 +350,22 @@ register the hover and accept the click.
 | Already-locked zoom icon | Unlock zoom only; no click | Closes |
 | Zoom selected after an automatic click was already sent | Arm zoom for the next target, or lock it on the second selection; never repeat the completed click | Closes |
 | Pause | Cancel the pending click and pause dwell clicking; locks are kept | Closes |
+| Snap to | Toggle cursor snapping to nearby clickable controls; no click | Closes |
 | Dwell outside an unlocked menu | Cancel without clicking | Closes |
+
+**Snap to** is off by default. Dwell on its crosshair icon to toggle it; a blue outline
+indicates that it is enabled. While dwell clicking is active, the pointer snaps to the
+centre of a nearby enabled control exposed by the application's accessibility API
+(within 48 logical pixels). Move away to leave a target; head-driven movement stays
+snapped until the head target leaves that radius. Snapping does not activate the
+control, and is suspended while paused or using the menu or magnifier. It preserves
+click-button and zoom choices, but resets to off when dwell clicking stops or settings change.
+Windows uses MSAA (including controls exposed through its UI Automation bridge).
+macOS requires Accessibility permission for OpenHeadMouse or its Python executable.
+Linux requires an X11 session, AT-SPI 2 (`libatspi2.0-0`) and desktop accessibility enabled;
+snapping is restricted to the active window to avoid covered background controls.
+Custom-drawn controls that do not expose accessibility actions cannot be detected.
+Accessibility queries run outside the UI thread; failures turn snapping off and report an error.
 
 **Pause** stops all dwell clicking and shows a floating **Resume** (play) button in the
 bottom-right corner of the screen. Dwell on it to resume hands-free, or use **Start Dwell
@@ -480,8 +507,9 @@ head session still can't be saved when tracking stops, you are asked for another
 is only discarded if you confirm that.
 
 The Fitts window run standalone (`python fitts_law/fitts_test.py`) does the same checks itself
-and saves the chosen folder to `config.json` and to its own `fitts_law/fitts_settings.json`, so
-it is only asked once either way.
+and saves the chosen folder to `config.json` and its own settings file, so it is only asked
+once either way. Source runs use `fitts_law/fitts_settings.json`; packaged editions use
+per-user application data so settings survive upgrades and work in read-only installations.
 
 ### Session files
 
@@ -792,7 +820,9 @@ node --test .\colab_session_viewer\viewer.test.cjs
 
 Tests configure offscreen Qt by default and have a per-test timeout. On Linux, use
 `QT_QPA_PLATFORM=xcb xvfb-run -a python -m pytest -q` so OpenGL widgets have a
-supported X display/context. CI runs these checks
+supported X display/context. GUI launchers enable shared OpenGL contexts before creating
+the application, so closing and reopening viewers does not invalidate cached shaders.
+CI runs these checks
 before packaging. The publication check is pattern-based and not an exhaustive audit.
 
 Camera, xIMU3, AirPods, global hotkey, and native Swift helper behavior require the
@@ -801,9 +831,12 @@ without those devices.
 
 Press **Esc** to pause or resume cursor tracking.
 
-On macOS, the global toggle uses `Cmd+Option+M` (`<cmd>+<alt>+m`). Grant Accessibility
-and Input Monitoring permission to the executable that actually runs the app (usually
+The default global toggle is **Esc** on macOS too; `hotkeys.toggle_tracking` can override it.
+Grant Accessibility and Input Monitoring permission to the executable that actually runs the app (usually
 the project virtual-environment Python, not just VS Code), then restart OpenHeadMouse.
+Zoom additionally needs **Screen Recording** permission; without it, zoom reports an error
+instead of allowing a click against an incomplete capture. Menu icons still work, using the
+application colour scheme rather than sampling other windows.
 If registration is denied, the main window displays the reason instead of silently
 claiming the hotkey is active.
 

@@ -3,25 +3,30 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
+import threading
 import time
 from collections.abc import Callable
 
-from PySide6.QtCore import QObject, QPoint, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QPoint, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QCursor, QGuiApplication
 
 from .context_menu import DwellContextMenu, DwellResumeButton
 from .engine import DwellEngine, DwellSettings
 from .overlay import DwellRing
+from .snap import SNAP_RADIUS_PX, find_snap_target
 from .zoom import DwellZoom
 
 HOVER_BEFORE_PRESS_MS = 120
+SNAP_QUERY_TIMEOUT_MS = 5000
 
 
 class DwellClickService(QObject):
     running_requested = Signal(bool)
     error_occurred = Signal(str)
     running_changed = Signal(bool)
+    _snap_finished = Signal(int, object, object, str)
 
     def __init__(
         self,
@@ -64,6 +69,18 @@ class DwellClickService(QObject):
         self._zoom_selected = False
         self._zoom_once_armed = False
         self._zoom_locked = self.settings.zoom_enabled
+        self._snap_enabled = False
+        self._snap_generation = 0
+        self._snap_pending = False
+        self._snap_last_query = float("-inf")
+        self._snap_position: tuple[float, float] | None = None
+        self._snap_native_target: tuple[float, float] | None = None
+        self._snap_native_radius = float(SNAP_RADIUS_PX)
+        self._snap_finished.connect(self._finish_snap, Qt.ConnectionType.QueuedConnection)
+        self._snap_query_timer = QTimer(self)
+        self._snap_query_timer.setSingleShot(True)
+        self._snap_query_timer.setInterval(SNAP_QUERY_TIMEOUT_MS)
+        self._snap_query_timer.timeout.connect(self._snap_timeout)
         self._button = "left"
         self._show_after_action = False
         self._click_origin: QPoint | None = None
@@ -98,6 +115,10 @@ class DwellClickService(QObject):
     def is_active(self) -> bool:
         """Running and able to click (not paused)."""
         return self.is_running and not self._paused
+
+    @property
+    def snap_enabled(self) -> bool:
+        return self._snap_enabled
 
     def start(self) -> None:
         if self._paused and self.is_running:
@@ -136,6 +157,7 @@ class DwellClickService(QObject):
         self._hide_menu()
         self._overlay.hide()
         self._paused = True
+        self._invalidate_snap()
         position = self._position_provider()
         try:
             self._resume_button.show_near(position, self.settings.context_menu_size_px)
@@ -150,7 +172,9 @@ class DwellClickService(QObject):
         if not self._paused:
             return
         self._clear_pause()
-        self._engine.inhibit_until_moved(self._position_provider())
+        position = self._position_provider()
+        self._snap_position = position
+        self._engine.inhibit_until_moved(position)
         self.running_changed.emit(True)
 
     def _clear_pause(self) -> None:
@@ -225,7 +249,10 @@ class DwellClickService(QObject):
             return
         if self._context_menu.is_visible() and self._poll_menu():
             return
-        update = self._engine.update(self._position_provider(), self._clock())
+        position = self._position_provider()
+        if self._snap_enabled and not self._zoom.isVisible():
+            self._query_snap(position)
+        update = self._engine.update(position, self._clock())
         if update.visible:
             self._overlay.display(update.position, update.progress)
         else:
@@ -253,6 +280,7 @@ class DwellClickService(QObject):
         self, position: tuple[float, float], *, from_menu: bool = False,
         zoom_once: bool = False, automatic: bool = False,
     ) -> None:
+        self._invalidate_snap()
         self._hide_menu()
         self._overlay.hide()
         self._show_after_action = automatic
@@ -273,10 +301,12 @@ class DwellClickService(QObject):
             self._action_completed(position)
 
     def _show_menu(self, position: tuple[float, float], *, timed: bool = False) -> None:
+        self._invalidate_snap()
         try:
             self._context_menu.show_at(
                 position, self.settings.context_menu_distance_px,
                 self._locked_button, self._zoom_locked, self.settings.context_menu_size_px,
+                snap=self._snap_enabled,
             )
         except RuntimeError as exc:
             self._report_error(str(exc))
@@ -307,6 +337,113 @@ class DwellClickService(QObject):
         self._zoom_selected = False
         self._zoom_once_armed = False
         self._zoom_locked = self.settings.zoom_enabled
+        self._snap_enabled = False
+        self._invalidate_snap()
+
+    def _invalidate_snap(self) -> None:
+        self._snap_generation += 1
+        self._snap_position = None
+        self._snap_native_target = None
+        self._snap_last_query = float("-inf")
+
+    def snap_pointer_target(self, position: tuple[float, float]) -> tuple[float, float]:
+        """Keep head-driven frames on the discovered native-pixel target until the user leaves."""
+        target = self._snap_native_target
+        if (
+            target is None or not self._snap_enabled or not self.is_active
+            or self._context_menu.is_visible() or self._zoom.isVisible()
+            or self._capture_timer.isActive() or self._click_timer.isActive()
+            or self._press_timer.isActive()
+        ):
+            return position
+        if math.dist(position, target) <= self._snap_native_radius:
+            return target
+        self._invalidate_snap()
+        return position
+
+    def _query_snap(self, position: tuple[float, float]) -> None:
+        now = self._clock()
+        if self._snap_pending and not self._snap_query_timer.isActive():
+            self._snap_timeout()
+            return
+        if (
+            self._snap_pending or now - self._snap_last_query < 0.15
+            or (position == self._snap_position and now - self._snap_last_query < 0.5)
+        ):
+            return
+        screen = QGuiApplication.screenAt(QPoint(round(position[0]), round(position[1])))
+        if screen is None:
+            return
+        ratio = screen.devicePixelRatio() if sys.platform != "darwin" else 1.0
+        native = self._mouse_controller.position
+        generation = self._snap_generation
+        self._snap_pending = True
+        self._snap_last_query = now
+        self._snap_query_timer.start()
+
+        def query():
+            target = None
+            message = ""
+            try:
+                result = find_snap_target(native, SNAP_RADIUS_PX * ratio)
+                if result is not None:
+                    target = (
+                        position[0] + (result[0] - native[0]) / ratio,
+                        position[1] + (result[1] - native[1]) / ratio,
+                    )
+            except (OSError, RuntimeError) as exc:
+                message = str(exc)
+            self._snap_finished.emit(generation, position, target, message)
+
+        # An unresponsive application's accessibility provider must not block Qt or shutdown.
+        threading.Thread(target=query, name="snap-accessibility", daemon=True).start()
+
+    def _snap_timeout(self) -> None:
+        if self._snap_enabled and self.is_active:
+            self._snap_enabled = False
+            self._report_error(
+                "Snap to stopped because an application's accessibility service is not responding. "
+                "Close the unresponsive application or restart OpenHeadMouse before trying again."
+            )
+
+    @Slot(int, object, object, str)
+    def _finish_snap(self, generation, position, target, message) -> None:
+        self._snap_query_timer.stop()
+        self._snap_pending = False
+        if generation != self._snap_generation or not self._snap_enabled or not self.is_active:
+            return
+        if message:
+            self._snap_enabled = False
+            self._report_error(message)
+            return
+        current = self._position_provider()
+        if (
+            self._context_menu.is_visible() or self._zoom.isVisible()
+            or self._capture_timer.isActive() or self._click_timer.isActive()
+            or self._press_timer.isActive()
+            or math.dist(current, position) > self.settings.movement_tolerance_px
+        ):
+            return
+        if target is None:
+            self._snap_native_target = None
+            self._snap_position = None
+            return
+        point = QPoint(round(target[0]), round(target[1]))
+        screen = QGuiApplication.screenAt(point)
+        if screen is None:
+            return
+        self._overlay.hide()
+        QCursor.setPos(point)
+        if QCursor.pos() != point:
+            self._snap_enabled = False
+            self._report_error("Cannot snap the pointer. Check pointer-control permissions.")
+            return
+        self._snap_position = (float(point.x()), float(point.y()))
+        self._snap_native_target = self._mouse_controller.position
+        ratio = screen.devicePixelRatio() if sys.platform != "darwin" else 1.0
+        self._snap_native_radius = SNAP_RADIUS_PX * ratio
+        if math.dist(current, self._snap_position) > self.settings.movement_tolerance_px:
+            self._engine.reset()
 
     def _poll_menu(self) -> bool:
         position = self._position_provider()
@@ -349,6 +486,11 @@ class DwellClickService(QObject):
             raise RuntimeError("Visible click menu has no target")
         if choice == "pause":
             self.pause()
+        elif choice == "snap":
+            self._snap_enabled = not self._snap_enabled
+            self._invalidate_snap()
+            self._snap_position = position
+            self._dismiss_selection(position)
         elif choice == "zoom":
             if self._zoom_locked:
                 self._zoom_locked = False
@@ -364,7 +506,7 @@ class DwellClickService(QObject):
                 elif self._locked_button is None and self._last_button is None:
                     # No click button chosen yet: keep the menu open until one is.
                     self._zoom_pending = True
-                    self._context_menu.highlight(None, True)
+                    self._context_menu.highlight(None, True, self._snap_enabled)
                     self._overlay.hide()
                     self._hovered_choice = None
                     self._blocked_choice = choice
@@ -389,6 +531,7 @@ class DwellClickService(QObject):
         self._engine.inhibit_until_moved(position)
 
     def _cancel_action(self) -> None:
+        self._invalidate_snap()
         self._capture_timer.stop()
         self._click_timer.stop()
         self._press_timer.stop()

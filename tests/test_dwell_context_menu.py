@@ -144,6 +144,243 @@ def lock(service, poll, icon, finish, choice="left"):
     assert service._locked_button == choice
 
 
+def test_snap_toggle_does_not_click_and_highlights_next_menu(menu_service):
+    service, poll, icon, _, clicks = menu_service
+    poll(1)
+    poll(1.1, icon("snap"))
+    poll(2.1)
+    assert service.snap_enabled
+    assert not service._context_menu.is_visible()
+    assert clicks == []
+    assert service._last_button is None
+    assert not service._click_timer.isActive()
+    assert not service._capture_timer.isActive()
+    service._show_menu((700, 500))
+    style = service._context_menu.buttons["snap"].styleSheet()
+    assert "solid #0078d4" in style or "solid #66c2ff" in style
+    poll(2.2, icon("snap"))
+    poll(3.2)
+    assert not service.snap_enabled
+    assert not service._context_menu.is_visible()
+    assert clicks == []
+
+
+def test_snap_preserves_click_and_zoom_locks_and_pause(menu_service):
+    service, poll, icon, _, clicks = menu_service
+    poll(1)
+    service._locked_button = service._last_button = "right"
+    service._zoom_locked = True
+    poll(1.1, icon("snap"))
+    poll(2.1)
+    assert service.snap_enabled
+    assert service._locked_button == service._last_button == "right"
+    assert service._zoom_locked
+    service.pause()
+    assert service.snap_enabled
+    service.resume()
+    assert service.snap_enabled
+    service.stop()
+    assert not service.snap_enabled
+    assert clicks == []
+
+
+@pytest.fixture
+def snap_worker(menu_service, qt_app, monkeypatch):
+    from dwell_click import service as module
+
+    jobs = []
+
+    class Worker:
+        def __init__(self, *, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            jobs.append(self.target)
+
+    monkeypatch.setattr(module, "threading", SimpleNamespace(Thread=Worker))
+    monkeypatch.setattr(module, "find_snap_target", lambda point, radius: (520, 400))
+    service = menu_service[0]
+    service._snap_enabled = True
+
+    def finish():
+        jobs.pop(0)()
+        qt_app.processEvents()
+
+    return service, jobs, finish
+
+
+def test_snap_moves_pointer_without_clicking_and_restarts_dwell(menu_service, snap_worker):
+    service, jobs, finish = snap_worker
+    _, poll, _, _, clicks = menu_service
+    service._query_snap((500, 400))
+    assert len(jobs) == 1
+    assert service._mouse_controller.position == (500, 400)
+    finish()
+    assert service._mouse_controller.position == (520, 400)
+    assert clicks == []
+    poll(1)
+    assert not service._context_menu.is_visible()
+    poll(2)
+    assert service._context_menu.is_visible()
+
+
+def test_snap_small_adjustment_does_not_prevent_dwell(menu_service, snap_worker, monkeypatch):
+    service, _, finish = snap_worker
+    _, poll, _, _, _ = menu_service
+    monkeypatch.setattr("dwell_click.service.find_snap_target", lambda point, radius: (505, 400))
+    service._query_snap((500, 400))
+    finish()
+    poll(1)
+    assert service._context_menu.is_visible()
+
+
+def test_head_frames_keep_snap_until_target_leaves_capture_radius(snap_worker):
+    from core.headmouse import HeadMouse, ScreenBounds
+    from main import App
+
+    service, _, finish = snap_worker
+    service._query_snap((500, 400))
+    finish()
+    app = App.__new__(App)
+    app._dwell_click = service
+    app.headmouse = HeadMouse(ScreenBounds(1000, 800), mouse_controller=service._mouse_controller)
+    app.headmouse.set_tracking_state(True)
+    for frame in range(90):
+        assert app._move_pointer(500 + frame % 8, 400, frame / 90)
+        assert service._mouse_controller.position == (520, 400)
+    assert app._move_pointer(568, 400, 1)
+    assert service._mouse_controller.position == (520, 400)
+    assert app._move_pointer(569, 400, 1.1)
+    assert service._mouse_controller.position == (569, 400)
+    assert service._snap_native_target is None
+
+
+def test_snap_revalidates_stationary_target_and_releases_removed_control(
+    menu_service, snap_worker, monkeypatch,
+):
+    service, jobs, finish = snap_worker
+    _, poll, _, _, _ = menu_service
+    service._query_snap((500, 400))
+    finish()
+    assert service.snap_pointer_target((500, 400)) == (520, 400)
+    monkeypatch.setattr("dwell_click.service.find_snap_target", lambda point, radius: None)
+    poll(0.6)
+    assert len(jobs) == 1
+    finish()
+    assert service.snap_pointer_target((500, 400)) == (500, 400)
+    assert service.snap_enabled
+
+
+@pytest.mark.parametrize("action", ["stop", "pause", "settings", "menu", "movement"])
+def test_snap_discards_obsolete_results(menu_service, snap_worker, action):
+    service, _, finish = snap_worker
+    _, poll, _, _, clicks = menu_service
+    service._query_snap((500, 400))
+    if action == "stop":
+        service.stop()
+    elif action == "pause":
+        service.pause()
+    elif action == "settings":
+        service.update_settings(replace(service.settings, dwell_time_s=2))
+    elif action == "menu":
+        service._show_menu((500, 400))
+    else:
+        poll(0.1, (600, 400))
+    finish()
+    assert service._mouse_controller.position == ((600, 400) if action == "movement" else (500, 400))
+    assert clicks == []
+
+
+def test_snap_dpi_conversion_and_request_throttling(menu_service, snap_worker, monkeypatch):
+    service, jobs, finish = snap_worker
+    _, poll, _, _, clicks = menu_service
+    requests = []
+
+    def find(point, radius):
+        requests.append((point, radius))
+        return point[0] + 40, point[1] + 20
+
+    screen = SimpleNamespace(devicePixelRatio=lambda: 2)
+    monkeypatch.setattr("dwell_click.service.QGuiApplication.screenAt", lambda point: screen)
+    monkeypatch.setattr("dwell_click.service.find_snap_target", find)
+    service._query_snap((500, 400))
+    service._query_snap((500, 400))
+    assert len(jobs) == 1
+    finish()
+    assert requests == [((500, 400), 96)]
+    assert service._mouse_controller.position == (520, 410)
+    assert service.snap_pointer_target((616, 410)) == (520, 410)
+    poll(0.1)
+    poll(0.2)
+    assert jobs == []
+    poll(0.3, (530, 420))
+    assert len(jobs) == 1
+    assert clicks == []
+
+
+def test_snap_failure_turns_option_off_and_reports_error(menu_service, snap_worker, monkeypatch):
+    service, _, finish = snap_worker
+    errors = []
+    service.error_occurred.connect(errors.append)
+
+    def fail(point, radius):
+        raise RuntimeError("Enable accessibility")
+
+    monkeypatch.setattr("dwell_click.service.find_snap_target", fail)
+    service._query_snap((500, 400))
+    finish()
+    assert not service.snap_enabled
+    assert errors == ["Enable accessibility"]
+    assert menu_service[-1] == []
+
+
+def test_unresponsive_snap_provider_reports_timeout_without_starting_more_workers(snap_worker):
+    service, jobs, finish = snap_worker
+    errors = []
+    service.error_occurred.connect(errors.append)
+    service._query_snap((500, 400))
+    service._snap_query_timer.stop()
+    service._snap_timeout()
+    assert not service.snap_enabled
+    assert len(errors) == 1
+    assert "not responding" in errors[0]
+    service._snap_enabled = True
+    service._query_snap((500, 400))
+    assert not service.snap_enabled
+    assert len(jobs) == 1
+    finish()
+    assert service._mouse_controller.position == (500, 400)
+    assert not service._snap_pending
+
+
+def test_snap_cannot_move_pointer_reports_error(menu_service, snap_worker, monkeypatch):
+    service, _, finish = snap_worker
+    errors = []
+    service.error_occurred.connect(errors.append)
+    monkeypatch.setattr(QCursor, "setPos", lambda point: None)
+    service._query_snap((500, 400))
+    finish()
+    assert not service.snap_enabled
+    assert len(errors) == 1
+    assert "pointer-control permissions" in errors[0]
+
+
+def test_snap_does_not_query_during_menu_zoom_or_pause(menu_service, snap_worker):
+    service, jobs, _ = snap_worker
+    _, poll, _, _, _ = menu_service
+    service._show_menu((500, 400))
+    poll(0.1)
+    assert jobs == []
+    service._hide_menu()
+    service._zoom.show()
+    poll(0.2)
+    assert jobs == []
+    service._zoom.hide()
+    service.pause()
+    poll(0.3)
+    assert jobs == []
+
+
 @pytest.mark.parametrize("choice", ["left", "right"])
 def test_locked_icon_unlocks_without_click_and_stays_unlocked(menu_service, choice):
     service, poll, icon, finish, clicks = menu_service
@@ -687,7 +924,7 @@ def test_icon_layout_angles_distance_and_screen_edges(qt_app, monkeypatch, point
         menu.show_at(point, 60, None, False)
         from dwell_click.context_menu import MENU_ANGLES
 
-        assert list(menu.buttons) == ["left", "zoom", "right", "double", "pause"]
+        assert list(menu.buttons) == ["left", "zoom", "right", "double", "pause", "snap"]
         rects = [button.geometry() for button in menu.buttons.values()]
         assert all(bounds.contains(rect) for rect in rects)
         for index, rect in enumerate(rects):

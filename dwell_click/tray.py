@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QObject, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QMenu, QMessageBox, QSystemTrayIcon
 
 from .engine import DwellSettings
 from .settings_dialog import DwellSettingsDialog
@@ -70,7 +70,10 @@ class DwellTray(QObject):
             self.show_settings()
 
     def _show_error(self, message: str) -> None:
-        self.icon.showMessage("Dwell Click", message, QSystemTrayIcon.MessageIcon.Warning)
+        if QSystemTrayIcon.isSystemTrayAvailable() and QSystemTrayIcon.supportsMessages():
+            self.icon.showMessage("Dwell Click", message, QSystemTrayIcon.MessageIcon.Warning)
+        else:
+            QMessageBox.warning(self._settings_dialog, "Dwell Click", message)
 
     def set_settings(self, settings: DwellSettings) -> None:
         self._settings = settings
@@ -80,7 +83,10 @@ class DwellTray(QObject):
             self._settings_dialog.raise_()
             self._settings_dialog.activateWindow()
             return
-        dialog = DwellSettingsDialog(self._settings)
+        dialog = DwellSettingsDialog(
+            self._settings,
+            close_on_apply=QSystemTrayIcon.isSystemTrayAvailable() or self.parent() is not None,
+        )
         self._settings_dialog = dialog
         dialog.set_running(self._is_active())
         dialog.toggle_requested.connect(self._toggle)

@@ -11,6 +11,7 @@ First public-release candidate for OpenHeadMouse (formerly HeadMouse).
 - Fitts-style pointing tasks and synchronised head/cursor session playback.
 - Desktop and Colab analysis/viewing tools.
 - Full, HeadMouse-only, Dwell Click and Session Viewer editions.
+- Optional Snap to context-menu toggle for nearby accessible controls on Windows, macOS and Linux/X11.
 
 ### Release preparation
 
@@ -20,6 +21,10 @@ First public-release candidate for OpenHeadMouse (formerly HeadMouse).
 - Windowed executable diagnostics and packaged startup smoke tests.
 - Non-owning playback-window links and corrected shared-clock ownership, with
   repeated native destruction regression coverage.
+- Portability fixes for scaled X11 cursor bounds, macOS capture permissions and writable
+  AirPods helper state, plus standalone controls on desktops without a system tray.
+- Persistent packaged Fitts settings, native keyboard shortcuts, Linux runtime dependencies,
+  Windows-exclusive AirPods UDP binding and shared OpenGL contexts for repeated viewer use.
 
 ### Known limitations
 

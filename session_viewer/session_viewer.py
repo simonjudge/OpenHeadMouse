@@ -25,8 +25,8 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QDoubleSpinBox, QGroupBox, QToolBar, QFileDialog, QMessageBox
 )
-from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QKeySequence
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 
@@ -254,15 +254,19 @@ class SessionVisualizerWindow(QMainWindow):
     def _create_menu_and_toolbar(self):
         """Create the File menu and toolbar buttons for opening session files."""
         open_action = QAction("Open OpenHeadMouse Session...", self)
-        open_action.setShortcut("Ctrl+O")
+        open_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Open))
         open_action.triggered.connect(self._on_open_session)
 
         open_fitts_action = QAction("Open Fitts Test Only...", self)
-        open_fitts_action.setShortcut("Ctrl+F")
+        open_fitts_action.setShortcut(
+            QKeySequence("Meta+F" if sys.platform == "darwin" else "Ctrl+F")
+        )
         open_fitts_action.triggered.connect(self._on_open_fitts_session)
 
         open_sync_action = QAction("Open Synchronised Playback...", self)
-        open_sync_action.setShortcut("Ctrl+Shift+O")
+        open_sync_action.setShortcut(
+            QKeySequence("Meta+Shift+O" if sys.platform == "darwin" else "Ctrl+Shift+O")
+        )
         open_sync_action.triggered.connect(self._on_open_synchronised)
 
         file_menu = self.menuBar().addMenu("File")
@@ -847,6 +851,7 @@ def visualize_session_native(recorded_samples: list | None = None, session_name:
 
     app = QApplication.instance()
     if app is None:
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
         app = QApplication([])
 
     window = SessionVisualizerWindow(recorded_samples, session_name, recorder)

@@ -104,8 +104,8 @@ class ContextMenuOptions(QGroupBox):
         super().__init__("Click Context Menu")
         self._enabled = QCheckBox("Enable click menu")
         self._enabled.setToolTip(
-            "Choose left, right, double click, zoom or pause after dwelling. "
-            "Choices are remembered across menus: "
+            "Choose left, right, double click, zoom or pause after dwelling, or toggle Snap to. "
+            "Click-button and zoom choices are remembered across menus: "
             "choose the same option again to lock it; choose a locked option to unlock it. "
             "Zoom clicks with the chosen left/right button, waiting for one if none is chosen."
         )

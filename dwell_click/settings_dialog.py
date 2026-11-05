@@ -22,8 +22,9 @@ class DwellSettingsDialog(QDialog):
     settings_applied = Signal(dict)
     toggle_requested = Signal()
 
-    def __init__(self, settings: DwellSettings, parent=None):
+    def __init__(self, settings: DwellSettings, parent=None, *, close_on_apply: bool = True):
         super().__init__(parent)
+        self._close_on_apply = close_on_apply
         self.setWindowTitle("Dwell Click Settings")
 
         self._dwell_time = QDoubleSpinBox()
@@ -76,11 +77,16 @@ class DwellSettingsDialog(QDialog):
             field.setToolTip(DWELL_HELP[key])
             form.addRow(label, field)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self._apply)
+        if close_on_apply:
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+            )
+            buttons.accepted.connect(self._apply)
+        else:
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Apply | QDialogButtonBox.StandardButton.Close
+            )
+            buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(self._apply)
         buttons.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
@@ -103,7 +109,8 @@ class DwellSettingsDialog(QDialog):
                 **self._context_options.values(),
             }
         )
-        self.accept()
+        if self._close_on_apply:
+            self.accept()
 
     def set_running(self, running: bool) -> None:
         self._toggle_button.setText("Stop Dwell Clicking" if running else "Start Dwell Clicking")
