@@ -2,6 +2,63 @@ import AppKit
 import CoreMotion
 import Foundation
 
+struct HelperConfiguration {
+    var host = "127.0.0.1"
+    var port: UInt16 = 5005
+
+    static func parse(_ arguments: [String]) throws -> HelperConfiguration {
+        var configuration = HelperConfiguration()
+        var index = 0
+        while index < arguments.count {
+            let option = arguments[index]
+            guard index + 1 < arguments.count else {
+                throw ConfigurationError.missingValue(option)
+            }
+            let value = arguments[index + 1]
+            switch option {
+            case "--host":
+                var address = in_addr()
+                let isIPv4Address = value.withCString {
+                    inet_pton(AF_INET, $0, &address)
+                } == 1
+                guard isIPv4Address else {
+                    throw ConfigurationError.invalidHost
+                }
+                configuration.host = value
+            case "--port":
+                guard let port = UInt16(value), port > 0 else {
+                    throw ConfigurationError.invalidPort(value)
+                }
+                configuration.port = port
+            default:
+                throw ConfigurationError.unknownOption(option)
+            }
+            index += 2
+        }
+        return configuration
+    }
+
+    enum ConfigurationError: Error, CustomStringConvertible {
+        case missingValue(String)
+        case invalidHost
+        case invalidPort(String)
+        case unknownOption(String)
+
+        var description: String {
+            switch self {
+            case .missingValue(let option):
+                return "Missing value for \(option)"
+            case .invalidHost:
+                return "Host must be a non-empty IPv4 address"
+            case .invalidPort(let value):
+                return "Port must be an integer from 1 to 65535 (got '\(value)')"
+            case .unknownOption(let option):
+                return "Unknown option '\(option)'"
+            }
+        }
+    }
+}
+
 func debugPrint(_ msg: String) {
     fputs("[\(Date().formatted(date: .omitted, time: .standard))] \(msg)\n", stderr)
     fflush(stderr)
@@ -14,7 +71,7 @@ extension Double {
 }
 
 /// OpenHeadMouse AirPods Bridge: macOS app that streams CMHeadphoneMotionManager
-/// quaternions as JSON over UDP to 127.0.0.1:5005.
+/// quaternions as JSON over UDP to the configured IPv4 host and port.
 ///
 /// HARDWARE REQUIREMENTS:
 ///   ⚠️  Only AirPods Pro (2nd gen) or AirPods Max support motion tracking
@@ -23,6 +80,7 @@ extension Double {
 /// Usage:
 ///   1. Build: swift build
 ///   2. Run: ./.build/debug/OpenHeadMouseAirPodsHelper
+///      Optional arguments: --host <IPv4-address> --port <1-65535>
 ///   3. Grant Microphone permission when prompted
 ///   4. Wear compatible AirPods and start head tracking
 ///   5. Python receiver will connect and begin receiving quaternion packets
@@ -30,9 +88,13 @@ extension Double {
 @available(macOS 14.0, *)
 class HeadMotionManager {
     private let motionManager = CMHeadphoneMotionManager()
-    private let udpSocket = UDPSocket(host: "127.0.0.1", port: 5005)
+    private let udpSocket: UDPSocket
     private var packetCount = 0
     var onStatusChanged: ((String) -> Void)?
+
+    init(configuration: HelperConfiguration) {
+        udpSocket = UDPSocket(host: configuration.host, port: configuration.port)
+    }
 
     func start() throws {
         debugPrint("HeadMotionManager: starting headphone motion updates...")
@@ -129,6 +191,7 @@ class UDPSocket {
         guard socket != -1 else { return }
 
         var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
         addr.sin_addr.s_addr = inet_addr(host)
@@ -155,9 +218,15 @@ class UDPSocket {
 
 @available(macOS 14.0, *)
 class AppDelegate: NSObject, NSApplicationDelegate {
+    private let configuration: HelperConfiguration
     private var motionManager: HeadMotionManager?
     private var statusItem: NSStatusItem?
     private var statusMenuItem: NSMenuItem?
+
+    init(configuration: HelperConfiguration) {
+        self.configuration = configuration
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_: Notification) {
         debugPrint("AppDelegate: applicationDidFinishLaunching called")
@@ -192,7 +261,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Start motion manager
         debugPrint("AppDelegate: creating HeadMotionManager...")
-        motionManager = HeadMotionManager()
+        motionManager = HeadMotionManager(configuration: configuration)
         motionManager?.onStatusChanged = { [weak self] status in
             self?.statusMenuItem?.title = "Status: \(status)"
         }
@@ -202,7 +271,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             try motionManager?.start()
             statusMenuItem.title = "Status: Waiting for AirPods"
             debugPrint("AppDelegate: motionManager started successfully")
-            print("✓ AirPods CoreMotion helper started, streaming to 127.0.0.1:5005")
+            print("✓ AirPods CoreMotion helper started, streaming to \(configuration.host):\(configuration.port)")
         } catch {
             statusMenuItem.title = "Status: ✗ Error"
             debugPrint("AppDelegate: motionManager failed: \(error)")
@@ -227,10 +296,20 @@ struct AirPodsHelper {
     static func main() {
         debugPrint("AirPodsHelper.main() starting...")
 
+        let configuration: HelperConfiguration
+        do {
+            configuration = try HelperConfiguration.parse(
+                Array(CommandLine.arguments.dropFirst())
+            )
+        } catch {
+            fputs("Invalid AirPods helper arguments: \(error)\n", stderr)
+            return
+        }
+
         let app = NSApplication.shared
         debugPrint("NSApplication created")
 
-        let delegate = AppDelegate()
+        let delegate = AppDelegate(configuration: configuration)
         app.delegate = delegate
         debugPrint("AppDelegate set")
 

@@ -26,6 +26,7 @@ licence files and refuse to overwrite an unrecognised nonempty directory.
 | OpenSeeFace (ported head-pose code and ONNX models) | BSD-2-Clause; see below |
 | pynput | LGPL-3.0 |
 | ximu3 | MIT |
+| Sony Head Tracker v2.2.0 (native Windows x64/macOS universal bridge) | MIT, copyright 2026 Nicholas Slattery and the Sony Head Tracker contributors; bundled licence in `native/sony-head-tracker/2.2.0/LICENSE` and exported release notices |
 | PyOpenGL | BSD-style licence |
 | IPython, ipywidgets (notebook only) | BSD-style licences |
 | PyInstaller (build tool) | GPL with a bootloader exception; see its distribution terms |

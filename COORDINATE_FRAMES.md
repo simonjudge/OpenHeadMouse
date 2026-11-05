@@ -57,13 +57,26 @@ to `R_head = M · R_device · Mᵀ`.
 |---|---|---|---|
 | UniFace (MediaPipe face model) | X subject's left, Y up, Z out of face | `[0,0,1]; [1,0,0]; [0,1,0]` | via matrix `P·R_mp·Pᵀ` |
 | AirPods (CMHeadphoneMotionManager) | X right, Y forward, Z up | `[0,1,0]; [−1,0,0]; [0,0,1]` | `[w, y, −x, z]` |
+| Sony (bridge configured XYZ, no inversions) | X right, Y forward, Z up | `[0,1,0]; [−1,0,0]; [0,0,1]` | `[w, y, −x, z]` |
 | xIMU3 (AHRS NED, axes aligned to FRD) | X forward, Y right, Z down | `[1,0,0]; [0,−1,0]; [0,0,−1]` | `[w, x, −y, −z]` |
 
 Code: `providers/uniface_provider.py` (`_CAMERA_TO_HEAD_FRAME`),
 `providers/airpods/airpods_provider.py` (`_AIRPODS_TO_HEAD_FRAME`),
+`providers/sony_provider.py` (`_SONY_TO_HEAD_FRAME`),
 `providers/ximu3_provider.py` (`_XIMU3_TO_HEAD_FRAME`). The session viewer's face mesh is in
 MediaPipe coordinates, so it maps canonical rotations back with the UniFace matrix
 (`session_viewer/mesh_visualizer.py`).
+
+### Sony bridge alignment
+
+Sony Head Tracker must use `--axis-map XYZ --invert none`, leaving its Android
+headphone axes unremapped. Its default YXZ order with X/Z inverted is **not**
+this frame and must not be used with the adapter. JSON v2 does not include the
+axis configuration; OpenHeadMouse cannot verify it automatically. The provider
+converts the scalar-first quaternion directly rather than reconstructing it from
+the bridge's differently defined Euler angles. See the [setup guide](README.md#sony-headphone-provider).
+Synthetic tests cover isolated motions and combined rotations; physical Sony
+headphone validation remains required.
 
 ### OpenSeeFace camera alignment
 
@@ -145,6 +158,7 @@ python test_orientation.py --provider uniface --duration 20
 python test_orientation.py --provider openseeface --duration 20
 python test_orientation.py --provider airpods --duration 20
 python test_orientation.py --provider ximu3   --duration 20
+python test_orientation.py --provider sony    --duration 20
 ```
 
 Expected: turn LEFT → yaw positive; look UP → pitch positive; tilt LEFT ear down → roll positive.

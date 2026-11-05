@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
     from dwell_click.service import DwellClickService
 
@@ -76,6 +76,9 @@ def main(argv: list[str] | None = None) -> int:
         tray.set_settings(updated)
 
     tray = DwellTray(service, settings, on_settings_changed=apply_settings)
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        app.setQuitOnLastWindowClosed(True)
+        tray.show_settings()
     app.aboutToQuit.connect(service.stop)
     app.aboutToQuit.connect(tray.close)
     return app.exec()

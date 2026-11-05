@@ -7,6 +7,8 @@ import math
 
 
 Point = tuple[float, float]
+DEFAULT_SNAP_RADIUS_PX = 48
+SNAP_BACKENDS = ("uia", "msaa")
 
 
 @dataclass(frozen=True)
@@ -17,6 +19,9 @@ class DwellSettings:
     ring_color: str = "#ff0000"
     ring_diameter_px: int = 40
     ring_thickness_px: int = 4
+    snap_enabled: bool = False
+    snap_radius_px: int = DEFAULT_SNAP_RADIUS_PX
+    snap_backend: str = "uia"
     zoom_enabled: bool = False
     zoom_width_px: int = 300
     zoom_height_px: int = 200
@@ -37,6 +42,14 @@ class DwellSettings:
             raise ValueError("ring_diameter_px must be greater than zero")
         if self.ring_thickness_px <= 0:
             raise ValueError("ring_thickness_px must be greater than zero")
+        if (
+            not isinstance(self.snap_radius_px, int)
+            or isinstance(self.snap_radius_px, bool)
+            or not 8 <= self.snap_radius_px <= 500
+        ):
+            raise ValueError("snap_radius_px must be an integer between 8 and 500")
+        if self.snap_backend not in SNAP_BACKENDS:
+            raise ValueError(f"snap_backend must be one of {', '.join(SNAP_BACKENDS)}")
         for name in ("zoom_width_px", "zoom_height_px"):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
@@ -72,6 +85,9 @@ class DwellSettings:
             ring_color=str(config.get("ring_color", defaults.ring_color)),
             ring_diameter_px=int(config.get("ring_diameter_px", defaults.ring_diameter_px)),
             ring_thickness_px=int(config.get("ring_thickness_px", defaults.ring_thickness_px)),
+            snap_enabled=bool(config.get("snap_enabled", defaults.snap_enabled)),
+            snap_radius_px=int(config.get("snap_radius_px", defaults.snap_radius_px)),
+            snap_backend=str(config.get("snap_backend", defaults.snap_backend)),
             zoom_enabled=bool(config.get("zoom_enabled", defaults.zoom_enabled)),
             zoom_width_px=int(config.get("zoom_width_px", defaults.zoom_width_px)),
             zoom_height_px=int(config.get("zoom_height_px", defaults.zoom_height_px)),
@@ -90,6 +106,9 @@ class DwellSettings:
             "ring_color": self.ring_color,
             "ring_diameter_px": self.ring_diameter_px,
             "ring_thickness_px": self.ring_thickness_px,
+            "snap_enabled": self.snap_enabled,
+            "snap_radius_px": self.snap_radius_px,
+            "snap_backend": self.snap_backend,
             "zoom_enabled": self.zoom_enabled,
             "zoom_width_px": self.zoom_width_px,
             "zoom_height_px": self.zoom_height_px,

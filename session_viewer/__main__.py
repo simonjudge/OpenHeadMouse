@@ -16,10 +16,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--smoke-test", action="store_true", help="Create the viewer and exit without opening recordings")
     args = parser.parse_args(argv)
 
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 
     from session_viewer.session_viewer import SessionVisualizerWindow
 
+    if QApplication.instance() is None:
+        # pyqtgraph caches shader programs across viewer windows.
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication.instance() or QApplication(sys.argv[:1])
     window = SessionVisualizerWindow()
     if args.smoke_test:

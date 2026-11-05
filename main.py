@@ -49,8 +49,9 @@ def _default_config_path() -> Path:
 
 CONFIG_PATH = _default_config_path()
 AIRPODS_HELPER_DIR = Path(__file__).parent / "providers" / "airpods" / "swift_src"
-AIRPODS_HELPER_PID_PATH = AIRPODS_HELPER_DIR / ".build" / "airpods-helper.pid"
-AIRPODS_HELPER_LOG_PATH = AIRPODS_HELPER_DIR / ".build" / "airpods-helper.log"
+AIRPODS_HELPER_STATE_DIR = Path.home() / "Library" / "Caches" / "OpenHeadMouse" / "airpods"
+AIRPODS_HELPER_PID_PATH = AIRPODS_HELPER_STATE_DIR / "airpods-helper.pid"
+AIRPODS_HELPER_LOG_PATH = AIRPODS_HELPER_STATE_DIR / "airpods-helper.log"
 
 
 def _windows_monitor_geometry(window_id: int | None = None) -> tuple[int, int, int, int] | None:
@@ -117,6 +118,14 @@ def _screen_geometry(screen, window_id: int | None = None) -> tuple[int, int, in
         return native_geometry
 
     geometry = screen.geometry()
+    if sys.platform.startswith("linux"):
+        ratio = screen.devicePixelRatio()
+        return (
+            round(geometry.width() * ratio),
+            round(geometry.height() * ratio),
+            round(geometry.left() * ratio),
+            round(geometry.top() * ratio),
+        )
     return geometry.width(), geometry.height(), geometry.left(), geometry.top()
 
 
@@ -208,6 +217,16 @@ def make_provider(name: str, config: dict):
             udp_host=provider_config.get("udp_host", "127.0.0.1"),
             udp_port=provider_config.get("udp_port", 5005),
         )
+    if name == "sony":
+        from providers.sony_provider import SonyProvider
+
+        return SonyProvider(
+            udp_host=provider_config.get("udp_host", "127.0.0.1"),
+            udp_port=provider_config.get("udp_port", 4243),
+            tracking_lost_hold_ms=provider_config.get("tracking_lost_hold_ms", 500.0),
+            auto_start_bridge=provider_config.get("auto_start_bridge", True),
+            startup_timeout_s=provider_config.get("startup_timeout_s", 15.0),
+        )
     if name == "mock":
         from providers.mock_provider import MockProvider
 
@@ -263,6 +282,7 @@ class App:
         self._calibration_buffer: list = []
         self._calibration_warning = None
         self._ximu_waiting_to_start = False
+        self._sony_waiting_to_start = False
         self._ximu_was_streaming = False
         self._ximu_status = None
         self._ximu_wifi_provider = False
@@ -635,8 +655,12 @@ class App:
             self._ximu_waiting_to_start = self._ximu_wifi_provider
             self._ximu_was_streaming = False
             self._ximu_status = None
+            self._sony_waiting_to_start = provider_name == "sony"
             self._provider.start()
-            if self._ximu_waiting_to_start:
+            if self._sony_waiting_to_start:
+                self.headmouse.set_tracking_state(False)
+                self.window.setup_panel.set_connection_status("Connecting to Sony headphones...")
+            elif self._ximu_waiting_to_start:
                 self.headmouse.set_tracking_state(False)
                 self.window.setup_panel.set_connection_status("Connecting to xIMU3...")
             elif self.window.controls.calibration_enabled:
@@ -703,6 +727,7 @@ class App:
                 return None
             self._provider = None
         self._ximu_waiting_to_start = False
+        self._sony_waiting_to_start = False
         self._ximu_was_streaming = False
         self._ximu_status = None
         self._ximu_wifi_provider = False
@@ -825,6 +850,7 @@ class App:
             and self._last_sample is not None
             and not self._calibrating
             and not self._ximu_waiting_to_start
+            and not self._sony_waiting_to_start
             and self.headmouse.state == TrackingState.ACTIVE
         )
 
@@ -929,12 +955,20 @@ class App:
         if sys.platform != "darwin":
             raise RuntimeError("AirPods CoreMotion is only available on macOS")
 
+        provider_config = self._config.get("providers", {}).get("airpods", {})
+        host = provider_config.get("udp_host", "127.0.0.1")
+        if host == "0.0.0.0":
+            host = "127.0.0.1"
+        arguments = shlex.join([
+            "--host", str(host), "--port", str(provider_config.get("udp_port", 5005)),
+        ])
         shell_command = (
-            f"cd {shlex.quote(str(AIRPODS_HELPER_DIR))}; "
-            "mkdir -p .build; "
-            "/usr/bin/xcrun swift main.swift >> .build/airpods-helper.log 2>&1 & "
+            f"cd {shlex.quote(str(AIRPODS_HELPER_PID_PATH.parent))}; "
+            f"/usr/bin/xcrun swift {shlex.quote(str(AIRPODS_HELPER_DIR / 'main.swift'))} "
+            f"{arguments} "
+            f">> {shlex.quote(str(AIRPODS_HELPER_LOG_PATH))} 2>&1 & "
             "helper_pid=$!; "
-            "echo $helper_pid > .build/airpods-helper.pid; "
+            f"echo $helper_pid > {shlex.quote(str(AIRPODS_HELPER_PID_PATH))}; "
             "wait $helper_pid; "
             "exit"
         )
@@ -998,6 +1032,8 @@ class App:
 
         try:
             helper_pid = int(AIRPODS_HELPER_PID_PATH.read_text().strip())
+            if helper_pid <= 0:
+                raise ValueError("AirPods helper reported an invalid process ID")
             os.kill(helper_pid, 0)
         except (ValueError, ProcessLookupError) as e:
             log = AIRPODS_HELPER_LOG_PATH.read_text().strip()
@@ -1137,6 +1173,7 @@ class App:
 
     def _move_pointer(self, x: float, y: float, timestamp: float) -> bool:
         try:
+            x, y = self._dwell_click.snap_pointer_target((x, y))
             self.headmouse.process_target(x, y, timestamp)
         except OSError as exc:
             from PySide6.QtWidgets import QMessageBox
@@ -1569,6 +1606,39 @@ class App:
             if self._provider.state == ProviderState.ERROR:
                 return
 
+        sony = sys.modules.get("providers.sony_provider")
+        if sony is not None and isinstance(self._provider, sony.SonyProvider):
+            self.window.setup_panel.set_connection_status(f"Sony: {self._provider.status_text}")
+            if self._provider.state == ProviderState.ERROR:
+                from PySide6.QtWidgets import QMessageBox
+
+                detail = self._provider.connection_error
+                self._on_stop_requested()
+                if self._provider is None:
+                    self.window.setup_panel.reset_to_stopped()
+                self.window.setup_panel.set_connection_status(
+                    "Sony: connection failed (see diagnostic dialog); retry Start."
+                )
+                QMessageBox.critical(self.window, "Sony Connection Failed", detail)
+                return
+            if self._provider.state != ProviderState.RUNNING:
+                self._last_sample = None
+                self._mouse_was_active = False
+                self._set_cursor_driven(False)
+                if self._calibrating:
+                    self._end_calibration()
+                    self._sony_waiting_to_start = True
+                return
+            if self._sony_waiting_to_start:
+                if not self._provider.has_received_sample:
+                    return
+                self._sony_waiting_to_start = False
+                self.dsp.reset(position=self.headmouse.cursor_position)
+                if self.window.controls.calibration_enabled:
+                    self._begin_calibration()
+                else:
+                    self.headmouse.set_tracking_state(True)
+
         if self._ximu_wifi_provider and self._provider is not None:
             status = self._provider.link_status
             if self._provider.state == ProviderState.ERROR:
@@ -1663,12 +1733,18 @@ def main(argv=None) -> int:
     _initialize_default_config(config_path)
     config = load_config(config_path)
 
+    from PySide6.QtCore import QCoreApplication, Qt
     from PySide6.QtWidgets import QApplication
 
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     qt_app = QApplication(sys.argv[:1])
     if args.smoke_test:
         from gui.headmouse_gui import HeadMouseWindow
 
+        if getattr(sys, "frozen", False) and sys.platform in ("win32", "darwin"):
+            from providers.sony_bridge import ensure_bridge
+
+            ensure_bridge()
         window = HeadMouseWindow(initial_kx=1.0, initial_ky=1.0)
         window.close()
         return 0

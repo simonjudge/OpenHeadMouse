@@ -6,8 +6,9 @@ The project was previously named HeadMouse. Existing recordings and settings rem
 compatible; the saved Fitts start mode is migrated to **Start with OpenHeadMouse**.
 
 OpenHeadMouse translates head movements into cursor control and provides tools for
-recording, replaying and analysing pointing performance. Use a webcam, xIMU3, or
-supported AirPods (macOS only), with optional dwell clicking.
+recording, replaying and analysing pointing performance. Use a webcam, xIMU3,
+supported AirPods (macOS only), or compatible Sony headphones through a managed
+Sony Head Tracker bridge (Windows 11/macOS 14+), with optional dwell clicking.
 
 **First release in preparation: `0.2.0-rc.1`.** This is experimental assistive and
 research software, not a certified medical device or a validated clinical assessment.
@@ -29,11 +30,19 @@ The screenshot shows the application alone with no live tracker or participant d
 | Platform | First-release status | Notes |
 | --- | --- | --- |
 | Windows x64 | Primary release target; clean-machine/hardware sign-off still required | Test Windows 10/11, permissions, DPI and multiple monitors |
-| macOS 14+, Apple Silicon | Experimental | arm64 builds, not universal/Intel; camera, Accessibility and Input Monitoring permissions; AirPods also require Xcode command-line tools and Terminal Motion permission |
+| macOS 14+, Apple Silicon | Experimental | arm64 builds, not universal/Intel; camera, Accessibility and Input Monitoring permissions; zoom also needs Screen Recording; AirPods also require Xcode command-line tools and Terminal Motion permission |
 | Linux x64 | Experimental | Built on Ubuntu 24.04; X11 desktop expected; Wayland global hotkeys/input injection are not supported |
 
 Only claim a tested OS/provider combination after recording its result in the
 [release checklist](RELEASE_CHECKLIST.md). Successful packaging is not hardware validation.
+
+Core tracking, calibration, recording, dwell clicking, Fitts tasks and session playback
+are intended for all three platforms, subject to the permissions and runtime dependencies
+above. This does not imply feature parity with unsupported environments: AirPods CoreMotion
+is macOS-only; global pointer control and hotkeys require X11 on Linux; the 3D viewer needs
+a working desktop OpenGL context; Snap to can only detect controls exposed by accessibility
+APIs. Windows elevated/secure desktops and taskbar previews have additional restrictions
+described below. Native hardware and packaged-app checks remain necessary on each OS.
 
 ## Windows quick start
 
@@ -63,7 +72,7 @@ See [coordinate frames](COORDINATE_FRAMES.md) for mounting and movement conventi
 ## Layout
 
 - `core/` — quaternion math, absolute/velocity DSP engine and filters, recorder, OS cursor control
-- `providers/` — input drivers (UniFace/MediaPipe, OpenSeeFace, xIMU3, AirPods)
+- `providers/` — input drivers (UniFace/MediaPipe, OpenSeeFace, xIMU3, AirPods, Sony)
 - `gui/` — PySide6 setup and DSP tuning UI
 - `session_viewer/` — standalone pyqtgraph session viewer (mesh + line-graph playback), opened from the main window's File menu; also replays Fitts sessions, optionally synchronised with a head recording (see below)
 - `colab_session_viewer/` — [Colab notebook viewer](colab_session_viewer/README.md) with one head/cursor playback panel, multiple participants/sessions, pooled summaries and per-participant first-target exclusions
@@ -119,6 +128,96 @@ restart the provider after resetting the sender clock. A socket/bind failure is
 reported as an error, while malformed datagrams are logged and discarded.
 Each provider gets an independent mouse profile, initially copied from the active
 profile when no saved profile exists.
+
+### Sony headphone provider
+
+The separate `providers/sony_provider.py` adapter implements `BaseProvider` and
+emits the same canonical `ProviderSample` quaternion schema as other inputs.
+It receives **v2 JSON telemetry**, not OpenTrack's binary packets, from
+[Sony Head Tracker](https://github.com/NicholasSlattery/sony-head-tracker).
+Sony Head Tracker **v2.2.0** is a pinned native dependency, not a pip package.
+Source setup (`python tools/prepare_release.py --assets`) downloads and verifies
+the platform's release archive, executable and licence checksums. First Sony use
+also installs it if missing (internet required). Windows and macOS full and
+HeadMouse-only executables bundle the bridge and its MIT licence; packaged apps
+never download it at runtime. The verified archive is bundled and extracted on
+use, preventing PyInstaller from rewriting signed/checksummed native bytes.
+Linux has no native Sony acquisition backend.
+
+Upstream reports support for WH/WF-1000XM5, WH/WF-1000XM6, ULT WEAR and LinkBuds S;
+compatibility depends on the headset exposing Android Head Tracker HID, firmware
+and OS Bluetooth support. XM4/XM3 are not supported. The bridge supports Windows
+11 and macOS 14+; Linux hardware acquisition is not provided. These are upstream
+compatibility reports, not hardware validation of this adapter.
+
+1. Pair and connect your headphones. Close any independently running Sony Head
+   Tracker instance so it does not compete for the sensor. On macOS, allow Input
+   Monitoring for the bridge when prompted.
+2. Select **Sony headphones (Sony Head Tracker)** and click **Start**, initially
+   with mouse control and dwell clicking off. OpenHeadMouse launches the bridge
+   with XYZ axes, no inversions and smoothing `1`, then waits for a valid v2 JSON
+   sample before activating tracking or starting calibration. Stop terminates
+   only the bridge process launched by this run.
+3. If the bridge exits or no valid sample arrives within **15 seconds** after
+   launch, startup fails with a connection dialog, diagnostic details and retry
+   guidance; Start becomes available again. Bluetooth audio pairing alone does
+   not guarantee the Android Head Tracker sensor is available.
+   **On Windows 11, particularly after a fresh boot**, upstream recommends opening
+   the native Sony Head Tracker GUI and selecting **Repair Tracker** if the sensor
+   is missing. This requires administrator approval; OpenHeadMouse never performs
+   driver repair or elevation automatically. The source checkout's GUI is
+   `native\sony-head-tracker\2.2.0\sony-head-tracker.exe`; packaged users can use the
+   [upstream application](https://github.com/NicholasSlattery/sony-head-tracker/releases/tag/v2.2.0).
+   Close the GUI after repair, then retry Start.
+4. Check `python test_orientation.py --provider sony --duration 20`:
+   left turn, upward nod and left-ear-down tilt must give positive yaw, pitch
+   and roll. Then use OpenHeadMouse's calibration/recenter controls.
+
+**Externally managed bridge (advanced):** set `auto_start_bridge` to `false` in
+`providers.sony` to retain manual bridge control. Use **XYZ axes with no
+inversions**, not the bridge's YXZ/inverted defaults. Run one instance:
+
+```powershell
+.\sony-head-tracker.exe bridge --port 4242 --axis-map XYZ --invert none --smoothing 1
+```
+
+On macOS:
+
+```bash
+sony-head-tracker-macos bridge --port 4242 --axis-map XYZ --invert none --smoothing 1
+```
+
+Alternatively configure those axes, inversions and smoothing in the native
+bridge GUI. Smoothing `1` avoids double filtering; OpenHeadMouse applies its
+own filter. The JSON stream does not advertise axis settings, so the adapter
+cannot detect a misconfigured bridge.
+
+`providers.sony` in `config.json` accepts `udp_host` (default `127.0.0.1`),
+`udp_port` (default **4243**, the bridge's `--port + 1`),
+`tracking_lost_hold_ms` (default `500`), `auto_start_bridge` (default `true`) and
+`startup_timeout_s` (default `15`, positive finite seconds). The managed bridge
+requires loopback host `127.0.0.1` and JSON port `2..65535`, and automatically uses
+base port `udp_port - 1`. For an external bridge, update the receiver's JSON port
+if you change its base port. Each provider has an independent mouse profile,
+copied from the active profile when none has been saved. Existing user configs
+without a `sony` section use the defaults. In manual mode, Stop closes only the
+receiver, not the external bridge.
+
+**Timing limitation:** the startup log about monotonic receive time is
+informational, not a connection confirmation. JSON v2 contains no capture/device
+timestamp. With this explicit exception to the provider timing contract, `SonyProvider` timestamps
+each datagram immediately after socket receipt using `time.monotonic()`, and
+sets `raw_metadata.timestamp_source` to `host_monotonic_receive`. UDP/OS jitter
+therefore affects velocity estimates; these are not hardware-timed samples.
+Neither `packetsPerSecond` nor `receiveLatencyMs` is used to invent a clock.
+Native timestamps would require an upstream protocol extension.
+
+Malformed/unsupported packets are logged and discarded. Waiting or loss of valid
+samples for the configured interval reports `TRACKING_LOST` without emitting
+held poses; valid packets resume tracking. Bind/socket errors appear in status
+and logs. Keep the stream on loopback: UDP is unauthenticated. Do not recenter or
+change axes in the bridge during an OpenHeadMouse run; stop, configure the
+bridge, then restart and recalibrate to avoid reference-frame jumps.
 
 ## Release editions
 
@@ -297,12 +396,16 @@ or stops dwell clicking, opens the dwell-click settings dialog, and exits standa
 Left-clicking the tray icon opens the settings dialog directly; right-clicking opens its menu.
 The settings dialog also has a **Start/Stop Dwell Clicking** button. It stays open when
 the button is used and follows changes made through the tray or OpenHeadMouse lifecycle.
+On desktops without a system tray, standalone mode opens the settings window instead;
+**Apply** keeps those controls open, and **Close** exits the application. Errors use a dialog
+when tray notifications are unavailable.
 
 **Click Context Menu** is optional and disabled by default. Enable it in the main window's
-dwell settings or the tray settings dialog. A completed dwell opens five icons around
+dwell settings or the tray settings dialog. A completed dwell opens six icons around
 the original click point: **left click** at 135 degrees (upper-left), **zoom** at 90 degrees
 (above), **right click** at 45 degrees (upper-right), **double click** at 225 degrees
-(lower-left), and **pause** at 315 degrees (lower-right). Dwell on an icon to choose it.
+(lower-left), **pause** at 315 degrees (lower-right), and **Snap to** at 270 degrees
+(below). Dwell on an icon to choose it.
 Each icon samples the screen beneath it when the menu opens: dark backgrounds use white
 artwork and a 20%-opacity white backing; light backgrounds use dark artwork and a
 20%-opacity black backing. Rounded corners remain transparent and active choices have a
@@ -338,7 +441,32 @@ register the hover and accept the click.
 | Already-locked zoom icon | Unlock zoom only; no click | Closes |
 | Zoom selected after an automatic click was already sent | Arm zoom for the next target, or lock it on the second selection; never repeat the completed click | Closes |
 | Pause | Cancel the pending click and pause dwell clicking; locks are kept | Closes |
+| Snap to | Toggle cursor snapping to nearby clickable controls; no click | Closes |
 | Dwell outside an unlocked menu | Cancel without clicking | Closes |
+
+**Snap to** is off by default. Use **Start with Snap to enabled** in the main window or
+tray settings dialog to change the startup default. Dwell on its crosshair icon to toggle
+the current state; a blue outline indicates that it is enabled. While dwell clicking is active, the pointer snaps to the
+centre of a nearby enabled control exposed by the application's accessibility API, when its
+centre is within the configured radius (default 48 px; adjustable from 8 to 500 px).
+Move away to leave a target; head-driven movement stays snapped until the head target
+leaves that radius. Snapping does not activate the
+control, and is suspended while paused or using the menu or magnifier. It preserves
+click-button and zoom choices. Stopping dwell clicking or changing settings restores the
+configured startup default.
+On Windows, **Windows method** selects native UI Automation (UIA, the default) or the
+previous MSAA point-lookup implementation. UIA gets the element at each sampled point,
+checks its enabled state and supported action patterns (such as Invoke and Toggle), and
+walks to its control-view ancestors when needed. MSAA uses `AccessibleObjectFromPoint` and
+can also reach some controls exposed through the UIA-to-MSAA bridge. Compare both methods
+for target applications; either can miss controls that do not expose usable accessibility
+information. Increasing the radius only helps with exposed controls and does not discover
+inaccessible ones. The selected method is saved as `snap_backend` under `ui.dwell_click`.
+macOS requires Accessibility permission for OpenHeadMouse or its Python executable.
+Linux requires an X11 session, AT-SPI 2 (`libatspi2.0-0`) and desktop accessibility enabled;
+snapping is restricted to the active window to avoid covered background controls.
+Custom-drawn controls that do not expose accessibility actions cannot be detected.
+Accessibility queries run outside the UI thread; failures turn snapping off and report an error.
 
 **Pause** stops all dwell clicking and shows a floating **Resume** (play) button in the
 bottom-right corner of the screen. Dwell on it to resume hands-free, or use **Start Dwell
@@ -363,8 +491,9 @@ For example, unlocking zoom in the menu leaves the checkbox checked; restarting 
 the configured zoom default. Stopping or changing settings clears remembered selections and
 L/R locks, and reapplies that zoom default.
 
-OpenHeadMouse persists `context_menu_enabled`, `context_menu_distance_px`, `context_menu_size_px`,
-and `context_menu_lock_time_s` under `ui.dwell_click`. Standalone mode also accepts
+OpenHeadMouse persists `snap_enabled`, `snap_radius_px`, `snap_backend`, `context_menu_enabled`,
+`context_menu_distance_px`, `context_menu_size_px`, and `context_menu_lock_time_s` under
+`ui.dwell_click`. Standalone mode also accepts
 `--context-menu --menu-distance 60 --menu-size 54 --menu-lock-time 3`.
 After zoom opens, move away from the icon-selection position before dwelling on the image;
 remaining still will not complete or cancel the precise click.
@@ -480,8 +609,9 @@ head session still can't be saved when tracking stops, you are asked for another
 is only discarded if you confirm that.
 
 The Fitts window run standalone (`python fitts_law/fitts_test.py`) does the same checks itself
-and saves the chosen folder to `config.json` and to its own `fitts_law/fitts_settings.json`, so
-it is only asked once either way.
+and saves the chosen folder to `config.json` and its own settings file, so it is only asked
+once either way. Source runs use `fitts_law/fitts_settings.json`; packaged editions use
+per-user application data so settings survive upgrades and work in read-only installations.
 
 ### Session files
 
@@ -792,7 +922,9 @@ node --test .\colab_session_viewer\viewer.test.cjs
 
 Tests configure offscreen Qt by default and have a per-test timeout. On Linux, use
 `QT_QPA_PLATFORM=xcb xvfb-run -a python -m pytest -q` so OpenGL widgets have a
-supported X display/context. CI runs these checks
+supported X display/context. GUI launchers enable shared OpenGL contexts before creating
+the application, so closing and reopening viewers does not invalidate cached shaders.
+CI runs these checks
 before packaging. The publication check is pattern-based and not an exhaustive audit.
 
 Camera, xIMU3, AirPods, global hotkey, and native Swift helper behavior require the
@@ -801,9 +933,12 @@ without those devices.
 
 Press **Esc** to pause or resume cursor tracking.
 
-On macOS, the global toggle uses `Cmd+Option+M` (`<cmd>+<alt>+m`). Grant Accessibility
-and Input Monitoring permission to the executable that actually runs the app (usually
+The default global toggle is **Esc** on macOS too; `hotkeys.toggle_tracking` can override it.
+Grant Accessibility and Input Monitoring permission to the executable that actually runs the app (usually
 the project virtual-environment Python, not just VS Code), then restart OpenHeadMouse.
+Zoom additionally needs **Screen Recording** permission; without it, zoom reports an error
+instead of allowing a click against an incomplete capture. Menu icons still work, using the
+application colour scheme rather than sampling other windows.
 If registration is denied, the main window displays the reason instead of silently
 claiming the hotkey is active.
 

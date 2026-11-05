@@ -8,6 +8,8 @@ from PySide6.QtCore import QPoint, QRect, QRectF, Qt
 from PySide6.QtGui import QGuiApplication, QPainter, QPixmap
 from PySide6.QtWidgets import QWidget
 
+from core.platform_access import require_screen_capture
+
 from .engine import DwellSettings, Point
 
 
@@ -26,6 +28,7 @@ class DwellZoom(QWidget):
         )
 
     def open_at(self, position: Point, settings: DwellSettings) -> None:
+        require_screen_capture()
         point = QPoint(round(position[0]), round(position[1]))
         screen = QGuiApplication.screenAt(point)
         if screen is None:
