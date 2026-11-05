@@ -1,19 +1,51 @@
 # Colab session viewer
 
+The notebook [session_viewer.ipynb](session_viewer.ipynb) runs locally or in
+Google Colab. This folder reuses the repository's pure-Python recording,
+quaternion, mesh and statistics modules; it is not a standalone single-file
+notebook, so a complete project checkout must be available in either case.
+
+## Running locally
+
+1. Clone the repository (or use your existing checkout).
+2. From the repository root, install the viewer dependencies and a Jupyter
+   front-end into your Python environment:
+
+   ```powershell
+   python -m pip install -r colab_session_viewer\requirements.txt
+   python -m pip install jupyterlab
+   ```
+
+3. Start JupyterLab from the repository root, passing it the notebook path:
+
+   ```powershell
+   python -m jupyter lab colab_session_viewer\session_viewer.ipynb
+   ```
+
+   JupyterLab serves the notebook locally and opens it in your browser. Run the
+   setup, loading and session-viewer cells in order. Alternatively, open
+   [session_viewer.ipynb](session_viewer.ipynb) in VS Code with its built-in
+   notebook support and run the cells there. `npx serve` is not a substitute:
+   it serves static files but cannot execute notebook cells.
+
+Leave `REVISION` and `PROJECT_DIR` in the setup cell unchanged: setup detects
+the project containing the notebook and prefers it over an older nested
+checkout, so nothing is cloned or downloaded except the MediaPipe canonical
+face mesh if it is not already present. The viewer cell reloads its modules and
+prints the loaded source path. If a different checkout was already imported,
+restart the kernel and rerun setup. This keeps the six separate summary tables
+in sync with your local code rather than showing a previous version's combined
+table.
+
+## Running on Google Colab
+
 Open [session_viewer.ipynb](session_viewer.ipynb) in Google Colab and run the
 setup, loading and session-viewer cells. Use the notebook's **File > Open notebook > GitHub**
 option after publishing this folder to a branch, or upload the notebook.
 Set `REVISION` in the setup cell to that published branch/tag. For unpublished
 work, upload the complete changed project to the runtime and set `PROJECT_DIR`
-to its folder. This folder reuses the repository's pure-Python recording,
-quaternion, mesh and statistics modules; it is not a standalone single-file
-notebook.
-
-When running locally, setup prefers the project containing the notebook over
-an older nested checkout. The viewer cell reloads its modules and prints the
-loaded source path. If a different checkout was already imported, restart the
-kernel and rerun setup. This keeps the six separate summary tables in sync
-with your local code rather than showing a previous version's combined table.
+to its folder. Use a CPU runtime; no camera, mouse driver, desktop GUI or GPU
+is needed.
 
 Only the dependencies in [requirements.txt](requirements.txt) are needed.
 Do not install the desktop requirements: no Qt, tracker, camera, mouse control,
