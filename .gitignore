@@ -16,6 +16,7 @@ dist/
 
 # Downloaded ML/mesh assets (fetched automatically or per README instructions)
 models/
+native/
 
 # Swift Package Manager / Xcode build artifacts and per-user IDE state
 .build/

@@ -6,8 +6,9 @@ The project was previously named HeadMouse. Existing recordings and settings rem
 compatible; the saved Fitts start mode is migrated to **Start with OpenHeadMouse**.
 
 OpenHeadMouse translates head movements into cursor control and provides tools for
-recording, replaying and analysing pointing performance. Use a webcam, xIMU3, or
-supported AirPods (macOS only), with optional dwell clicking.
+recording, replaying and analysing pointing performance. Use a webcam, xIMU3,
+supported AirPods (macOS only), or compatible Sony headphones through a managed
+Sony Head Tracker bridge (Windows 11/macOS 14+), with optional dwell clicking.
 
 **First release in preparation: `0.2.0-rc.1`.** This is experimental assistive and
 research software, not a certified medical device or a validated clinical assessment.
@@ -63,7 +64,7 @@ See [coordinate frames](COORDINATE_FRAMES.md) for mounting and movement conventi
 ## Layout
 
 - `core/` — quaternion math, absolute/velocity DSP engine and filters, recorder, OS cursor control
-- `providers/` — input drivers (UniFace/MediaPipe, OpenSeeFace, xIMU3, AirPods)
+- `providers/` — input drivers (UniFace/MediaPipe, OpenSeeFace, xIMU3, AirPods, Sony)
 - `gui/` — PySide6 setup and DSP tuning UI
 - `session_viewer/` — standalone pyqtgraph session viewer (mesh + line-graph playback), opened from the main window's File menu; also replays Fitts sessions, optionally synchronised with a head recording (see below)
 - `colab_session_viewer/` — [Colab notebook viewer](colab_session_viewer/README.md) with one head/cursor playback panel, multiple participants/sessions, pooled summaries and per-participant first-target exclusions
@@ -119,6 +120,96 @@ restart the provider after resetting the sender clock. A socket/bind failure is
 reported as an error, while malformed datagrams are logged and discarded.
 Each provider gets an independent mouse profile, initially copied from the active
 profile when no saved profile exists.
+
+### Sony headphone provider
+
+The separate `providers/sony_provider.py` adapter implements `BaseProvider` and
+emits the same canonical `ProviderSample` quaternion schema as other inputs.
+It receives **v2 JSON telemetry**, not OpenTrack's binary packets, from
+[Sony Head Tracker](https://github.com/NicholasSlattery/sony-head-tracker).
+Sony Head Tracker **v2.2.0** is a pinned native dependency, not a pip package.
+Source setup (`python tools/prepare_release.py --assets`) downloads and verifies
+the platform's release archive, executable and licence checksums. First Sony use
+also installs it if missing (internet required). Windows and macOS full and
+HeadMouse-only executables bundle the bridge and its MIT licence; packaged apps
+never download it at runtime. The verified archive is bundled and extracted on
+use, preventing PyInstaller from rewriting signed/checksummed native bytes.
+Linux has no native Sony acquisition backend.
+
+Upstream reports support for WH/WF-1000XM5, WH/WF-1000XM6, ULT WEAR and LinkBuds S;
+compatibility depends on the headset exposing Android Head Tracker HID, firmware
+and OS Bluetooth support. XM4/XM3 are not supported. The bridge supports Windows
+11 and macOS 14+; Linux hardware acquisition is not provided. These are upstream
+compatibility reports, not hardware validation of this adapter.
+
+1. Pair and connect your headphones. Close any independently running Sony Head
+   Tracker instance so it does not compete for the sensor. On macOS, allow Input
+   Monitoring for the bridge when prompted.
+2. Select **Sony headphones (Sony Head Tracker)** and click **Start**, initially
+   with mouse control and dwell clicking off. OpenHeadMouse launches the bridge
+   with XYZ axes, no inversions and smoothing `1`, then waits for a valid v2 JSON
+   sample before activating tracking or starting calibration. Stop terminates
+   only the bridge process launched by this run.
+3. If the bridge exits or no valid sample arrives within **15 seconds** after
+   launch, startup fails with a connection dialog, diagnostic details and retry
+   guidance; Start becomes available again. Bluetooth audio pairing alone does
+   not guarantee the Android Head Tracker sensor is available.
+   **On Windows 11, particularly after a fresh boot**, upstream recommends opening
+   the native Sony Head Tracker GUI and selecting **Repair Tracker** if the sensor
+   is missing. This requires administrator approval; OpenHeadMouse never performs
+   driver repair or elevation automatically. The source checkout's GUI is
+   `native\sony-head-tracker\2.2.0\sony-head-tracker.exe`; packaged users can use the
+   [upstream application](https://github.com/NicholasSlattery/sony-head-tracker/releases/tag/v2.2.0).
+   Close the GUI after repair, then retry Start.
+4. Check `python test_orientation.py --provider sony --duration 20`:
+   left turn, upward nod and left-ear-down tilt must give positive yaw, pitch
+   and roll. Then use OpenHeadMouse's calibration/recenter controls.
+
+**Externally managed bridge (advanced):** set `auto_start_bridge` to `false` in
+`providers.sony` to retain manual bridge control. Use **XYZ axes with no
+inversions**, not the bridge's YXZ/inverted defaults. Run one instance:
+
+```powershell
+.\sony-head-tracker.exe bridge --port 4242 --axis-map XYZ --invert none --smoothing 1
+```
+
+On macOS:
+
+```bash
+sony-head-tracker-macos bridge --port 4242 --axis-map XYZ --invert none --smoothing 1
+```
+
+Alternatively configure those axes, inversions and smoothing in the native
+bridge GUI. Smoothing `1` avoids double filtering; OpenHeadMouse applies its
+own filter. The JSON stream does not advertise axis settings, so the adapter
+cannot detect a misconfigured bridge.
+
+`providers.sony` in `config.json` accepts `udp_host` (default `127.0.0.1`),
+`udp_port` (default **4243**, the bridge's `--port + 1`),
+`tracking_lost_hold_ms` (default `500`), `auto_start_bridge` (default `true`) and
+`startup_timeout_s` (default `15`, positive finite seconds). The managed bridge
+requires loopback host `127.0.0.1` and JSON port `2..65535`, and automatically uses
+base port `udp_port - 1`. For an external bridge, update the receiver's JSON port
+if you change its base port. Each provider has an independent mouse profile,
+copied from the active profile when none has been saved. Existing user configs
+without a `sony` section use the defaults. In manual mode, Stop closes only the
+receiver, not the external bridge.
+
+**Timing limitation:** the startup log about monotonic receive time is
+informational, not a connection confirmation. JSON v2 contains no capture/device
+timestamp. With this explicit exception to the provider timing contract, `SonyProvider` timestamps
+each datagram immediately after socket receipt using `time.monotonic()`, and
+sets `raw_metadata.timestamp_source` to `host_monotonic_receive`. UDP/OS jitter
+therefore affects velocity estimates; these are not hardware-timed samples.
+Neither `packetsPerSecond` nor `receiveLatencyMs` is used to invent a clock.
+Native timestamps would require an upstream protocol extension.
+
+Malformed/unsupported packets are logged and discarded. Waiting or loss of valid
+samples for the configured interval reports `TRACKING_LOST` without emitting
+held poses; valid packets resume tracking. Bind/socket errors appear in status
+and logs. Keep the stream on loopback: UDP is unauthenticated. Do not recenter or
+change axes in the bridge during an OpenHeadMouse run; stop, configure the
+bridge, then restart and recalibrate to avoid reference-frame jumps.
 
 ## Release editions
 

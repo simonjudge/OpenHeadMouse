@@ -23,6 +23,11 @@ def _axis_angle(axis, angle_deg):
 #   xIMU3 (NED/FRD body):               X forward, Y right, Z down
 #   UniFace (MediaPipe face model):     X subject's left, Y up, Z out of face
 PHYSICAL_MOTIONS = {
+    "sony": {
+        "turn_left": ([0, 0, 1], +1),
+        "look_up": ([1, 0, 0], +1),
+        "left_ear_down": ([0, 1, 0], -1),
+    },
     "airpods": {
         "turn_left": ([0, 0, 1], +1),
         "look_up": ([1, 0, 0], +1),
@@ -58,6 +63,14 @@ def _airpods_to_head(q_raw):
     return np.asarray(provider.output_queue.get_nowait().quaternion)
 
 
+def _sony_to_head(q_raw):
+    from providers.sony_provider import SonyProvider
+
+    provider = SonyProvider()
+    provider._process_packet(json.dumps({"version": 2, "quaternion": q_raw.tolist()}).encode())
+    return provider.output_queue.get_nowait().quaternion
+
+
 def _ximu3_to_head(q_raw):
     pytest.importorskip("ximu3")
     from providers import ximu3_provider
@@ -82,6 +95,7 @@ def _openseeface_to_head(q_model):
 
 
 CONVERTERS = {
+    "sony": _sony_to_head,
     "airpods": _airpods_to_head,
     "ximu3": _ximu3_to_head,
     "uniface": _uniface_to_head,

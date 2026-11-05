@@ -126,6 +126,7 @@ jobs:
                 PYINSTALLER_ARGS+=(
                   --add-data "config.json;."
                   --add-data "models/face_landmarker.task;models"
+                  --add-data "native/sony-head-tracker/archives;native/sony-head-tracker/archives"
                 )
               else
                 PYINSTALLER_ARGS+=(
@@ -134,7 +135,10 @@ jobs:
                 )
               fi
               if [ "$RUNNER_OS" = "macOS" ]; then
-                PYINSTALLER_ARGS+=(--add-data "providers/airpods/swift_src/main.swift:providers/airpods/swift_src")
+                PYINSTALLER_ARGS+=(
+                  --add-data "providers/airpods/swift_src/main.swift:providers/airpods/swift_src"
+                  --add-data "native/sony-head-tracker/archives:native/sony-head-tracker/archives"
+                )
               fi
               PYINSTALLER_ARGS+=(
                 --hidden-import mediapipe.tasks.c

@@ -208,6 +208,16 @@ def make_provider(name: str, config: dict):
             udp_host=provider_config.get("udp_host", "127.0.0.1"),
             udp_port=provider_config.get("udp_port", 5005),
         )
+    if name == "sony":
+        from providers.sony_provider import SonyProvider
+
+        return SonyProvider(
+            udp_host=provider_config.get("udp_host", "127.0.0.1"),
+            udp_port=provider_config.get("udp_port", 4243),
+            tracking_lost_hold_ms=provider_config.get("tracking_lost_hold_ms", 500.0),
+            auto_start_bridge=provider_config.get("auto_start_bridge", True),
+            startup_timeout_s=provider_config.get("startup_timeout_s", 15.0),
+        )
     if name == "mock":
         from providers.mock_provider import MockProvider
 
@@ -263,6 +273,7 @@ class App:
         self._calibration_buffer: list = []
         self._calibration_warning = None
         self._ximu_waiting_to_start = False
+        self._sony_waiting_to_start = False
         self._ximu_was_streaming = False
         self._ximu_status = None
         self._ximu_wifi_provider = False
@@ -635,8 +646,12 @@ class App:
             self._ximu_waiting_to_start = self._ximu_wifi_provider
             self._ximu_was_streaming = False
             self._ximu_status = None
+            self._sony_waiting_to_start = provider_name == "sony"
             self._provider.start()
-            if self._ximu_waiting_to_start:
+            if self._sony_waiting_to_start:
+                self.headmouse.set_tracking_state(False)
+                self.window.setup_panel.set_connection_status("Connecting to Sony headphones...")
+            elif self._ximu_waiting_to_start:
                 self.headmouse.set_tracking_state(False)
                 self.window.setup_panel.set_connection_status("Connecting to xIMU3...")
             elif self.window.controls.calibration_enabled:
@@ -703,6 +718,7 @@ class App:
                 return None
             self._provider = None
         self._ximu_waiting_to_start = False
+        self._sony_waiting_to_start = False
         self._ximu_was_streaming = False
         self._ximu_status = None
         self._ximu_wifi_provider = False
@@ -825,6 +841,7 @@ class App:
             and self._last_sample is not None
             and not self._calibrating
             and not self._ximu_waiting_to_start
+            and not self._sony_waiting_to_start
             and self.headmouse.state == TrackingState.ACTIVE
         )
 
@@ -1569,6 +1586,39 @@ class App:
             if self._provider.state == ProviderState.ERROR:
                 return
 
+        sony = sys.modules.get("providers.sony_provider")
+        if sony is not None and isinstance(self._provider, sony.SonyProvider):
+            self.window.setup_panel.set_connection_status(f"Sony: {self._provider.status_text}")
+            if self._provider.state == ProviderState.ERROR:
+                from PySide6.QtWidgets import QMessageBox
+
+                detail = self._provider.connection_error
+                self._on_stop_requested()
+                if self._provider is None:
+                    self.window.setup_panel.reset_to_stopped()
+                self.window.setup_panel.set_connection_status(
+                    "Sony: connection failed (see diagnostic dialog); retry Start."
+                )
+                QMessageBox.critical(self.window, "Sony Connection Failed", detail)
+                return
+            if self._provider.state != ProviderState.RUNNING:
+                self._last_sample = None
+                self._mouse_was_active = False
+                self._set_cursor_driven(False)
+                if self._calibrating:
+                    self._end_calibration()
+                    self._sony_waiting_to_start = True
+                return
+            if self._sony_waiting_to_start:
+                if not self._provider.has_received_sample:
+                    return
+                self._sony_waiting_to_start = False
+                self.dsp.reset(position=self.headmouse.cursor_position)
+                if self.window.controls.calibration_enabled:
+                    self._begin_calibration()
+                else:
+                    self.headmouse.set_tracking_state(True)
+
         if self._ximu_wifi_provider and self._provider is not None:
             status = self._provider.link_status
             if self._provider.state == ProviderState.ERROR:
@@ -1669,6 +1719,10 @@ def main(argv=None) -> int:
     if args.smoke_test:
         from gui.headmouse_gui import HeadMouseWindow
 
+        if getattr(sys, "frozen", False) and sys.platform in ("win32", "darwin"):
+            from providers.sony_bridge import ensure_bridge
+
+            ensure_bridge()
         window = HeadMouseWindow(initial_kx=1.0, initial_ky=1.0)
         window.close()
         return 0

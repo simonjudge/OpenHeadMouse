@@ -16,6 +16,7 @@ to convert from a device's native axes):
   - OpenSeeFace (UDP webcam): inverse PnP pose, frontal alignment and model-axis conversion
   - xIMU3 (IMU): device configured for NED/FRD body axes, converted in software
   - AirPods (CoreMotion): headphone frame (X right, Y forward, Z up) converted in software
+  - Sony (neutral-axis bridge JSON): X right, Y forward, Z up converted in software
 
 Sign convention for the derived Euler angles (identical for every provider):
     - Yaw   (about +Z): turning the head LEFT is POSITIVE.
