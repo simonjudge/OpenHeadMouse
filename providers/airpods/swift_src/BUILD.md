@@ -45,6 +45,13 @@ From this directory:
 xcrun swift main.swift
 ```
 
+The helper defaults to `127.0.0.1:5005`. To match a custom AirPods provider
+listener, pass `--host <IPv4-address> --port <1-65535>`, for example:
+
+```bash
+xcrun swift main.swift --host 127.0.0.1 --port 5010
+```
+
 Keep Terminal open. Stop with `Control-C` or choose Quit from the headphones
 menu-bar item.
 

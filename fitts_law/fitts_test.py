@@ -24,7 +24,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -530,15 +530,17 @@ class FittsTestWindow(QMainWindow):
 
     def _create_menu(self) -> None:
         open_action = QAction("Open Results...", self)
-        open_action.setShortcut("Ctrl+O")
+        open_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Open))
         open_action.triggered.connect(self._on_open_results)
 
         save_action = QAction("Save Results As...", self)
-        save_action.setShortcut("Ctrl+S")
+        save_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Save))
         save_action.triggered.connect(self._on_save_results)
 
         self._sync_action = QAction("Open Synchronised Playback...", self)
-        self._sync_action.setShortcut("Ctrl+Shift+O")
+        self._sync_action.setShortcut(
+            QKeySequence("Meta+Shift+O" if sys.platform == "darwin" else "Ctrl+Shift+O")
+        )
         self._sync_action.triggered.connect(self._on_open_synchronised)
 
         file_menu = self.menuBar().addMenu("File")
@@ -1502,6 +1504,8 @@ class FittsTestWindow(QMainWindow):
 def launch_fitts_test() -> FittsTestWindow:
     from PySide6.QtWidgets import QApplication
 
+    if QApplication.instance() is None:
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication.instance() or QApplication(sys.argv[:1])
     window = FittsTestWindow()
     window.show()

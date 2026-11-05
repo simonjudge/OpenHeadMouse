@@ -49,8 +49,9 @@ def _default_config_path() -> Path:
 
 CONFIG_PATH = _default_config_path()
 AIRPODS_HELPER_DIR = Path(__file__).parent / "providers" / "airpods" / "swift_src"
-AIRPODS_HELPER_PID_PATH = AIRPODS_HELPER_DIR / ".build" / "airpods-helper.pid"
-AIRPODS_HELPER_LOG_PATH = AIRPODS_HELPER_DIR / ".build" / "airpods-helper.log"
+AIRPODS_HELPER_STATE_DIR = Path.home() / "Library" / "Caches" / "OpenHeadMouse" / "airpods"
+AIRPODS_HELPER_PID_PATH = AIRPODS_HELPER_STATE_DIR / "airpods-helper.pid"
+AIRPODS_HELPER_LOG_PATH = AIRPODS_HELPER_STATE_DIR / "airpods-helper.log"
 
 
 def _windows_monitor_geometry(window_id: int | None = None) -> tuple[int, int, int, int] | None:
@@ -117,6 +118,14 @@ def _screen_geometry(screen, window_id: int | None = None) -> tuple[int, int, in
         return native_geometry
 
     geometry = screen.geometry()
+    if sys.platform.startswith("linux"):
+        ratio = screen.devicePixelRatio()
+        return (
+            round(geometry.width() * ratio),
+            round(geometry.height() * ratio),
+            round(geometry.left() * ratio),
+            round(geometry.top() * ratio),
+        )
     return geometry.width(), geometry.height(), geometry.left(), geometry.top()
 
 
@@ -946,12 +955,20 @@ class App:
         if sys.platform != "darwin":
             raise RuntimeError("AirPods CoreMotion is only available on macOS")
 
+        provider_config = self._config.get("providers", {}).get("airpods", {})
+        host = provider_config.get("udp_host", "127.0.0.1")
+        if host == "0.0.0.0":
+            host = "127.0.0.1"
+        arguments = shlex.join([
+            "--host", str(host), "--port", str(provider_config.get("udp_port", 5005)),
+        ])
         shell_command = (
-            f"cd {shlex.quote(str(AIRPODS_HELPER_DIR))}; "
-            "mkdir -p .build; "
-            "/usr/bin/xcrun swift main.swift >> .build/airpods-helper.log 2>&1 & "
+            f"cd {shlex.quote(str(AIRPODS_HELPER_PID_PATH.parent))}; "
+            f"/usr/bin/xcrun swift {shlex.quote(str(AIRPODS_HELPER_DIR / 'main.swift'))} "
+            f"{arguments} "
+            f">> {shlex.quote(str(AIRPODS_HELPER_LOG_PATH))} 2>&1 & "
             "helper_pid=$!; "
-            "echo $helper_pid > .build/airpods-helper.pid; "
+            f"echo $helper_pid > {shlex.quote(str(AIRPODS_HELPER_PID_PATH))}; "
             "wait $helper_pid; "
             "exit"
         )
@@ -1015,6 +1032,8 @@ class App:
 
         try:
             helper_pid = int(AIRPODS_HELPER_PID_PATH.read_text().strip())
+            if helper_pid <= 0:
+                raise ValueError("AirPods helper reported an invalid process ID")
             os.kill(helper_pid, 0)
         except (ValueError, ProcessLookupError) as e:
             log = AIRPODS_HELPER_LOG_PATH.read_text().strip()
@@ -1154,6 +1173,7 @@ class App:
 
     def _move_pointer(self, x: float, y: float, timestamp: float) -> bool:
         try:
+            x, y = self._dwell_click.snap_pointer_target((x, y))
             self.headmouse.process_target(x, y, timestamp)
         except OSError as exc:
             from PySide6.QtWidgets import QMessageBox
@@ -1713,8 +1733,10 @@ def main(argv=None) -> int:
     _initialize_default_config(config_path)
     config = load_config(config_path)
 
+    from PySide6.QtCore import QCoreApplication, Qt
     from PySide6.QtWidgets import QApplication
 
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     qt_app = QApplication(sys.argv[:1])
     if args.smoke_test:
         from gui.headmouse_gui import HeadMouseWindow

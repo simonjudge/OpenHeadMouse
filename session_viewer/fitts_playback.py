@@ -29,7 +29,7 @@ if str(project_root) not in sys.path:
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QAction, QBrush, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QAction, QBrush, QColor, QKeySequence, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QDoubleSpinBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QMainWindow,
     QMessageBox, QPushButton, QSpinBox, QToolBar, QVBoxLayout, QWidget,
@@ -243,7 +243,7 @@ class FittsPlaybackWindow(QMainWindow):
 
     def _create_ui(self) -> None:
         open_action = QAction("Open Fitts Session...", self)
-        open_action.setShortcut("Ctrl+O")
+        open_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Open))
         open_action.triggered.connect(self._on_open_fitts_session)
         file_menu = self.menuBar().addMenu("File")
         file_menu.addAction(open_action)
@@ -723,6 +723,8 @@ class FittsPlaybackWindow(QMainWindow):
 if __name__ == "__main__":
     from PySide6.QtWidgets import QApplication
 
+    if QApplication.instance() is None:
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication.instance() or QApplication(sys.argv)
     window = FittsPlaybackWindow()
     window.show()

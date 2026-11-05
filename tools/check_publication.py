@@ -20,6 +20,10 @@ PATTERNS = {
 }
 
 
+def _decode_git_output(output: bytes) -> str:
+    return output.decode("utf-8", errors="surrogateescape")
+
+
 def findings(content: bytes, name: str) -> list[str]:
     if b"\0" in content:
         return []
@@ -40,8 +44,8 @@ def findings(content: bytes, name: str) -> list[str]:
 def check(root: Path, history: bool = False) -> list[dict[str, str]]:
     results = []
     if history:
-        objects = subprocess.check_output(
-            ["git", "rev-list", "--objects", "--all"], cwd=root, text=True
+        objects = _decode_git_output(
+            subprocess.check_output(["git", "rev-list", "--objects", "--all"], cwd=root)
         ).splitlines()
         process = subprocess.Popen(
             ["git", "cat-file", "--batch"], cwd=root, stdin=subprocess.PIPE,
@@ -65,10 +69,10 @@ def check(root: Path, history: bool = False) -> list[dict[str, str]]:
             process.stdout.close()
             process.wait()
     else:
-        names = subprocess.check_output(
+        names = _decode_git_output(subprocess.check_output(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
             cwd=root,
-        ).decode().split("\0")
+        )).split("\0")
         for name in sorted(set(filter(None, names))):
             path = root / name
             if path.is_file():

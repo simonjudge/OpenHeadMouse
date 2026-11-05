@@ -9,6 +9,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QToolButton
 
+from core.platform_access import require_screen_capture
+
 from .engine import Point
 
 
@@ -29,6 +31,13 @@ def _icon(choice: str, size: int, dark: bool = False) -> QIcon:
     elif choice == "pause":
         painter.fillRect(8, 5, 4, 18, ink)
         painter.fillRect(16, 5, 4, 18, ink)
+    elif choice == "snap":
+        painter.drawRoundedRect(7, 7, 14, 14, 3, 3)
+        painter.setPen(QPen(accent, 2))
+        painter.drawLine(14, 2, 14, 10)
+        painter.drawLine(14, 18, 14, 26)
+        painter.drawLine(2, 14, 10, 14)
+        painter.drawLine(18, 14, 26, 14)
     elif choice == "resume":
         painter.setBrush(ink)
         painter.drawPolygon(QPolygonF([QPointF(9, 5), QPointF(23, 14), QPointF(9, 23)]))
@@ -81,7 +90,7 @@ def _paint(button: QToolButton, choice: str, size: int, dark: bool) -> None:
 
 
 # Angles (degrees anticlockwise from the pointer's right) for each menu choice.
-MENU_ANGLES = {"left": 135, "zoom": 90, "right": 45, "double": 225, "pause": 315}
+MENU_ANGLES = {"left": 135, "zoom": 90, "right": 45, "double": 225, "pause": 315, "snap": 270}
 # Room left for taskbar window previews (thumbnail plus title) next to the taskbar.
 TASKBAR_PREVIEW_CLEARANCE_PX = 260
 
@@ -98,8 +107,10 @@ class DwellContextMenu:
             ("double", "Double click. Choose again at the next target to lock; choose while locked to unlock."),
             ("pause", "Pause dwell clicking without clicking. Dwell on the Resume button in the "
                       "screen's bottom-right corner, or use Start in the tray menu, to resume."),
+            ("snap", "Snap to nearby clickable controls. Choose again to turn off. "
+                     "Does not click; requires operating-system accessibility support."),
         ):
-            self.buttons[choice] = _make_button(choice, help_text)
+            self.buttons[choice] = _make_button("Snap to" if choice == "snap" else choice, help_text)
 
     @staticmethod
     def _clear_of_taskbar_previews(position: Point, screen) -> QRect:
@@ -126,23 +137,24 @@ class DwellContextMenu:
 
     def show_at(
         self, position: Point, distance: int, locked: str | None, zoom: bool, size: int = 54,
+        snap: bool = False,
     ) -> None:
         screen = QGuiApplication.screenAt(QPoint(round(position[0]), round(position[1])))
         if screen is None:
             raise RuntimeError("Cannot show click menu: the pointer is not on a screen.")
         bounds = self._clear_of_taskbar_previews(position, screen)
-        # Icons span (1 + sin 45°) * distance + size vertically and 2 * cos 45° * distance + size
+        # Icons span 2 * distance + size vertically and 2 * cos 45° * distance + size
         # horizontally, with distance >= size * sqrt(2); keep a pixel spare for rounding.
         size = max(1, min(
             size,
             (bounds.width() - 2) // 3,
-            math.floor((bounds.height() - 2) / (2 + math.sqrt(2))),
+            math.floor((bounds.height() - 2) / (1 + 2 * math.sqrt(2))),
         ))
         # Adjacent square targets must not overlap, even with larger icons.
         distance = min(
             max(distance, math.ceil(size * math.sqrt(2))),
             math.floor((bounds.width() - size) / math.sqrt(2)),
-            math.floor((bounds.height() - size) / (1 + math.sqrt(0.5))),
+            math.floor((bounds.height() - size) / 2),
         )
         rects = {}
         for choice in self.buttons:
@@ -166,10 +178,15 @@ class DwellContextMenu:
             button.move(geometry.topLeft())
             button.show()
             button.raise_()
-        self.highlight(locked, zoom)
+        self.highlight(locked, zoom, snap)
 
     @staticmethod
     def _is_dark_background(screen, geometry: QRect) -> bool:
+        try:
+            require_screen_capture()
+        except RuntimeError as exc:
+            logging.getLogger(__name__).warning("%s Using the application colour scheme.", exc)
+            return QGuiApplication.palette().window().color().lightnessF() < 0.5
         origin = screen.geometry().topLeft()
         image = screen.grabWindow(
             0, geometry.x() - origin.x(), geometry.y() - origin.y(),
@@ -189,9 +206,9 @@ class DwellContextMenu:
                 brightness += 0.2126 * color.redF() + 0.7152 * color.greenF() + 0.0722 * color.blueF()
         return brightness / (image.width() * image.height()) < 0.5
 
-    def highlight(self, locked: str | None, zoom: bool) -> None:
+    def highlight(self, locked: str | None, zoom: bool, snap: bool = False) -> None:
         for choice, button in self.buttons.items():
-            active = choice == locked or (choice == "zoom" and zoom)
+            active = choice == locked or (choice == "zoom" and zoom) or (choice == "snap" and snap)
             _style(button, self._dark_backgrounds[choice], active)
 
     def choice_at(self, position: Point) -> str | None:

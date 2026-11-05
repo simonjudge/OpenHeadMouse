@@ -18,6 +18,9 @@ dist/
 models/
 native/
 
+# Downloaded native bridge dependencies
+/native/
+
 # Swift Package Manager / Xcode build artifacts and per-user IDE state
 .build/
 xcuserdata/

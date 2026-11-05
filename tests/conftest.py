@@ -26,8 +26,10 @@ def unexpected_critical_dialog(monkeypatch):
 
 @pytest.fixture(scope="session")
 def qt_app():
+    from PySide6.QtCore import QCoreApplication, Qt
     from PySide6.QtWidgets import QApplication
 
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication.instance() or QApplication([])
     yield app
 

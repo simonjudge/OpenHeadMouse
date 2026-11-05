@@ -3,9 +3,27 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import sys
 
-_SETTINGS_PATH = Path(__file__).parent / "fitts_settings.json"
+
+def _settings_path() -> Path:
+    """Keep source-run settings beside the package, but persist frozen builds per user."""
+    if not getattr(sys, "frozen", False):
+        return Path(__file__).parent / "fitts_settings.json"
+
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config").expanduser()
+    return base / "OpenHeadMouse" / "fitts_settings.json"
+
+
+_SETTINGS_PATH = _settings_path()
+
 
 DEFAULT_SETTINGS = {
     "mode": "ISO Standard",
