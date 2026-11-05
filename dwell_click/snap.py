@@ -9,10 +9,10 @@ import os
 import sys
 from contextlib import contextmanager
 
-from .engine import Point
+from .engine import DEFAULT_SNAP_RADIUS_PX, Point, SNAP_BACKENDS
 
 
-SNAP_RADIUS_PX = 48
+SNAP_RADIUS_PX = DEFAULT_SNAP_RADIUS_PX
 
 
 def nearest_target(position: Point, hit_test, radius: float = SNAP_RADIUS_PX) -> Point | None:
@@ -38,9 +38,18 @@ def nearest_target(position: Point, hit_test, radius: float = SNAP_RADIUS_PX) ->
     return min(candidates, key=lambda point: (math.dist(position, point), point)) if candidates else None
 
 
-def find_snap_target(position: Point, radius: float = SNAP_RADIUS_PX) -> Point | None:
+def find_snap_target(
+    position: Point,
+    radius: float = SNAP_RADIUS_PX,
+    backend_name: str = "uia",
+) -> Point | None:
     if sys.platform == "win32":
-        backend = _windows_hit_test
+        if backend_name == "uia":
+            backend = _windows_uia_hit_test
+        elif backend_name == "msaa":
+            backend = _windows_hit_test
+        else:
+            raise ValueError(f"Unknown Windows Snap-to backend: {backend_name}")
     elif sys.platform == "darwin":
         backend = _macos_hit_test
     elif sys.platform.startswith("linux"):
@@ -52,8 +61,176 @@ def find_snap_target(position: Point, radius: float = SNAP_RADIUS_PX) -> Point |
 
 
 @contextmanager
+def _windows_uia_hit_test():
+    """Use UI Automation point lookup and actionable control patterns."""
+    class PointStruct(C.Structure):
+        _fields_ = [("x", C.c_int32), ("y", C.c_int32)]
+
+    class Guid(C.Structure):
+        _fields_ = [
+            ("data1", C.c_uint32), ("data2", C.c_uint16), ("data3", C.c_uint16),
+            ("data4", C.c_ubyte * 8),
+        ]
+
+    class VariantValue(C.Union):
+        _fields_ = [
+            ("boolean", C.c_int16), ("array", C.c_void_p), ("wide", C.c_int64),
+            ("record", C.c_ubyte * 16),
+        ]
+
+    class Variant(C.Structure):
+        _anonymous_ = ("value",)
+        _fields_ = [
+            ("vt", C.c_ushort), ("reserved", C.c_ushort * 3), ("value", VariantValue),
+        ]
+
+    def guid(value: str) -> Guid:
+        import uuid
+
+        raw = uuid.UUID(value).bytes_le
+        return Guid.from_buffer_copy(raw)
+
+    ole32 = C.WinDLL("ole32")
+    oleaut = C.WinDLL("oleaut32")
+    ole32.CoInitializeEx.argtypes = [C.c_void_p, C.c_uint32]
+    ole32.CoInitializeEx.restype = C.c_int32
+    ole32.CoUninitialize.restype = None
+    ole32.CoCreateInstance.argtypes = [
+        C.POINTER(Guid), C.c_void_p, C.c_uint32, C.POINTER(Guid), C.POINTER(C.c_void_p),
+    ]
+    ole32.CoCreateInstance.restype = C.c_int32
+    oleaut.VariantClear.argtypes = [C.POINTER(Variant)]
+    oleaut.VariantClear.restype = C.c_int32
+    oleaut.SafeArrayGetDim.argtypes = [C.c_void_p]
+    oleaut.SafeArrayGetDim.restype = C.c_uint32
+    oleaut.SafeArrayGetLBound.argtypes = [C.c_void_p, C.c_uint32, C.POINTER(C.c_int32)]
+    oleaut.SafeArrayGetLBound.restype = C.c_int32
+    oleaut.SafeArrayGetUBound.argtypes = [C.c_void_p, C.c_uint32, C.POINTER(C.c_int32)]
+    oleaut.SafeArrayGetUBound.restype = C.c_int32
+    oleaut.SafeArrayGetElement.argtypes = [C.c_void_p, C.POINTER(C.c_int32), C.c_void_p]
+    oleaut.SafeArrayGetElement.restype = C.c_int32
+    if ole32.CoInitializeEx(None, 0) < 0:
+        raise RuntimeError("Snap to could not initialise Windows UI Automation.")
+
+    automation = C.c_void_p()
+    walker = C.c_void_p()
+
+    def method(obj, index, result, *args):
+        table = C.cast(obj, C.POINTER(C.POINTER(C.c_void_p))).contents
+        return C.WINFUNCTYPE(result, C.c_void_p, *args)(table[index])
+
+    def release(obj):
+        if obj:
+            method(obj, 2, C.c_ulong)(obj)
+
+    try:
+        clsid = guid("FF48DBA4-60EF-4201-AA87-54103EEF594E")
+        iid = guid("30CBE57D-D9D0-452A-AB13-7AC5AC4825EE")
+        status = ole32.CoCreateInstance(
+            C.byref(clsid), None, 1, C.byref(iid), C.byref(automation),
+        )
+        if status < 0 or not automation:
+            raise RuntimeError("Snap to could not create the Windows UI Automation client.")
+        status = method(automation, 14, C.c_int32, C.POINTER(C.c_void_p))(
+            automation, C.byref(walker),
+        )
+        if status < 0 or not walker:
+            raise RuntimeError("Snap to could not create a Windows UI Automation tree walker.")
+
+        def property_value(obj, property_id):
+            value = Variant()
+            status = method(obj, 10, C.c_int32, C.c_int32, C.POINTER(Variant))(
+                obj, property_id, C.byref(value),
+            )
+            if status < 0:
+                oleaut.VariantClear(C.byref(value))
+                return None
+            return value
+
+        def rect_from_variant(value):
+            try:
+                if value.vt != 0x2005 or not value.array:
+                    return None
+                array = value.array
+                if oleaut.SafeArrayGetDim(array) != 1:
+                    return None
+                lower, upper = C.c_int32(), C.c_int32()
+                if (
+                    oleaut.SafeArrayGetLBound(array, 1, C.byref(lower)) < 0
+                    or oleaut.SafeArrayGetUBound(array, 1, C.byref(upper)) < 0
+                    or upper.value - lower.value + 1 != 4
+                ):
+                    return None
+                values = []
+                for index in range(lower.value, upper.value + 1):
+                    coordinate = C.c_double()
+                    index_arg = C.c_int32(index)
+                    if oleaut.SafeArrayGetElement(
+                        array, C.byref(index_arg), C.byref(coordinate),
+                    ) < 0:
+                        return None
+                    values.append(coordinate.value)
+                return tuple(values)
+            finally:
+                oleaut.VariantClear(C.byref(value))
+
+        def has_action_pattern(obj):
+            for pattern_id in (10000, 10005, 10010, 10015, 10018):
+                pattern = C.c_void_p()
+                status = method(obj, 16, C.c_int32, C.c_int32, C.POINTER(C.c_void_p))(
+                    obj, pattern_id, C.byref(pattern),
+                )
+                if status >= 0 and pattern:
+                    release(pattern)
+                    return True
+            return False
+
+        def hit_test(point):
+            element = C.c_void_p()
+            status = method(automation, 7, C.c_int32, PointStruct, C.POINTER(C.c_void_p))(
+                automation, PointStruct(round(point[0]), round(point[1])), C.byref(element),
+            )
+            if status == -2147024891:
+                raise RuntimeError(
+                    "Windows denied Snap to access. Run OpenHeadMouse with the same "
+                    "permissions as the target application."
+                )
+            if status < 0 or not element:
+                return None
+            try:
+                for _ in range(6):
+                    enabled = property_value(element, 30010)
+                    try:
+                        is_enabled = enabled is not None and enabled.vt == 11 and enabled.boolean != 0
+                    finally:
+                        if enabled is not None:
+                            oleaut.VariantClear(C.byref(enabled))
+                    bounds = property_value(element, 30001)
+                    rect = rect_from_variant(bounds) if bounds is not None else None
+                    if is_enabled and rect is not None and has_action_pattern(element):
+                        return rect
+                    parent = C.c_void_p()
+                    status = method(walker, 3, C.c_int32, C.c_void_p, C.POINTER(C.c_void_p))(
+                        walker, element, C.byref(parent),
+                    )
+                    release(element)
+                    element = parent
+                    if status < 0 or not element:
+                        break
+                return None
+            finally:
+                release(element)
+
+        yield hit_test
+    finally:
+        release(walker)
+        release(automation)
+        ole32.CoUninitialize()
+
+
+@contextmanager
 def _windows_hit_test():
-    """MSAA's point lookup also reaches controls exposed through the UIA bridge."""
+    """Use MSAA point lookup, including controls exposed by some UIA-to-MSAA bridges."""
     class PointStruct(C.Structure):
         _fields_ = [("x", C.c_int32), ("y", C.c_int32)]
 

@@ -15,7 +15,9 @@ from PySide6.QtWidgets import (
 )
 
 from dwell_click.engine import DwellSettings
-from dwell_click.widgets import DWELL_HELP, ColorButton, ContextMenuOptions, ZoomOptions
+from dwell_click.widgets import (
+    DWELL_HELP, ColorButton, ContextMenuOptions, SnapOptions, ZoomOptions,
+)
 
 
 class ControlPanel(QWidget):
@@ -108,6 +110,8 @@ class ControlPanel(QWidget):
 
         self._ring_color_button = ColorButton(dwell_config.get("ring_color", defaults.ring_color))
         self._ring_color_button.color_changed.connect(self._emit_dwell_settings)
+        self._snap_options = SnapOptions(dwell_config)
+        self._snap_options.changed.connect(self._emit_dwell_settings)
         self._zoom_options = ZoomOptions(dwell_config)
         self._zoom_options.changed.connect(self._emit_dwell_settings)
         self._context_options = ContextMenuOptions(dwell_config)
@@ -150,7 +154,8 @@ class ControlPanel(QWidget):
             dwell_grid.addWidget(label, row, column * 2)
             dwell_grid.addWidget(field, row, column * 2 + 1)
         dwell_grid.addWidget(self._zoom_options, 3, 0, 1, 4)
-        dwell_grid.addWidget(self._context_options, 4, 0, 1, 4)
+        dwell_grid.addWidget(self._snap_options, 4, 0, 1, 4)
+        dwell_grid.addWidget(self._context_options, 5, 0, 1, 4)
 
         main_layout = QVBoxLayout(self)
         main_layout.addWidget(box)
@@ -181,6 +186,7 @@ class ControlPanel(QWidget):
             "ring_diameter_px": self._ring_diameter_spin.value(),
             "ring_thickness_px": self._ring_thickness_spin.value(),
             "ring_color": self._ring_color_button.color,
+            **self._snap_options.values(),
             **self._zoom_options.values(),
             **self._context_options.values(),
         }
@@ -189,6 +195,7 @@ class ControlPanel(QWidget):
         self.dwell_settings_changed.emit(self.dwell_settings)
 
     def set_dwell_settings(self, values: dict) -> None:
+        self._snap_options.set_values(values)
         self._zoom_options.set_values(values)
         self._context_options.set_values(values)
         for control, key in (

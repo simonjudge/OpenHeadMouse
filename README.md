@@ -353,14 +353,24 @@ register the hover and accept the click.
 | Snap to | Toggle cursor snapping to nearby clickable controls; no click | Closes |
 | Dwell outside an unlocked menu | Cancel without clicking | Closes |
 
-**Snap to** is off by default. Dwell on its crosshair icon to toggle it; a blue outline
-indicates that it is enabled. While dwell clicking is active, the pointer snaps to the
-centre of a nearby enabled control exposed by the application's accessibility API
-(within 48 logical pixels). Move away to leave a target; head-driven movement stays
-snapped until the head target leaves that radius. Snapping does not activate the
+**Snap to** is off by default. Use **Start with Snap to enabled** in the main window or
+tray settings dialog to change the startup default. Dwell on its crosshair icon to toggle
+the current state; a blue outline indicates that it is enabled. While dwell clicking is active, the pointer snaps to the
+centre of a nearby enabled control exposed by the application's accessibility API, when its
+centre is within the configured radius (default 48 px; adjustable from 8 to 500 px).
+Move away to leave a target; head-driven movement stays snapped until the head target
+leaves that radius. Snapping does not activate the
 control, and is suspended while paused or using the menu or magnifier. It preserves
-click-button and zoom choices, but resets to off when dwell clicking stops or settings change.
-Windows uses MSAA (including controls exposed through its UI Automation bridge).
+click-button and zoom choices. Stopping dwell clicking or changing settings restores the
+configured startup default.
+On Windows, **Windows method** selects native UI Automation (UIA, the default) or the
+previous MSAA point-lookup implementation. UIA gets the element at each sampled point,
+checks its enabled state and supported action patterns (such as Invoke and Toggle), and
+walks to its control-view ancestors when needed. MSAA uses `AccessibleObjectFromPoint` and
+can also reach some controls exposed through the UIA-to-MSAA bridge. Compare both methods
+for target applications; either can miss controls that do not expose usable accessibility
+information. Increasing the radius only helps with exposed controls and does not discover
+inaccessible ones. The selected method is saved as `snap_backend` under `ui.dwell_click`.
 macOS requires Accessibility permission for OpenHeadMouse or its Python executable.
 Linux requires an X11 session, AT-SPI 2 (`libatspi2.0-0`) and desktop accessibility enabled;
 snapping is restricted to the active window to avoid covered background controls.
@@ -390,8 +400,9 @@ For example, unlocking zoom in the menu leaves the checkbox checked; restarting 
 the configured zoom default. Stopping or changing settings clears remembered selections and
 L/R locks, and reapplies that zoom default.
 
-OpenHeadMouse persists `context_menu_enabled`, `context_menu_distance_px`, `context_menu_size_px`,
-and `context_menu_lock_time_s` under `ui.dwell_click`. Standalone mode also accepts
+OpenHeadMouse persists `snap_enabled`, `snap_radius_px`, `snap_backend`, `context_menu_enabled`,
+`context_menu_distance_px`, `context_menu_size_px`, and `context_menu_lock_time_s` under
+`ui.dwell_click`. Standalone mode also accepts
 `--context-menu --menu-distance 60 --menu-size 54 --menu-lock-time 3`.
 After zoom opens, move away from the icon-selection position before dwelling on the image;
 remaining still will not complete or cancel the precise click.

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from .engine import DwellSettings
-from .widgets import DWELL_HELP, ColorButton, ContextMenuOptions, ZoomOptions
+from .widgets import DWELL_HELP, ColorButton, ContextMenuOptions, SnapOptions, ZoomOptions
 
 
 class DwellSettingsDialog(QDialog):
@@ -57,6 +57,7 @@ class DwellSettingsDialog(QDialog):
         self._ring_thickness.setValue(settings.ring_thickness_px)
 
         self._ring_color = ColorButton(settings.ring_color)
+        self._snap_options = SnapOptions(settings.to_config())
         self._zoom_options = ZoomOptions(settings.to_config())
         self._context_options = ContextMenuOptions(settings.to_config())
         self._toggle_button = QPushButton("Start Dwell Clicking")
@@ -93,6 +94,7 @@ class DwellSettingsDialog(QDialog):
         layout.addWidget(self._toggle_button)
         layout.addLayout(form)
         layout.addWidget(self._zoom_options)
+        layout.addWidget(self._snap_options)
         layout.addWidget(self._context_options)
         layout.addWidget(buttons)
 
@@ -105,6 +107,7 @@ class DwellSettingsDialog(QDialog):
                 "ring_diameter_px": self._ring_diameter.value(),
                 "ring_thickness_px": self._ring_thickness.value(),
                 "ring_color": self._ring_color.color,
+                **self._snap_options.values(),
                 **self._zoom_options.values(),
                 **self._context_options.values(),
             }

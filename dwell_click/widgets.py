@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QDoubleSpinBox, QGridLayout, QGroupBox,
-    QLabel, QPushButton, QSpinBox,
+    QComboBox, QLabel, QPushButton, QSpinBox,
 )
 
 from .engine import DwellSettings
@@ -24,6 +26,15 @@ DWELL_HELP = {
     "ring_diameter_px": "Diameter: size of the dwell timer circle drawn around the pointer, in pixels.",
     "ring_thickness_px": "Thickness: width of the timer segment that fills the circle as the dwell progresses.",
     "ring_color": "Colour: colour of the dwell timer circle. Click to choose a new colour.",
+    "snap_enabled": (
+        "Start with Snap to enabled. While enabled, the pointer moves to nearby clickable "
+        "controls; the click menu can also toggle Snap to while dwell clicking."
+    ),
+    "snap_radius_px": (
+        "Maximum distance from the pointer to a detected control's centre for Snap to to "
+        "move the pointer onto it. Larger values can help with bigger or more distant controls, "
+        "but cannot make inaccessible controls detectable."
+    ),
     "zoom_enabled": (
         "Start with zoom locked on. Move, then dwell inside the magnified screenshot "
         "to click the precise point. The menu's zoom lock is independent of left/right."
@@ -95,6 +106,67 @@ class ZoomOptions(QGroupBox):
             else:
                 control.setValue(values[key])
             control.blockSignals(blocked)
+
+
+class SnapOptions(QGroupBox):
+    """Shared Snap-to startup control for the main panel and tray dialog."""
+
+    changed = Signal()
+
+    def __init__(self, config: dict):
+        super().__init__("Snap to")
+        self._enabled = QCheckBox("Start with Snap to enabled")
+        self._enabled.setToolTip(DWELL_HELP["snap_enabled"])
+        self._enabled.toggled.connect(self.changed)
+        self._radius = QSpinBox()
+        self._radius.setRange(8, 500)
+        self._radius.setSuffix(" px")
+        self._radius.setToolTip(DWELL_HELP["snap_radius_px"])
+        self._radius.valueChanged.connect(self.changed)
+        self._backend = QComboBox()
+        self._backend.addItem("UI Automation", userData="uia")
+        self._backend.addItem("MSAA", userData="msaa")
+        self._backend.setToolTip(
+            "Windows accessibility method used to discover controls. UI Automation is the "
+            "native UIA client; MSAA uses point lookup through the legacy accessibility API."
+        )
+        self._backend.currentIndexChanged.connect(self.changed)
+        backend_label = QLabel("Windows method")
+        backend_label.setToolTip(self._backend.toolTip())
+        backend_label.setVisible(sys.platform == "win32")
+        self._backend.setVisible(sys.platform == "win32")
+        layout = QGridLayout(self)
+        layout.addWidget(self._enabled, 0, 0, 1, 2)
+        label = QLabel("Radius")
+        label.setToolTip(DWELL_HELP["snap_radius_px"])
+        layout.addWidget(label, 1, 0)
+        layout.addWidget(self._radius, 1, 1)
+        layout.addWidget(backend_label, 2, 0)
+        layout.addWidget(self._backend, 2, 1)
+        self.set_values({**DwellSettings().to_config(), **config})
+
+    def values(self) -> dict:
+        return {
+            "snap_enabled": self._enabled.isChecked(),
+            "snap_radius_px": self._radius.value(),
+            "snap_backend": self._backend.currentData(),
+        }
+
+    def set_values(self, values: dict) -> None:
+        if "snap_enabled" in values:
+            blocked = self._enabled.blockSignals(True)
+            self._enabled.setChecked(values["snap_enabled"])
+            self._enabled.blockSignals(blocked)
+        if "snap_radius_px" in values:
+            blocked = self._radius.blockSignals(True)
+            self._radius.setValue(values["snap_radius_px"])
+            self._radius.blockSignals(blocked)
+        if "snap_backend" in values:
+            index = self._backend.findData(values["snap_backend"])
+            if index >= 0:
+                blocked = self._backend.blockSignals(True)
+                self._backend.setCurrentIndex(index)
+                self._backend.blockSignals(blocked)
 
 
 class ContextMenuOptions(QGroupBox):

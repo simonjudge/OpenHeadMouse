@@ -78,6 +78,102 @@ def test_windows_native_hit_test_releases_com_objects(monkeypatch, state, action
     assert ("string" in released) == (state == 0 and action)
 
 
+def test_windows_uia_hit_test_finds_toggle_pattern_and_releases_com_objects(monkeypatch):
+    c = snap.C
+    methods = {}
+    released = []
+    cleared = []
+
+    def make_object(methods_for_object):
+        table = (c.c_void_p * 20)()
+        for index, function in methods_for_object.items():
+            address = len(methods) + 1
+            table[index] = address
+            methods[address] = function
+        obj = c.pointer(c.cast(table, c.POINTER(c.c_void_p)))
+        return obj
+
+    pattern = make_object({2: lambda obj: released.append("pattern")})
+
+    def element_property(obj, property_id, value):
+        variant = value._obj
+        if property_id == 30010:
+            variant.vt = 11
+            variant.boolean = -1
+        else:
+            variant.vt = 0x2005
+            variant.array = 123
+        return 0
+
+    def get_pattern(obj, pattern_id, value):
+        if pattern_id == 10015:
+            value._obj.value = c.cast(pattern, c.c_void_p).value
+            return 0
+        value._obj.value = None
+        return -1
+
+    element = make_object({2: lambda obj: released.append("element"),
+                           10: element_property, 16: get_pattern})
+    walker = make_object({
+        2: lambda obj: released.append("walker"),
+        3: lambda obj, current, parent: setattr(parent._obj, "value", None) or 0,
+    })
+
+    def point_lookup(obj, point, value):
+        value._obj.value = c.cast(element, c.c_void_p).value
+        return 0
+
+    automation = make_object({
+        2: lambda obj: released.append("automation"),
+        7: point_lookup,
+        14: lambda obj, value: setattr(
+            value._obj, "value", c.cast(walker, c.c_void_p).value,
+        ) or 0,
+    })
+
+    class NativeFunction:
+        def __init__(self, function):
+            self.function = function
+
+        def __call__(self, *args):
+            return self.function(*args)
+
+    libraries = {
+        "ole32": SimpleNamespace(
+            CoInitializeEx=NativeFunction(lambda *args: 0),
+            CoUninitialize=NativeFunction(lambda: released.append("COM")),
+            CoCreateInstance=NativeFunction(
+                lambda clsid, outer, context, iid, value: setattr(
+                    value._obj, "value", c.cast(automation, c.c_void_p).value,
+                ) or 0
+            ),
+        ),
+        "oleaut32": SimpleNamespace(
+            VariantClear=NativeFunction(lambda value: cleared.append(value._obj.vt) or 0),
+            SafeArrayGetDim=NativeFunction(lambda array: 1),
+            SafeArrayGetLBound=NativeFunction(
+                lambda array, dimension, value: setattr(value._obj, "value", 0) or 0
+            ),
+            SafeArrayGetUBound=NativeFunction(
+                lambda array, dimension, value: setattr(value._obj, "value", 3) or 0
+            ),
+            SafeArrayGetElement=NativeFunction(
+                lambda array, index, value: setattr(
+                    value._obj, "value", (110.0, 90.0, 20.0, 20.0)[index._obj.value],
+                ) or 0
+            ),
+        ),
+    }
+    monkeypatch.setattr(c, "WinDLL", lambda name: libraries[name], raising=False)
+    monkeypatch.setattr(c, "WINFUNCTYPE",
+                        lambda *args: lambda address: methods[address], raising=False)
+
+    with snap._windows_uia_hit_test() as hit:
+        assert hit((120, 100)) == (110.0, 90.0, 20.0, 20.0)
+    assert released == ["pattern", "element", "walker", "automation", "COM"]
+    assert cleared == [11, 0x2005]
+
+
 @pytest.mark.parametrize("enabled,press,expected", [
     (True, True, (110, 90, 20, 20)), (False, True, None), (True, False, None),
 ])
@@ -169,11 +265,13 @@ def test_radius_scales_for_native_pixels():
     assert snap.nearest_target((0, 0), hit, radius=96) == (70, 10)
 
 
-@pytest.mark.parametrize("platform,backend", [
-    ("win32", "_windows_hit_test"), ("darwin", "_macos_hit_test"),
-    ("linux", "_linux_hit_test"),
+@pytest.mark.parametrize("platform,backend,backend_name", [
+    ("win32", "_windows_uia_hit_test", "uia"),
+    ("win32", "_windows_hit_test", "msaa"),
+    ("darwin", "_macos_hit_test", "uia"),
+    ("linux", "_linux_hit_test", "uia"),
 ])
-def test_dispatch_and_backend_cleanup(monkeypatch, platform, backend):
+def test_dispatch_and_backend_cleanup(monkeypatch, platform, backend, backend_name):
     closed = []
 
     @contextmanager
@@ -185,7 +283,7 @@ def test_dispatch_and_backend_cleanup(monkeypatch, platform, backend):
 
     monkeypatch.setattr(snap.sys, "platform", platform)
     monkeypatch.setattr(snap, backend, detector)
-    assert snap.find_snap_target((0, 0)) == (20, 20)
+    assert snap.find_snap_target((0, 0), backend_name=backend_name) == (20, 20)
     assert closed == [True]
 
 

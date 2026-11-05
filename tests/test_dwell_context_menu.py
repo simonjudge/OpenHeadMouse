@@ -198,7 +198,7 @@ def snap_worker(menu_service, qt_app, monkeypatch):
             jobs.append(self.target)
 
     monkeypatch.setattr(module, "threading", SimpleNamespace(Thread=Worker))
-    monkeypatch.setattr(module, "find_snap_target", lambda point, radius: (520, 400))
+    monkeypatch.setattr(module, "find_snap_target", lambda point, radius, backend: (520, 400))
     service = menu_service[0]
     service._snap_enabled = True
 
@@ -227,7 +227,9 @@ def test_snap_moves_pointer_without_clicking_and_restarts_dwell(menu_service, sn
 def test_snap_small_adjustment_does_not_prevent_dwell(menu_service, snap_worker, monkeypatch):
     service, _, finish = snap_worker
     _, poll, _, _, _ = menu_service
-    monkeypatch.setattr("dwell_click.service.find_snap_target", lambda point, radius: (505, 400))
+    monkeypatch.setattr(
+        "dwell_click.service.find_snap_target", lambda point, radius, backend: (505, 400),
+    )
     service._query_snap((500, 400))
     finish()
     poll(1)
@@ -263,7 +265,9 @@ def test_snap_revalidates_stationary_target_and_releases_removed_control(
     service._query_snap((500, 400))
     finish()
     assert service.snap_pointer_target((500, 400)) == (520, 400)
-    monkeypatch.setattr("dwell_click.service.find_snap_target", lambda point, radius: None)
+    monkeypatch.setattr(
+        "dwell_click.service.find_snap_target", lambda point, radius, backend: None,
+    )
     poll(0.6)
     assert len(jobs) == 1
     finish()
@@ -294,10 +298,11 @@ def test_snap_discards_obsolete_results(menu_service, snap_worker, action):
 def test_snap_dpi_conversion_and_request_throttling(menu_service, snap_worker, monkeypatch):
     service, jobs, finish = snap_worker
     _, poll, _, _, clicks = menu_service
+    service.settings = replace(service.settings, snap_radius_px=96)
     requests = []
 
-    def find(point, radius):
-        requests.append((point, radius))
+    def find(point, radius, backend):
+        requests.append((point, radius, backend))
         return point[0] + 40, point[1] + 20
 
     screen = SimpleNamespace(devicePixelRatio=lambda: 2)
@@ -307,7 +312,7 @@ def test_snap_dpi_conversion_and_request_throttling(menu_service, snap_worker, m
     service._query_snap((500, 400))
     assert len(jobs) == 1
     finish()
-    assert requests == [((500, 400), 96)]
+    assert requests == [((500, 400), 192, "uia")]
     assert service._mouse_controller.position == (520, 410)
     assert service.snap_pointer_target((616, 410)) == (520, 410)
     poll(0.1)
@@ -323,7 +328,7 @@ def test_snap_failure_turns_option_off_and_reports_error(menu_service, snap_work
     errors = []
     service.error_occurred.connect(errors.append)
 
-    def fail(point, radius):
+    def fail(point, radius, backend):
         raise RuntimeError("Enable accessibility")
 
     monkeypatch.setattr("dwell_click.service.find_snap_target", fail)
@@ -1020,6 +1025,40 @@ def test_menu_settings_available_in_both_guis(qt_app, ui):
         widget.close()
 
 
+@pytest.mark.parametrize("ui", ["dialog", "panel"])
+def test_snap_startup_setting_available_in_both_guis(qt_app, ui):
+    from dwell_click.settings_dialog import DwellSettingsDialog
+    from gui.control_panel import ControlPanel
+
+    settings = DwellSettings(snap_enabled=True)
+    widget = (
+        DwellSettingsDialog(settings)
+        if ui == "dialog"
+        else ControlPanel(dwell_config=settings.to_config())
+    )
+    seen = []
+    signal = widget.settings_applied if ui == "dialog" else widget.dwell_settings_changed
+    signal.connect(seen.append)
+    try:
+        assert widget._snap_options.values() == {
+            "snap_enabled": True, "snap_radius_px": 48, "snap_backend": "uia",
+        }
+        assert widget._snap_options._backend.itemText(0) == "UI Automation"
+        assert widget._snap_options._backend.itemText(1) == "MSAA"
+        widget._snap_options._radius.setValue(120)
+        if ui == "dialog":
+            widget._snap_options._backend.setCurrentIndex(1)
+        widget._snap_options._enabled.setChecked(False)
+        if ui == "dialog":
+            widget._apply()
+        assert seen[-1]["snap_enabled"] is False
+        assert seen[-1]["snap_radius_px"] == 120
+        if ui == "dialog":
+            assert seen[-1]["snap_backend"] == "msaa"
+    finally:
+        widget.close()
+
+
 def test_menu_settings_and_initial_zoom_lock_persist_through_host(qt_app, tmp_path):
     import copy
     import json
@@ -1037,15 +1076,27 @@ def test_menu_settings_and_initial_zoom_lock_persist_through_host(qt_app, tmp_pa
         options._lock_time.setValue(6)
         app._dwell_tray.show_settings()
         dialog = app._dwell_tray._settings_dialog
+        dialog._snap_options._enabled.setChecked(True)
+        dialog._snap_options._radius.setValue(120)
+        dialog._snap_options._backend.setCurrentIndex(1)
         dialog._zoom_options._enabled.setChecked(True)
         dialog._apply()
+        assert app._dwell_click.snap_enabled
+        assert app._dwell_click.settings.snap_radius_px == 120
+        assert app._dwell_click.settings.snap_backend == "msaa"
         assert app._dwell_click._zoom_locked
+        assert app.window.controls.dwell_settings["snap_enabled"]
+        assert app.window.controls.dwell_settings["snap_radius_px"] == 120
+        assert app.window.controls.dwell_settings["snap_backend"] == "msaa"
         assert app.window.controls.dwell_settings["zoom_enabled"]
         saved = json.loads(path.read_text())["ui"]["dwell_click"]
         assert saved["context_menu_enabled"]
         assert saved["context_menu_distance_px"] == 100
         assert saved["context_menu_size_px"] == 72
         assert saved["context_menu_lock_time_s"] == 6
+        assert saved["snap_enabled"]
+        assert saved["snap_radius_px"] == 120
+        assert saved["snap_backend"] == "msaa"
         assert saved["zoom_enabled"]
     finally:
         app.shutdown()
@@ -1056,6 +1107,9 @@ def test_menu_settings_and_initial_zoom_lock_persist_through_host(qt_app, tmp_pa
         assert reloaded.window.controls._context_options.values()["context_menu_distance_px"] == 100
         assert reloaded._dwell_click.settings.context_menu_size_px == 72
         assert reloaded._dwell_click._locked_button is None
+        assert reloaded._dwell_click.snap_enabled
+        assert reloaded._dwell_click.settings.snap_radius_px == 120
+        assert reloaded._dwell_click.settings.snap_backend == "msaa"
         assert reloaded._dwell_click._zoom_locked
     finally:
         reloaded.shutdown()

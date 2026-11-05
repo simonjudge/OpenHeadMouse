@@ -69,7 +69,7 @@ class DwellClickService(QObject):
         self._zoom_selected = False
         self._zoom_once_armed = False
         self._zoom_locked = self.settings.zoom_enabled
-        self._snap_enabled = False
+        self._snap_enabled = self.settings.snap_enabled
         self._snap_generation = 0
         self._snap_pending = False
         self._snap_last_query = float("-inf")
@@ -337,7 +337,7 @@ class DwellClickService(QObject):
         self._zoom_selected = False
         self._zoom_once_armed = False
         self._zoom_locked = self.settings.zoom_enabled
-        self._snap_enabled = False
+        self._snap_enabled = self.settings.snap_enabled
         self._invalidate_snap()
 
     def _invalidate_snap(self) -> None:
@@ -385,7 +385,9 @@ class DwellClickService(QObject):
             target = None
             message = ""
             try:
-                result = find_snap_target(native, SNAP_RADIUS_PX * ratio)
+                result = find_snap_target(
+                    native, self.settings.snap_radius_px * ratio, self.settings.snap_backend,
+                )
                 if result is not None:
                     target = (
                         position[0] + (result[0] - native[0]) / ratio,
@@ -441,7 +443,7 @@ class DwellClickService(QObject):
         self._snap_position = (float(point.x()), float(point.y()))
         self._snap_native_target = self._mouse_controller.position
         ratio = screen.devicePixelRatio() if sys.platform != "darwin" else 1.0
-        self._snap_native_radius = SNAP_RADIUS_PX * ratio
+        self._snap_native_radius = self.settings.snap_radius_px * ratio
         if math.dist(current, self._snap_position) > self.settings.movement_tolerance_px:
             self._engine.reset()
 
