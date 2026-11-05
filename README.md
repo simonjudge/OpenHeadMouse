@@ -342,7 +342,63 @@ On Windows the spec creates `dist\SessionViewer.exe` without a terminal window. 
 is bundled, so no model download is needed at runtime. Tagged releases also package the
 viewer as a Windows installer, Linux executable/`.deb`, and macOS executable/`.app`/DMG.
 
+Head meshes start in a front-on view: zero yaw, pitch and roll faces straight
+out of the screen. In desktop and Colab playback, **Show relative to reference
+pose** is checked by default. Uncheck it to see the **recorded pose**, before
+removing the reference pose. This changes only the mesh and its angle labels,
+not graphs, statistics, or exports. The reference source is shown above the mesh:
+saved recentering takes priority over calibration; without either, initial rest
+or up to the first 30 samples within one second are used.
+Pitch is red, yaw green and roll blue in all viewer angle plots and meshes.
+Pitch and yaw values follow their axis tips. Dragging the playback view changes
+only the viewing angle.
+
 ### Colab session viewer
+
+The notebook's **Skip opening of initial-rest hold (s)** control defaults to
+**1 second**. Initial-position summaries use only the labelled rest hold,
+never the preceding move-to-rest phase. This exclusion updates rest summaries,
+their meshes and offsets from rest, not saved calibration or playback.
+The separate Head movement stats table covers all recording phases, apart from
+its selected recording-opening exclusion.
+Its **Skip opening of head recording (s)** control independently defaults to
+**1 second**, excluding startup samples from ranges, speed and acceleration
+without changing the original reference pose. **Exclusions** is at the top of
+the viewer. Both time controls sit together to the right of a single target-count
+box that applies to all participants/files, with a label above each input.
+Excluded targets' time intervals are also omitted from head statistics.
+Embedded initial-pose/session statistics use the same settings as the tables;
+excluded chart periods have grey background shading while traces keep their
+original colours and all data remain visible.
+Below Fitts stats, **Show matched-target comparison** adds an optional second
+table. Expand **Fitts calculation review** to choose strict planned-ID matching
+(same task type/width, within 0.1 bits) or **Closest target conditions (retain
+every test)**. The latter maximises equal counts within shared block/amplitude/
+width conditions and selects nearest IDs within balanced test quotas, without
+an ID cutoff. Global target exclusions apply first; remaining ID differences
+and per-test contributions are reported.
+The calculation review also offers optional **MTnodwell** and no-dwell
+throughput in the Fitts table, retaining original timing results. Cursor/head
+movement, settling estimates and counts have a separate **Dwell behaviour stats**
+table (including session-level and matched views), with **-** for inapplicable
+non-dwell fields rather than zero. Individual imports and ZIP
+review rows accept a selection method and configured dwell duration; manifests
+preserve these as `selection_method` and `dwell_time_s` (seconds). Unknown methods
+are not guessed. See the [dwell analysis notes](colab_session_viewer/README.md#dwell-timing-and-movement-estimates)
+for definitions, contributing counts and trajectory/timer limitations.
+The existing difficulty column is labelled **Effective ID (IDe)**: measured
+click accuracy can make it differ even when planned ID matches. Calculation
+notes explain why the legacy pooled formulas are not sequence-level ISO estimates.
+To audit formulas, sample selection and aggregation, start with the
+[calculation source guide](colab_session_viewer/README.md#where-to-inspect-the-calculations).
+It links the shared Python calculation functions and browser live-path equivalent;
+their docstrings document units, formulas, exclusions and edge cases.
+The main Fitts table also shows average planned ID immediately before IDe.
+A collapsed **Fitts test conditions by file** table is the first item under
+Fitts stats, with one row per participant/Fitts file showing saved width/amplitude
+lists, block types and observed target/repetition/trial counts, plus a CSV download.
+Expand **Individual sessions** below each main summary table to inspect a separate
+session-level table, identified by participant and session. These sections start collapsed.
 
 Open [session_viewer.ipynb](colab_session_viewer/session_viewer.ipynb) in Google Colab
 and run its setup and viewer cells. Import individual head/Fitts recordings or

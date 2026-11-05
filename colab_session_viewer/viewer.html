@@ -30,8 +30,10 @@ button, input, select { font: inherit; }
 <div class="panels">
   <section class="panel">
     <strong>Head movement</strong> <button id="reset-camera">Reset camera</button>
+    <div><label title="Changes only the mesh and its angle labels, not graphs or statistics."><input id="relative-pose" type="checkbox" checked> Show relative to reference pose</label></div>
+    <small id="reference-pose-source"></small>
     <canvas id="head" class="scene" width="660" height="280" aria-label="3D head movement"></canvas>
-    <small>Drag to rotate; scroll to zoom. Axes: X red, Y green, Z blue.</small>
+    <small>Drag to rotate; scroll to zoom. Pitch red, yaw green, roll blue. Angle graphs always show relative pose.</small>
     <div id="head-graphs"></div><pre id="head-live"></pre>
   </section>
   <section class="panel">
@@ -40,7 +42,8 @@ button, input, select { font: inherit; }
     <small>Orange: path; red: cursor; green/purple graph markers: target start/click.</small>
     <div id="cursor-graphs"></div><pre id="cursor-live"></pre>
     <details><summary>Initial pose and range of movement</summary><div id="pretest"></div></details>
-    <details><summary>Selected session statistics (all targets, unfiltered)</summary><pre id="session-summary"></pre></details>
+    <p>Grey chart backgrounds mark excluded time periods; traces keep their original colours. Time exclusions have separate scopes: recording opening for session movement statistics; hold opening for initial pose. Excluded target intervals are omitted from both pointing and head statistics.</p>
+    <details><summary>Selected session statistics (exclusions applied)</summary><pre id="session-summary"></pre></details>
   </section>
 </div>
 <script id="recording" type="application/json">__PAYLOAD__</script>

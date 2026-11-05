@@ -53,7 +53,9 @@ class SessionStats:
     def _usable_intervals(self) -> tuple[np.ndarray, np.ndarray]:
         """(interval durations, index of each interval's first sample).
 
-        Excludes non-positive intervals and burst samples (see module docstring).
+        Keep dt > 0 and dt >= 0.5 * median(all positive dt), in seconds.
+        Return empty arrays when there are no positive intervals. No angular
+        outlier threshold or smoothing is applied.
         """
         times = self.times()
         dt = np.diff(times)
@@ -69,6 +71,8 @@ class SessionStats:
 
         Speed is the geodesic rotation between the interval's two samples
         divided by its duration, reported at the later sample's time.
+        Rotation = degrees(2*acos(abs(dot(normalized q1, normalized q2)))).
+        Only intervals accepted by _usable_intervals contribute.
         """
         dt, idx = self._usable_intervals()
         if len(idx) == 0:
@@ -80,8 +84,12 @@ class SessionStats:
     def angular_acceleration_series(self) -> tuple[np.ndarray, np.ndarray]:
         """(sample times, |change in angular speed| in deg/s²).
 
-        Differentiated across consecutive usable intervals only, so a skipped
-        burst sample doesn't create a spurious step.
+        For adjacent returned speed values, compute abs(v[i+1]-v[i]) divided
+        by their positive timestamp difference. This is change in scalar
+        speed, not vector angular acceleration. A rejected burst interval
+        contributes no speed value, so the timestamp difference can span it.
+        Notebook exclusion gaps are split by its caller before this function.
+        Fewer than two speed values yield empty arrays.
         """
         times, speeds = self.angular_speed_series()
         if len(speeds) < 2:
@@ -117,12 +125,18 @@ class SessionStats:
 
     @staticmethod
     def _spread(values: np.ndarray) -> dict[str, float]:
+        """Return min, max and unweighted arithmetic mean; empty arrays give zeros."""
         if not len(values):
             return {"min": 0.0, "max": 0.0, "mean": 0.0}
         return {"min": float(values.min()), "max": float(values.max()), "mean": float(values.mean())}
 
     def sampling_stats(self) -> dict[str, float]:
-        """Sample rate and how many intervals were rejected as delivery bursts."""
+        """Return median positive dt and rate = 1/median(dt), in Hz.
+
+        Count all consecutive intervals and those below half that median
+        (including non-positive intervals). If no positive dt exists, all
+        fields return 0 under the existing convention.
+        """
         dt = np.diff(self.times())
         positive = dt[dt > 0]
         if not len(positive):
@@ -139,7 +153,10 @@ class SessionStats:
     def cervical_rom(self) -> dict[str, float]:
         """Compute cervical Range of Motion: min/max for yaw, pitch, roll (degrees).
 
-        Unwraps angles to handle ±180° discontinuities correctly.
+        Convert recorded degree fields to radians, unwrap each axis in sample
+        order, then convert back. Each range is max-min, not a percentile or
+        a span across participants. These fields are used as supplied; no
+        calibration/reference transform or phase/exclusion filter occurs here.
         """
         yaws = np.array([s.yaw_deg for s in self.samples])
         pitches = np.array([s.pitch_deg for s in self.samples])
@@ -163,14 +180,22 @@ class SessionStats:
         }
 
     def angular_velocity_stats(self) -> dict[str, float]:
-        """Min/max/mean angular speed magnitude (deg/s)."""
+        """Min/max/arithmetic mean of usable interval speeds, in deg/s.
+
+        Intervals are equally weighted, not weighted by duration; empty series
+        give zeros through _spread. Plot forward-filled values are not used.
+        """
         return self._spread(self.angular_speed_series()[1])
 
     def angular_acceleration_stats(self) -> dict[str, float]:
-        """Min/max/mean angular acceleration magnitude (deg/s²)."""
+        """Min/max/arithmetic mean of scalar speed-change magnitudes, in deg/s².
+
+        Uses the derivative series, not plot forward-filled values; empty
+        series give zeros through _spread.
+        """
         return self._spread(self.angular_acceleration_series()[1])
 
     def session_duration(self) -> float:
-        """Total session duration in seconds."""
+        """Return last minus first selected-clock time in seconds, including gaps."""
         times = self.times()
         return float(times[-1] - times[0])

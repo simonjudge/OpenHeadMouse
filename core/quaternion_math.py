@@ -40,7 +40,11 @@ _EPS = 1e-12
 
 
 def normalize(q: np.ndarray) -> np.ndarray:
-    """Normalize one quaternion ``[w, x, y, z]`` or a batch ``(N, 4)`` to unit length."""
+    """Divide each scalar-first quaternion by its Euclidean norm.
+
+    Supports shape (4,) or (N,4). Norms below 1e-12 use divisor 1, so invalid
+    zero input stays zero; recording validation is the caller's responsibility.
+    """
     q = np.asarray(q, dtype=np.float64)
     norm = np.linalg.norm(q, axis=-1, keepdims=True)
     norm = np.where(norm < _EPS, 1.0, norm)
@@ -54,7 +58,10 @@ def conjugate(q: np.ndarray) -> np.ndarray:
 
 
 def inverse(q: np.ndarray) -> np.ndarray:
-    """Return the inverse of a unit quaternion (equal to the conjugate for unit q)."""
+    """Return conjugate(q)/sum(q*q), equal to conjugate(q) for unit quaternions.
+
+    Squared norms below 1e-12 use divisor 1; supports individual/batched inputs.
+    """
     q = np.asarray(q, dtype=np.float64)
     norm_sq = np.sum(q * q, axis=-1, keepdims=True)
     norm_sq = np.where(norm_sq < _EPS, 1.0, norm_sq)
@@ -89,6 +96,9 @@ def to_euler_zyx(q: np.ndarray) -> np.ndarray:
     matching the sign convention documented at module level (yaw left, pitch
     up and roll left-ear-down positive) for quaternions in the canonical
     [+X forward, +Y left, +Z up] head frame.
+    Normalize first, then yaw=atan2(R10,R00), pitch=asin(clip(R20,-1,1)),
+    roll=atan2(-R21,R22). Euler yaw/roll become coupled near pitch +/-pi/2;
+    no unwrapping or reference subtraction occurs in this function.
     """
     q = normalize(np.asarray(q, dtype=np.float64))
     w, x, y, z = np.moveaxis(q, -1, 0)
@@ -152,7 +162,8 @@ def angle_between(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
 
     This is the true magnitude of the rotation from ``q1`` to ``q2``, so unlike
     a sum of Euler-angle differences it has no gimbal-lock inflation and no
-    ±180° wrap-around jumps. Double-cover is handled by taking ``|dot|``.
+    ±180° wrap-around jumps. Normalize both and return
+    2*acos(clip(abs(dot(q1,q2)),-1,1)); abs handles q and -q equivalence.
     """
     q1 = normalize(np.atleast_2d(np.asarray(q1, dtype=np.float64)))
     q2 = normalize(np.atleast_2d(np.asarray(q2, dtype=np.float64)))
@@ -167,6 +178,8 @@ def mean_quaternion(quaternions) -> np.ndarray:
     Each quaternion is flipped into the same hemisphere as the first before
     averaging (q and -q represent the same rotation). Adequate for the small
     spread of a held-still pose. Returns identity for an empty input.
+    The result is normalize(sum(hemisphere-aligned normalized inputs)), with
+    equal sample weights, not a component-wise Euler mean or geodesic median.
     """
     qs = [normalize(np.asarray(q, dtype=np.float64)) for q in quaternions]
     if not qs:

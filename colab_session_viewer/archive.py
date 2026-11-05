@@ -11,8 +11,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 from colab_session_viewer.data import Session
+from colab_session_viewer.dwell import selection_settings
 
-MANIFEST_COLUMNS = ("participant", "session", "head_file", "fitts_file")
+REQUIRED_MANIFEST_COLUMNS = ("participant", "session", "head_file", "fitts_file")
+MANIFEST_COLUMNS = (*REQUIRED_MANIFEST_COLUMNS, "selection_method", "dwell_time_s")
 
 
 @dataclass
@@ -21,6 +23,8 @@ class Assignment:
     session: str = ""
     head_file: str = ""
     fitts_file: str = ""
+    selection_method: str = "unknown"
+    dwell_time_s: float | None = None
 
 
 def _safe_path(name: str) -> None:
@@ -59,14 +63,19 @@ class ArchiveDataset:
                 try:
                     reader = csv.DictReader(io.StringIO(archive.read(name).decode("utf-8-sig")))
                     columns = reader.fieldnames or []
-                    if not set(MANIFEST_COLUMNS).issubset(columns):
+                    if not set(REQUIRED_MANIFEST_COLUMNS).issubset(columns):
                         if name == "manifest.csv":
                             raise ValueError("Manifest columns must include participant, session, head_file, fitts_file")
                         continue
-                    assignments = [
-                        Assignment(**{key: (row.get(key) or "").strip() for key in MANIFEST_COLUMNS})
-                        for row in reader
-                    ]
+                    assignments = []
+                    for row in reader:
+                        method, seconds = selection_settings(
+                            row.get("selection_method") or "unknown", row.get("dwell_time_s") or None,
+                        )
+                        assignments.append(Assignment(
+                            **{key: (row.get(key) or "").strip() for key in REQUIRED_MANIFEST_COLUMNS},
+                            selection_method=method, dwell_time_s=seconds,
+                        ))
                 except (UnicodeDecodeError, csv.Error) as error:
                     if name == "manifest.csv":
                         raise ValueError(f"Cannot read root CSV {name}: {error}") from error
@@ -154,12 +163,14 @@ class ArchiveDataset:
                     raise ValueError(f"Not a {kind} recording: {path}")
             head = self.recordings.get(row.head_file)
             fitts = self.recordings.get(row.fitts_file)
+            method, seconds = selection_settings(row.selection_method, row.dwell_time_s)
             session = replace(
                 head if head is not None else fitts,
                 participant=participant, name=name,
                 trials=fitts.trials if fitts is not None else [],
                 metadata=fitts.metadata if fitts is not None else {},
                 head_filename=row.head_file, fitts_filename=row.fitts_file,
+                selection_method=method, dwell_time_s=seconds,
             )
             if head is not None and fitts is not None:
                 session.synchronised_samples()

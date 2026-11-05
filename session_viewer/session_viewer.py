@@ -23,10 +23,10 @@ if str(project_root) not in sys.path:
 import numpy as np
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QDoubleSpinBox, QGroupBox, QToolBar, QFileDialog, QMessageBox
+    QCheckBox, QDoubleSpinBox, QGroupBox, QToolBar, QFileDialog, QMessageBox
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QFont, QKeySequence
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 
@@ -41,11 +41,11 @@ from core import quaternion_math as qm
 from session_viewer.mesh_visualizer import (
     calculate_neutral_quaternion, download_mediapipe_model,
     load_obj_wireframe, centre_and_scale, rotation_from_quaternion,
-    rotation_from_euler, head_rotation_to_mesh_frame
+    head_rotation_to_mesh_frame, reference_pose_source, ANGLE_COLORS
 )
 
-# Axis colors matching the previous Plotly X/Y/Z convention
-_AXIS_COLORS = [(0.84, 0.15, 0.16, 1.0), (0.17, 0.63, 0.17, 1.0), (0.12, 0.47, 0.71, 1.0)]
+# MediaPipe mesh X/Y/Z are the pitch/yaw/roll rotation axes.
+_AXIS_COLORS = [ANGLE_COLORS[axis] for axis in ("pitch", "yaw", "roll")]
 
 _DEFAULT_SESSIONS_DIR = project_root / "sessions"
 _DEFAULT_FITTS_DIR = project_root / "fitts_sessions"
@@ -130,7 +130,12 @@ class SessionVisualizerWindow(QMainWindow):
         return ts - ts[0], aligned
 
     def _prepare_frame_data(self, time_rel: np.ndarray) -> list:
-        """Prepare frame metadata for visualization."""
+        """Store raw pose and degree Euler angles of inverse(reference)*q per frame.
+
+        Relative angles come from qm.to_euler_zyx; if quaternion conversion
+        fails, the existing fallback uses recorded yaw/pitch/roll fields.
+        No exclusion or smoothing is applied; frame times are caller-supplied.
+        """
         frame_data = []
 
         for sample, t_rel in zip(self.recorded_samples, time_rel):
@@ -333,9 +338,20 @@ class SessionVisualizerWindow(QMainWindow):
 
     def _create_mesh_visualization(self):
         """Create the 3D mesh visualization using a native OpenGL widget (no browser/HTML/JS)."""
+        self.relative_pose_checkbox = QCheckBox("Show relative to reference pose")
+        self.relative_pose_checkbox.setChecked(True)
+        self.relative_pose_checkbox.setToolTip(
+            "Checked: show movement from the reference pose. Unchecked: show the recorded pose. "
+            "Only the mesh and its angle labels change; graphs and statistics stay the same."
+        )
+        self.relative_pose_checkbox.toggled.connect(self._update_mesh_for_current_frame)
+        self.mesh_layout.addWidget(self.relative_pose_checkbox)
+        self.reference_pose_label = QLabel("Reference pose: No head recording")
+        self.reference_pose_label.setWordWrap(True)
+        self.mesh_layout.addWidget(self.reference_pose_label)
         self.gl_view = gl.GLViewWidget()
         self.gl_view.setBackgroundColor(255, 255, 255, 255)
-        self.gl_view.setCameraPosition(distance=4, elevation=0, azimuth=0)
+        self.gl_view.setCameraPosition(distance=5, elevation=0, azimuth=0)
 
         R = np.eye(3)
         pos = self._mesh_line_segments(R)
@@ -345,13 +361,22 @@ class SessionVisualizerWindow(QMainWindow):
         self.gl_view.addItem(self.mesh_gl_item)
 
         self.axis_gl_items = []
+        self.axis_label_items = []
         for color in _AXIS_COLORS:
             item = gl.GLLinePlotItem(
                 pos=np.array([[0, 0, 0], [0, 0, 0]], dtype=float),
-                color=color, width=3, antialias=True
+                color=pg.glColor(color), width=3, antialias=True
             )
             self.gl_view.addItem(item)
             self.axis_gl_items.append(item)
+
+        for color in _AXIS_COLORS[:2]:
+            label = gl.GLTextItem(
+                text="", color=color,
+                font=QFont("Sans Serif", 10),
+            )
+            self.gl_view.addItem(label)
+            self.axis_label_items.append(label)
 
         self.mesh_layout.addWidget(self.gl_view, 1)
 
@@ -359,21 +384,25 @@ class SessionVisualizerWindow(QMainWindow):
         """Create PyQtGraph line plots for dynamics (empty until a session is loaded)."""
         self.graphs_widget.ci.layout.setSpacing(2)
         self.graphs_widget.ci.layout.setContentsMargins(0, 0, 0, 0)
+        self.graphs_widget.setToolTip(
+            "Yaw and pitch show relative pose, measured from the reference pose, in degrees. "
+            "The mesh checkbox does not change these graphs."
+        )
 
         # Yaw plot
         self.yaw_plot = self.graphs_widget.addPlot(row=0, col=0)
-        self.yaw_plot.setLabel('left', 'Yaw')
+        self.yaw_plot.setLabel('left', 'Yaw', units='deg')
         self.yaw_plot.showAxis('bottom', False)
-        self.yaw_curve = self.yaw_plot.plot([], [], pen=pg.mkPen('#d62728', width=1.5))
+        self.yaw_curve = self.yaw_plot.plot([], [], pen=pg.mkPen(ANGLE_COLORS["yaw"], width=1.5))
         self.yaw_plot.setYRange(*self.yaw_range, padding=0)
         self.yaw_plot.getViewBox().setDefaultPadding(0)
         self.yaw_line = self.yaw_plot.addLine(x=0, pen=pg.mkPen('#007bff', width=2, style=Qt.DashLine))
 
         # Pitch plot
         self.pitch_plot = self.graphs_widget.addPlot(row=1, col=0)
-        self.pitch_plot.setLabel('left', 'Pitch')
+        self.pitch_plot.setLabel('left', 'Pitch', units='deg')
         self.pitch_plot.showAxis('bottom', False)
-        self.pitch_curve = self.pitch_plot.plot([], [], pen=pg.mkPen('#2ca02c', width=1.5))
+        self.pitch_curve = self.pitch_plot.plot([], [], pen=pg.mkPen(ANGLE_COLORS["pitch"], width=1.5))
         self.pitch_plot.setYRange(*self.pitch_range, padding=0)
         self.pitch_plot.getViewBox().setDefaultPadding(0)
         self.pitch_line = self.pitch_plot.addLine(x=0, pen=pg.mkPen('#007bff', width=2, style=Qt.DashLine))
@@ -424,7 +453,7 @@ class SessionVisualizerWindow(QMainWindow):
         self.stats_label.setStyleSheet("font-size: 11px; font-family: monospace;")
         layout.addWidget(self.stats_label)
         layout.addSpacing(6)
-        calibration_title = QLabel("<b>Calibration</b>")
+        calibration_title = QLabel("<b>Calibration pose</b>")
         calibration_title.setStyleSheet("font-size: 12px;")
         layout.addWidget(calibration_title)
         self.calibration_label = QLabel("No session loaded.")
@@ -434,22 +463,17 @@ class SessionVisualizerWindow(QMainWindow):
         return widget
 
     def _refresh_calibration_widget(self):
-        """Show the at-rest pose from the initial calibration, if recorded."""
+        """Display saved calibration means/population SDs without recalculating them.
+
+        With no saved sample count, display Euler angles of the playback
+        reference quaternion instead, labelled with its reference source.
+        Recorder.set_calibration documents how the saved statistics are made.
+        """
         calibration = getattr(self.recorder, "calibration", None) if self.recorder is not None else None
         if not calibration or not calibration.get("sample_count"):
             angles = np.degrees(qm.to_euler_zyx(self.neutral_q))
-            rest = any(
-                (getattr(sample, "metadata", None) or {}).get("task_phase") == "initial_rest.hold"
-                for sample in self.recorded_samples
-            )
-            source = "Initial rest position" if rest else "First samples (up to 30 within 1 second)"
-            if any(
-                event.get("event_type") == "recenter"
-                for event in getattr(self.recorder, "_events", [])
-            ):
-                source = "Recorded recenter pose"
             self.calibration_label.setText(
-                f"Reference: {source}<br>"
+                f"{self.reference_pose_label.text()}<br>"
                 f"Yaw: {angles[0]:+.2f}°, Pitch: {angles[1]:+.2f}°, Roll: {angles[2]:+.2f}°"
             )
             return
@@ -465,10 +489,17 @@ class SessionVisualizerWindow(QMainWindow):
         footer = f"{calibration['sample_count']} samples"
         if duration:
             footer += f" over {duration:.1f}s"
-        rows.append(f"<span style='color:#666'>Mean at-rest pose ± SD; {footer}</span>")
+        rows.append(f"<span style='color:#666'>Average calibration pose ± spread (SD); {footer}</span>")
         self.calibration_label.setText("<br>".join(rows))
 
     def _refresh_stats_widget(self):
+        """Display full loaded-session SessionStats (not notebook exclusions).
+
+        Ranges are recorded unwrapped Euler max-min, dynamics use usable
+        quaternion intervals, and sampling rate is 1/median positive dt.
+        Display formatting rounds only the text; fewer than two samples
+        produce the existing visible error instead of computed estimates.
+        """
         try:
             stats = SessionStats(self.recorded_samples)
             rom = stats.cervical_rom()
@@ -675,6 +706,9 @@ class SessionVisualizerWindow(QMainWindow):
         self.neutral_q = calculate_neutral_quaternion(
             recorded_samples, recorder=recorder, reference_samples=reference_samples
         )
+        self.reference_pose_label.setText(
+            "Reference pose: " + reference_pose_source(recorded_samples, recorder, reference_samples)
+        )
         time_rel, self._host_frame_times = self._sample_times(time_origin_host)
         self.frame_data = self._prepare_frame_data(time_rel)
         self.timestamps = [f['time_rel'] for f in self.frame_data]
@@ -727,17 +761,15 @@ class SessionVisualizerWindow(QMainWindow):
 
     def _update_mesh_for_current_frame(self):
         """Update mesh visualization for current frame via direct GL buffer updates (no HTML/JS, no flicker)."""
+        if not self.frame_data:
+            return
         frame = self.frame_data[self.current_frame_index]
 
-        try:
-            q = np.array(frame['quaternion'])
-            q_rel = qm.relative_rotation(self.neutral_q, q)
-            R = head_rotation_to_mesh_frame(
-                rotation_from_quaternion(q_rel[0], q_rel[1], q_rel[2], q_rel[3])
-            )
-        except Exception:
-            R = rotation_from_euler(frame['yaw_rel_deg'], frame['pitch_rel_deg'],
-                                   frame['roll_rel_deg'], degrees=True)
+        q = np.array(frame['quaternion'])
+        if self.relative_pose_checkbox.isChecked():
+            q = qm.relative_rotation(self.neutral_q, q)
+        R = head_rotation_to_mesh_frame(rotation_from_quaternion(*q))
+        yaw, pitch, _ = np.degrees(qm.to_euler_zyx(q))
 
         pos = self._mesh_line_segments(R)
         self.mesh_gl_item.setData(pos=pos)
@@ -746,6 +778,8 @@ class SessionVisualizerWindow(QMainWindow):
         tips = tips[:, [2, 0, 1]]
         for item, tip in zip(self.axis_gl_items, tips):
             item.setData(pos=np.array([[0, 0, 0], tip]))
+        for label, tip, axis, value in zip(self.axis_label_items, tips, ("Pitch", "Yaw"), (pitch, yaw)):
+            label.setData(pos=tip, text=f"{axis} {value:+.1f} deg")
 
     def _update_display(self, frame_index: int, note: str = ""):
         """Update all visualizations for the current frame."""
@@ -776,11 +810,11 @@ class SessionVisualizerWindow(QMainWindow):
             + task_html + "<br>"
             f"<b>Quaternion:</b><br>"
             f"[{q[0]:.4f}, {q[1]:.4f}, {q[2]:.4f}, {q[3]:.4f}]<br><br>"
-            f"<b>Absolute:</b><br>"
+            f"<b>Recorded pose:</b><br>"
             f"Yaw: {frame['yaw_deg']:+.1f}°<br>"
             f"Pitch: {frame['pitch_deg']:+.1f}°<br>"
             f"Roll: {frame['roll_deg']:+.1f}°<br><br>"
-            f"<b>Relative:</b><br>"
+            f"<b>Relative pose:</b><br>"
             f"Yaw: {frame['yaw_rel_deg']:+.1f}°<br>"
             f"Pitch: {frame['pitch_rel_deg']:+.1f}°<br>"
             f"Roll: {frame['roll_rel_deg']:+.1f}°<br><br>"

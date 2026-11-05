@@ -103,6 +103,12 @@ class Recorder:
         ``samples`` are ``(timestamp, quaternion)`` pairs of the absolute
         provider pose; ``neutral_quaternion`` is the at-rest pose derived
         from them.
+        This function does not estimate neutral: convert the supplied neutral
+        quaternion to degree yaw/pitch/roll for saved means. Spread is the
+        population SD (divisor n) of Euler angles of inverse(neutral)*sample,
+        without unwrapping; empty calibration samples give zero spreads.
+        Start/end are first/last sample timestamps. duration_s is supplied by
+        the capture workflow, not calculated from those endpoints here.
         """
         recorded = [_make_sample(t, q) for t, q in samples]
         neutral = np.asarray(neutral_quaternion, dtype=np.float64)

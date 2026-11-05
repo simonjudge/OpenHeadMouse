@@ -70,6 +70,39 @@ def archive_bytes(manifest, files):
     return output.getvalue()
 
 
+def test_playback_uses_iframe_without_html_warning(tmp_path, monkeypatch):
+    import warnings
+    from html.parser import HTMLParser
+    from IPython.display import IFrame
+    from colab_session_viewer.app import NotebookViewer, viewer_document
+
+    viewer = NotebookViewer()
+    shown = []
+    monkeypatch.setattr("colab_session_viewer.app.display", shown.append)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        session = viewer.add_session("P", "Test", fitts_path=make_fitts(tmp_path))
+        viewer._render()
+    assert len(shown) == 2
+    assert all(isinstance(item, IFrame) for item in shown)
+
+    class FrameParser(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag == "iframe":
+                self.frame = dict(attrs)
+
+    parser = FrameParser()
+    parser.feed(shown[-1]._repr_html_())
+    assert parser.frame["srcdoc"] == viewer_document(playback_payload(
+        session, initial_rest_exclude_s=1.0, head_opening_exclude_s=1.0,
+    ))
+    assert parser.frame["sandbox"] == "allow-scripts"
+    assert parser.frame["src"] == "about:blank"
+    assert parser.frame["width"] == "100%"
+    assert parser.frame["height"] == "1150"
+    assert parser.frame["title"] == "Head and cursor session playback"
+
+
 def test_loading_and_session_outputs_share_one_viewer(monkeypatch):
     from colab_session_viewer.app import NotebookViewer
 
@@ -247,6 +280,10 @@ def test_notebook_has_separate_loading_and_session_cells():
     assert "PROJECT_DIR / 'colab_session_viewer' / 'demodata'" in cells["loading"]
     assert cells["viewer"].strip() == "viewer.show_session();"
     assert "NotebookViewer(" not in cells["viewer"]
+    assert "**Skip opening of initial-rest hold (s)** defaults to **1.0 seconds**" in cells["usage"]
+    assert "never the preceding `initial_rest.move` phase" in cells["usage"]
+    assert "session tables start collapsed" in cells["usage"]
+    assert "**Skip opening of head recording (s)** defaults to **1.0 seconds**" in cells["usage"]
 
 
 def test_notebook_loading_and_viewing_cells_execute_and_keep_imports(tmp_path, monkeypatch):
@@ -335,6 +372,36 @@ def test_head_json_csv_and_native_orientation_parity(tmp_path, qt_app, suffix, m
         assert len(payload["head_graphs"]) == 4
     finally:
         native.close()
+
+
+def test_playback_payload_supports_both_pose_views_and_shared_colours(tmp_path):
+    from session_viewer.mesh_visualizer import ANGLE_COLORS, head_rotation_to_mesh_frame, rotation_from_quaternion
+
+    recorder = Recorder(tmp_path)
+    reference = qm.from_euler_zyx(*np.radians([30, 20, -10]))
+    recorder.set_calibration([(0, reference)], reference)
+    recorder.record_sample(0, reference)
+    recorder.record_sample(1, qm.from_euler_zyx(*np.radians([-15, -5, 12])))
+    session = Session.load("P", "pose", head_path=recorder.save("poses.json"))
+    payload = playback_payload(session)
+    assert payload["reference_pose_source"] == "Calibration pose"
+    assert payload["angle_colors"] == ANGLE_COLORS
+    for frame, sample in zip(payload["frames"], session.samples):
+        np.testing.assert_allclose(frame["recorded_rotation"], head_rotation_to_mesh_frame(
+            rotation_from_quaternion(*sample.quaternion),
+        ))
+        np.testing.assert_allclose(frame["recorded_angles"], np.degrees(qm.to_euler_zyx(sample.quaternion)))
+        np.testing.assert_allclose(frame["rotation"], head_rotation_to_mesh_frame(
+            rotation_from_quaternion(*qm.relative_rotation(reference, sample.quaternion)),
+        ), atol=1e-10)
+    np.testing.assert_allclose(payload["frames"][0]["rotation"], np.eye(3), atol=1e-10)
+    assert not np.allclose(payload["frames"][0]["recorded_rotation"], np.eye(3))
+    for graph, axis in zip(payload["head_graphs"][:2], ("yaw", "pitch")):
+        assert graph["color"] == ANGLE_COLORS[axis]
+        assert graph["label"] == f"Relative {axis} (deg)"
+    assert payload["head_graphs"][0]["points"][0][1] == pytest.approx(0, abs=1e-10)
+    assert playback_payload(Session.load("P", "mouse", fitts_path=make_fitts(tmp_path)))[
+        "reference_pose_source"] == "No head recording"
 
 
 def test_synchronised_native_and_browser_states_match(tmp_path, qt_app):
@@ -458,9 +525,9 @@ def test_archive_multiple_datasets_and_atomic_duplicates(tmp_path):
                 and child.value.startswith("<h3>Import recordings")) < children.index(viewer.viewer)
     assert children.index(viewer.archive_review) < children.index(viewer.viewer) < children.index(viewer.table)
     assert sum(child is viewer.viewer for child in viewer.widget.children) == 1
-    viewer.exclusion_controls.children[0].value = 2
+    viewer.exclude_targets.value = 2
     assert viewer.summary_rows()[0]["targets_analysed"] == 6
-    assert viewer.summary_rows()[1]["targets_analysed"] == 5
+    assert viewer.summary_rows()[1]["targets_analysed"] == 3
     assert "Download summary CSV" in viewer.table.value
     with pytest.raises(ValueError, match="Duplicate"):
         viewer._add_sessions(load_archive(archive))
@@ -821,20 +888,22 @@ def test_split_tables_keep_one_row_per_participant_and_rom_task_only(tmp_path):
     assert tables["Fitts targets and hits"][1]["targets_analysed"] == 5
     assert tables["Fitts stats"][0]["mean_movement_time_s"] is None
     viewer = NotebookViewer()
+    viewer.initial_rest_exclude.value = 0
     viewer._add_sessions([head, mouse])
     markup = viewer.table.value
-    assert markup.count("<table ") == 7  # Six summary tables plus expandable file diagnostics.
+    assert markup.count("<table ") == 14  # Six summaries, six session tables, conditions and diagnostics.
+    assert markup.count('class="session-details"') == 6
     assert markup.count("<svg ") == 5  # Four reference views plus the participant pose.
     assert markup.index("<svg ") > markup.index("<h3>Initial head positions</h3>")
     assert markup.index("<svg ") < markup.index("<h3>Range of movement stats</h3>")
     assert "Angle zero references (schematic head mesh)" in markup
-    assert "Webcam pitch/roll are camera-referenced" in markup
+    assert "Webcam pitch/roll are relative to the camera, not gravity" in markup
     for title in tables:
         assert f"<h3>{title}</h3>" in markup
     for filename in ("session_summary.csv", "initial_head_positions.csv",
                      "range_of_movement_stats.csv", "fitts_stats.csv"):
         assert f'download="{filename}"' in markup
-    viewer.exclusion_controls.children[1].value = 2
+    viewer.exclude_targets.value = 2
     updated = participant_tables(viewer.summary_rows())
     assert updated["Fitts targets and hits"][1]["targets_analysed"] == 3
     assert updated["Range of movement stats"] == tables["Range of movement stats"]
@@ -858,8 +927,11 @@ def test_initial_pose_reference_diagram_uses_mesh_and_distinguishes_references()
         assert "0.0 deg" in svg.attrib["aria-label"]
     assert "Camera axes follow the camera" in markup
     assert "IMU tilt assumes correct sensor mounting/fit" in markup
-    assert "Calibration mean yaw uses this same provider reference" in markup
-    assert "Illustrative heading only; not a participant measurement" in markup
+    assert "Calibration heading uses this same tracker reference" in markup
+    assert "Example heading only; not a participant measurement" in markup
+    from session_viewer.mesh_visualizer import ANGLE_COLORS
+    for svg, angle in zip(svgs, ("pitch", "roll", "yaw", "yaw")):
+        assert ANGLE_COLORS[angle] in ET.tostring(svg, encoding="unicode")
     assert "L110.0 20.0" in markup  # Provider yaw zero points forward.
     assert "L155.9 34.5" in markup  # Relative yaw zero follows the illustrated calibration.
 
@@ -973,7 +1045,7 @@ def test_table_order_compact_headers_and_sources(tmp_path):
     assert "table-layout:auto" in markup
     assert "table-layout:fixed" not in markup
     assert "overflow-wrap:anywhere" in markup
-    assert "Yaw absolute (deg)" in markup
+    assert "Recorded yaw (deg)" in markup
     assert "gravity does not determine yaw" in markup
 
 
@@ -991,19 +1063,38 @@ def test_collapsed_reference_sources_and_complete_field_keys(tmp_path):
             super().__init__()
             self.details = []
             self.headers = []
+            self.table_columns = []
+            self.field_keys = []
+            self.in_field = False
 
         def handle_starttag(self, tag, attrs):
+            if tag == "table":
+                self.table_columns.append([])
             if tag == "details":
                 self.details.append(dict(attrs))
             elif tag == "th":
                 self.headers.append(dict(attrs))
+                self.table_columns[-1].append(dict(attrs)["title"])
+            elif tag == "dl":
+                self.field_keys.append([])
+            elif tag == "code" and self.field_keys:
+                self.in_field = True
+
+        def handle_data(self, text):
+            if self.in_field:
+                self.field_keys[-1].append(text)
+
+        def handle_endtag(self, tag):
+            if tag == "code":
+                self.in_field = False
 
     parser = ReportParser()
     parser.feed(viewer.table.value)
     assert parser.details
     assert all("open" not in attrs for attrs in parser.details)
     assert all("font-weight:bold" in attrs["style"] for attrs in parser.headers)
-    assert viewer.table.value.count("<summary><b>Field key</b></summary>") == 7
+    assert viewer.table.value.count("<summary><b>Field key</b></summary>") == 14
+    assert parser.field_keys == parser.table_columns
     for table in participant_tables(viewer.summary_rows()).values():
         for key in table[0]:
             assert field_description(key)
@@ -1016,7 +1107,7 @@ def test_collapsed_reference_sources_and_complete_field_keys(tmp_path):
                  "Orthogonal-direction change (ODC)", "Movement variability (MV)",
                  "Movement error (ME)", "Movement offset (MO)"):
         assert text in viewer.table.value
-    assert "calibration-heading-relative when calibration is available" in field_description(
+    assert "Yaw is measured from the calibration heading when saved calibration is available" in field_description(
         "head_range_of_movement_directions_left_angle_mean_deg_session_mean",
     )
 
@@ -1048,9 +1139,44 @@ def test_pose_zero_axes_redraw_without_mutating_measurements(zero_axes):
     assert "Yaw: + left / - right" in markup
     assert "Pitch: + up / - down" in markup
     assert "Roll: + left ear down / - right ear down" in markup
+    assert f"Pitch {expected[1]:+.1f} deg</text>" in markup
+    assert f"Yaw {expected[0]:+.1f} deg</text>" in markup
     if zero_axes:
         original = initial_pose_wireframes(rows)
         assert re.findall(r"<line [^>]+", markup) != re.findall(r"<line [^>]+", original)
+
+
+def test_zero_pose_wireframe_is_projected_front_on(mesh_file):
+    import re
+    import xml.etree.ElementTree as ET
+    from colab_session_viewer.data import initial_pose_wireframes
+    from session_viewer.mesh_visualizer import centre_and_scale, load_obj_wireframe
+
+    rows = [{
+        "participant": "P",
+        "head_initial_rest_yaw_calibration_mean_deg_session_mean": 30,
+        "head_initial_rest_pitch_mean_deg_session_mean": 20,
+        "head_initial_rest_roll_mean_deg_session_mean": -10,
+    }]
+    markup = initial_pose_wireframes(rows, zero_axes=("yaw", "pitch", "roll"))
+    root = ET.fromstring(re.search(r"<svg\b.*?</svg>", markup).group())
+    ns = {"svg": "http://www.w3.org/2000/svg"}
+    lines = root.findall(".//svg:line", ns)
+    vertices, _, edges = load_obj_wireframe(mesh_file)
+    vertices = centre_and_scale(vertices)
+    scale = 240 / (4 - vertices[:, 2])
+    projected = np.column_stack((120 + vertices[:, 0] * scale, 110 - vertices[:, 1] * scale))
+    for line, (a, b) in zip(lines, edges):
+        actual = [float(line.attrib[key]) for key in ("x1", "y1", "x2", "y2")]
+        np.testing.assert_allclose(actual, projected[[a, b]].reshape(-1), atol=0.05)
+    assert len(lines) == len(edges)
+    paths = root.findall(".//svg:path", ns)
+    assert paths[0].attrib["d"] == "M120 110 L120.0 110.0"
+    assert paths[1].attrib["d"] == "M120 110 L120.0 110.0"
+    from session_viewer.mesh_visualizer import ANGLE_COLORS
+    for index, angle in enumerate(("roll", "pitch", "yaw")):
+        assert paths[index * 2].attrib["stroke"] == ANGLE_COLORS[angle]
+        assert paths[index * 2 + 1].attrib["stroke"] == ANGLE_COLORS[angle]
 
 
 def test_pose_controls_redraw_restore_and_preserve_exports_and_playback(tmp_path):

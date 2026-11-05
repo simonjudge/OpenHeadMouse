@@ -17,6 +17,25 @@ MEDIAPIPE_OBJ_URL = MESH_URL
 MODELS_DIR = Path(__file__).parent.parent / "models"
 OBJ_PATH = MODELS_DIR / "canonical_face_model.obj"
 
+ANGLE_COLORS = {"pitch": "#d62728", "yaw": "#2ca02c", "roll": "#1f77b4"}
+
+
+def reference_pose_source(recorded_samples, recorder=None, reference_samples=None) -> str:
+    """Name the source selected by calculate_neutral_quaternion."""
+    if any(
+        e.get("event_type") == "recenter" and "quaternion" in e.get("data", {})
+        for e in getattr(recorder, "_events", [])
+    ):
+        return "Saved recenter pose"
+    calibration = getattr(recorder, "calibration", None)
+    if ((calibration and calibration.get("neutral_quaternion") is not None)
+            or getattr(recorder, "calibration_samples", None)):
+        return "Calibration pose"
+    samples = reference_samples if reference_samples is not None else recorded_samples
+    if any((getattr(s, "metadata", None) or {}).get("task_phase") == "initial_rest.hold" for s in samples):
+        return "Initial rest"
+    return "First samples (up to 30 within 1 second)" if samples else "No head recording"
+
 
 def download_mediapipe_model(path: Path = OBJ_PATH) -> Path:
     """Download the official MediaPipe canonical face model if not present."""
@@ -45,7 +64,11 @@ def load_obj_wireframe(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 def centre_and_scale(vertices: np.ndarray) -> np.ndarray:
-    """Centre approximately between the eyes and scale to a compact display."""
+    """Subtract bounding-box midpoint and divide by half the largest axis span.
+
+    This display-only transform fits the largest mesh dimension to [-1,1];
+    it is not an anatomical measurement or a change to recorded head pose.
+    """
     v = vertices.copy()
     centre = (v.min(axis=0) + v.max(axis=0)) / 2
     v -= centre
@@ -55,7 +78,11 @@ def centre_and_scale(vertices: np.ndarray) -> np.ndarray:
 
 
 def rotation_from_quaternion(qw: float, qx: float, qy: float, qz: float) -> np.ndarray:
-    """Convert quaternion [w, x, y, z] to a 3x3 rotation matrix."""
+    """Normalize scalar-first quaternion and apply its standard 3x3 rotation matrix.
+
+    Multiplying R by a column vertex rotates it; zero norm returns identity
+    under the existing display convention. No camera tilt/reference is added.
+    """
     q = np.asarray([qw, qx, qy, qz], dtype=float)
     norm = np.linalg.norm(q)
     if norm == 0:
@@ -82,7 +109,11 @@ _MESH_TO_HEAD_FRAME = np.array(
 
 
 def head_rotation_to_mesh_frame(r_head: np.ndarray) -> np.ndarray:
-    """Re-express a head-frame rotation matrix in the canonical mesh's coordinate frame."""
+    """Return R_mesh = P.T @ R_head @ P for the fixed mesh-to-head basis P.
+
+    This changes coordinate basis only; identity stays identity, so zero
+    relative angles show the mesh front-on rather than with an artificial tilt.
+    """
     return _MESH_TO_HEAD_FRAME.T @ np.asarray(r_head, dtype=float) @ _MESH_TO_HEAD_FRAME
 
 
@@ -101,6 +132,13 @@ def calculate_neutral_quaternion(recorded_samples: list, recorder=None, referenc
     Args:
         recorded_samples: List of RecordedSample objects
         recorder: Optional Recorder instance that may contain events from loaded JSON
+        reference_samples: Optional full recording for fallback estimation when
+            recorded_samples is a synchronised subset.
+
+    Saved neutral takes priority over saved calibration samples; otherwise
+    those calibration samples use qm.mean_quaternion. All fallback pose means
+    use that same hemisphere-aligned normalized quaternion mean, not Euler
+    means. Exclusion controls do not redefine this display reference.
     """
     # Check for recenter event in recorder's events list
     if recorder is not None and hasattr(recorder, '_events'):
@@ -156,8 +194,10 @@ def calculate_neutral_quaternion(recorded_samples: list, recorder=None, referenc
 def rotation_from_euler(yaw: float, pitch: float, roll: float, degrees: bool = True) -> np.ndarray:
     """Convert Euler angles (yaw, pitch, roll) to a 3x3 rotation matrix.
 
-    Intrinsic Z-Y-X composition: R = Rz(yaw) @ Ry(pitch) @ Rx(roll)
-    (applied in order: yaw first, then pitch, then roll)
+    Legacy parameter-to-axis mapping: R = Rz(roll) @ Ry(yaw) @ Rx(pitch).
+    For column vectors the rightmost rotation acts first. This is not the
+    canonical head-angle mapping in qm.from_euler_zyx; current viewer pose
+    calculations use quaternion rotations instead. degrees=False accepts radians.
     """
     if degrees:
         yaw, pitch, roll = np.deg2rad([yaw, pitch, roll])

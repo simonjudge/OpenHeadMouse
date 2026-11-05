@@ -1,6 +1,7 @@
 "use strict";
 
 const NotebookPlayback = (() => {
+    /** Binary search: last recorded item with key(item) <= time, or -1. No interpolation. */
     function lastAtOrBefore(items, time, key) {
         let lo = 0, hi = items.length;
         while (lo < hi) {
@@ -11,6 +12,15 @@ const NotebookPlayback = (() => {
         return lo - 1;
     }
 
+    /**
+     * Live equivalent of FittsStats.path_measures, using this seek-time path only.
+     * Project points onto start->target (x') and perpendicular (y') axes, in pixels.
+     * TRE = max(circular-region entries - 1, 0); TAC = sign changes(y');
+     * MDC/ODC = sign changes(diff(y'))/sign changes(diff(x')), ignoring exact zeros.
+     * MV = sample SD(y'), ME = mean(abs(y')), MO = mean(y'), with equal sample weight.
+     * No smoothing, time weighting or interpolated crossings; <2 points/zero axis
+     * gives null. Python builds the full path (click appended) for completed targets.
+     */
     function pathMeasures(trial, points) {
         const dx = trial.target_pos[0] - trial.start_pos[0];
         const dy = trial.target_pos[1] - trial.start_pos[1];
@@ -40,6 +50,14 @@ const NotebookPlayback = (() => {
         };
     }
 
+    /**
+     * Select recorded head/cursor state at or before playback time (seconds).
+     * Compare against original clock origin to preserve exact sample boundaries.
+     * Cursor path includes only elapsed samples, or full_path after selection;
+     * speed comes from Python's per-trial displacement/dt series, elapsed time is
+     * clipped to [start,end], distance is Euclidean cursor->target pixels.
+     * pathMeasures is live feedback, not the filtered participant summary.
+     */
     function stateAt(data, time) {
         // Compare on the original clock to preserve exact sample boundaries.
         const origin = data.clock_origin ?? 0;
@@ -82,10 +100,12 @@ const NotebookPlayback = (() => {
         get("title").textContent = data.title + (data.synced ? " (synchronised)" : "");
         get("pretest").innerHTML = data.pretest_html;
         get("session-summary").textContent = Object.entries(data.session_summary)
-            .map(([key, value]) => `${key}: ${typeof value === "number" ? value.toFixed(1) : value ?? "n/a"}`).join("\n");
+            .map(([key, value]) => `${key}${["head_samples", "head_duration_s"].includes(key) ? " (recorded total, before exclusions)" : ""}: ${typeof value === "number" ? value.toFixed(1) : value ?? "n/a"}`).join("\n");
         let time = 0, playing = false, zoom = 1, timer = null;
         let cameraYaw = 0, cameraPitch = 0, cameraScale = 1;
         const slider = get("seek"), play = get("play"), speed = get("speed");
+        const relativePose = get("relative-pose");
+        get("reference-pose-source").textContent = `Reference pose: ${data.reference_pose_source}`;
         slider.max = String(data.duration);
         const graphs = [];
         for (const [id, series] of [["head-graphs", data.head_graphs], ["cursor-graphs", data.cursor_graphs]]) {
@@ -118,7 +138,11 @@ const NotebookPlayback = (() => {
             const canvas = get("head"), ctx = canvas.getContext("2d");
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             if (!state.frame) { ctx.fillText("No head recording", 20, 25); return; }
-            const rotation = state.frame.rotation;
+            const rotation = relativePose.checked ? state.frame.rotation : state.frame.recorded_rotation;
+            const angles = relativePose.checked ? state.frame.angles : state.frame.recorded_angles;
+            /** Apply pose rotation, camera yaw/pitch, then perspective scale 400/(4-z).
+             * Display-only projection; camera motion never changes measured angles.
+             */
             function project(v) {
                 const p = rotation.map(row => row.reduce((sum, r, i) => sum + r * v[i], 0));
                 const x = p[0] * Math.cos(cameraYaw) + p[2] * Math.sin(cameraYaw);
@@ -129,18 +153,29 @@ const NotebookPlayback = (() => {
                 return [canvas.width / 2 + x * scale, canvas.height / 2 - y * scale];
             }
             const vertices = data.geometry.vertices.map(project);
-            for (const [a, b] of data.geometry.edges) line(ctx, [vertices[a], vertices[b]], "#222");
-            const colors = ["#d62728", "#2ca02c", "#1f77b4"];
+            for (const [a, b] of data.geometry.edges) line(ctx, [vertices[a], vertices[b]], state.frame.excluded ? "#999" : "#222");
+            const colors = ["pitch", "yaw", "roll"].map(axis => data.angle_colors[axis]);
+            ctx.font = "13px sans-serif";
             colors.forEach((color, i) => {
                 const tip = [0, 0, 0]; tip[i] = 1.25;
-                line(ctx, [project([0, 0, 0]), project(tip)], color, 3);
+                const [x, y] = project(tip);
+                line(ctx, [project([0, 0, 0]), [x, y]], color, 3);
+                if (i < 2) {
+                    const value = angles[1 - i];
+                    ctx.fillStyle = color;
+                    ctx.fillText(`${i === 0 ? "Pitch" : "Yaw"} ${value >= 0 ? "+" : ""}${value.toFixed(1)} deg`, x + 4, y - 4);
+                }
             });
             const f = state.frame;
             get("head-live").textContent = [
                 state.headNote, `Time: ${f.t.toFixed(1)} s`, f.phase,
+                f.excluded ? `Excluded from: ${[
+                    f.initial_pose_excluded ? "initial-pose statistics" : "",
+                    f.movement_excluded ? "session movement statistics" : "",
+                ].filter(Boolean).join(" and ")} (raw pose shown)` : "",
                 `Quaternion [w,x,y,z]: ${f.quaternion.map(v => v.toFixed(1)).join(", ")}`,
-                `Relative yaw / pitch / roll: ${f.angles.map(v => v.toFixed(1)).join(" / ")} deg`,
-                `Absolute yaw / pitch / roll: ${f.raw_angles.map(v => v.toFixed(1)).join(" / ")} deg`,
+                `Relative pose - yaw / pitch / roll: ${f.angles.map(v => v.toFixed(1)).join(" / ")} deg`,
+                `Recorded pose - yaw / pitch / roll: ${f.recorded_angles.map(v => v.toFixed(1)).join(" / ")} deg`,
                 `Angular speed: ${f.speed.toFixed(1)} deg/s`, `Acceleration: ${f.acceleration.toFixed(1)} deg/s2`,
             ].filter(Boolean).join("\n");
         }
@@ -154,7 +189,7 @@ const NotebookPlayback = (() => {
             ctx.fillStyle = "#fafafa"; ctx.fillRect(ox, oy, sw * scale, sh * scale);
             ctx.strokeStyle = "#888"; ctx.strokeRect(ox, oy, sw * scale, sh * scale);
             function click(trial, size, faded = false) {
-                cross(ctx, point(trial.click_pos), size, trial.hit ?
+                cross(ctx, point(trial.click_pos), size, trial.excluded ? "#999" : trial.hit ?
                     (faded ? "#28a02866" : "#28a028") : (faded ? "#d2282866" : "#d22828"));
             }
             const trial = state.trial;
@@ -170,29 +205,33 @@ const NotebookPlayback = (() => {
                 ctx.setLineDash([]);
                 const [x, y] = point(trial.target_pos);
                 ctx.beginPath(); ctx.arc(x, y, trial.width_px / 2 * scale, 0, Math.PI * 2);
-                ctx.fillStyle = "#1f77b432"; ctx.fill(); ctx.strokeStyle = "#1f77b4"; ctx.lineWidth = 2; ctx.stroke();
+                ctx.fillStyle = trial.excluded ? "#99999932" : "#1f77b432"; ctx.fill();
+                ctx.strokeStyle = trial.excluded ? "#999" : "#1f77b4"; ctx.lineWidth = 2; ctx.stroke();
                 cross(ctx, point(trial.start_pos), 5, "#555", true);
             } else {
                 ctx.fillStyle = "#333"; ctx.font = "13px sans-serif"; ctx.textAlign = "center";
                 ctx.fillText(state.phase, canvas.width / 2, canvas.height / 2, canvas.width - 30);
                 ctx.textAlign = "start";
             }
-            line(ctx, state.points.map(point), "#ff7f0e", 2);
+            line(ctx, state.points.map(point), trial?.excluded ? "#999" : "#ff7f0e", 2);
             if (state.clicked) click(trial, 6);
             if (state.cursor) {
                 const [x, y] = point(state.cursor);
                 ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2);
-                ctx.fillStyle = "#d62728"; ctx.fill(); ctx.strokeStyle = "#000"; ctx.stroke();
+                ctx.fillStyle = trial?.excluded ? "#999" : "#d62728"; ctx.fill(); ctx.strokeStyle = "#000"; ctx.stroke();
             }
             const lines = [state.phase, `Time: ${time.toFixed(1)} s`];
             if (trial) {
                 lines.push(`Trial: ${state.trialIndex + 1} / ${data.trials.length}`,
+                    trial.excluded ? "Excluded from statistics (shown in grey)" : "Included in statistics",
                     `${trial.block_type}: ${trial.condition_label}`,
                     `Outcome: ${state.clicked ? trial.hit ? "HIT" : "MISS" : "in progress"}`,
                     `Elapsed: ${state.elapsed.toFixed(1)} s; MT: ${trial.movement_time_s.toFixed(1)} s`,
                     `Cursor: ${state.cursor.map(v => v.toFixed(1)).join(", ")} px`,
                     `Speed: ${state.speed.toFixed(1)} px/s; Distance: ${state.distance.toFixed(1)} px`);
-                for (const [key, value] of Object.entries(state.measures || {})) lines.push(`${key}: ${value.toFixed(1)}`);
+                if (!trial.excluded) {
+                    for (const [key, value] of Object.entries(state.measures || {})) lines.push(`${key}: ${value.toFixed(1)}`);
+                }
             } else lines.push(`Cursor points: ${state.points.length}`);
             get("cursor-live").textContent = lines.join("\n");
         }
@@ -213,19 +252,38 @@ const NotebookPlayback = (() => {
                     ctx.fillText((center - half).toFixed(1), 2, 88);
                     ctx.fillText("0.0 s", 58, 99); ctx.fillText(`${data.duration.toFixed(1)} s`, canvas.width - 65, 99);
                     ctx.save(); ctx.beginPath(); ctx.rect(58, 20, canvas.width - 70, 68); ctx.clip();
+                    ctx.fillStyle = "#d9d9d9";
                     if (isCursor) {
                         for (const trial of data.trials) {
-                            ctx.setLineDash([4, 3]); line(ctx, [[x(trial.start), 20], [x(trial.start), 88]], "#2e7d3280");
-                            ctx.setLineDash([1, 3]); line(ctx, [[x(trial.end), 20], [x(trial.end), 88]], "#8e24aa80");
+                            if (trial.excluded) ctx.fillRect(x(trial.start), 20, x(trial.end) - x(trial.start), 68);
+                        }
+                    } else {
+                        let start = null;
+                        for (const p of points) {
+                            if (p?.[2] && start === null) start = p[0];
+                            if (p && !p[2] && start !== null) {
+                                ctx.fillRect(x(start), 20, x(p[0]) - x(start), 68);
+                                start = null;
+                            }
+                        }
+                        if (start !== null) ctx.fillRect(x(start), 20, x(data.duration) - x(start), 68);
+                    }
+                    if (isCursor) {
+                        for (const trial of data.trials) {
+                            ctx.setLineDash([4, 3]); line(ctx, [[x(trial.start), 20], [x(trial.start), 88]], trial.excluded ? "#999" : "#2e7d3280");
+                            ctx.setLineDash([1, 3]); line(ctx, [[x(trial.end), 20], [x(trial.end), 88]], trial.excluded ? "#999" : "#8e24aa80");
                         }
                         ctx.setLineDash([]);
                     }
                     let segment = [];
                     for (const p of points) {
                         if (p) segment.push([x(p[0]), y(p[1])]);
-                        else { line(ctx, segment, "#1f77b4"); segment = []; }
+                        else {
+                            line(ctx, segment, graph.color || "#1f77b4");
+                            segment = [];
+                        }
                     }
-                    line(ctx, segment, "#1f77b4");
+                    line(ctx, segment, graph.color || "#1f77b4");
                     ctx.restore();
                     graph.background = ctx.getImageData(0, 0, canvas.width, canvas.height);
                     graph.cachedZoom = zoom;
@@ -264,6 +322,7 @@ const NotebookPlayback = (() => {
         get("zoom-in").onclick = () => { zoom = Math.min(20, zoom * 1.25); render(); };
         get("zoom-out").onclick = () => { zoom = Math.max(1, zoom / 1.25); render(); };
         get("reset-camera").onclick = () => { cameraYaw = cameraPitch = 0; cameraScale = 1; render(); };
+        relativePose.onchange = () => head(stateAt(data, time));
         let drag = null;
         get("head").onpointerdown = event => { drag = [event.clientX, event.clientY]; event.target.setPointerCapture(event.pointerId); };
         get("head").onpointerup = () => { drag = null; };

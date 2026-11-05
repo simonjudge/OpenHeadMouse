@@ -33,7 +33,11 @@ def pretest_records(metadata: dict | None) -> list[dict]:
 
 
 def pretest_time_range(metadata: dict | None) -> tuple[float, float] | None:
-    """Playable host-clock extent of completed or cancelled head-task phases."""
+    """Return (minimum start, maximum end) of valid phase host times, in seconds.
+
+    Include completed/cancelled phases with finite endpoints and end>=start;
+    ignore invalid/incomplete spans. No valid phase gives None.
+    """
     ranges = [
         (float(record["start_host_time"]), float(record["end_host_time"]))
         for record in pretest_records(metadata)
@@ -64,10 +68,16 @@ def phase_description(phase: str | None) -> str:
 
 
 def _mean(values: list[float]) -> float | None:
+    """Return sum(values)/n with equal sample weight, or None for no samples."""
     return sum(values) / len(values) if values else None
 
 
 def _std(values: list[float]) -> float | None:
+    """Return population SD = sqrt(sum((x-mean)^2)/n), or None for n<2.
+
+    Unlike effective Fitts width, held-pose spread uses divisor n, not n-1.
+    No circular-angle handling is performed by this generic helper.
+    """
     if len(values) < 2:
         return None
     mean = sum(values) / len(values)
@@ -75,6 +85,7 @@ def _std(values: list[float]) -> float | None:
 
 
 def _duration_s(record: dict) -> float | None:
+    """Return end_host_time-start_host_time in seconds; missing endpoints give None."""
     start = record.get("start_host_time")
     end = record.get("end_host_time")
     if start is None or end is None:
@@ -83,6 +94,7 @@ def _duration_s(record: dict) -> float | None:
 
 
 def _find_record(records: list[dict], task: str, segment: str, direction=None) -> dict | None:
+    """Select the first phase record with exactly matching task/segment/direction."""
     for record in records:
         if (
             record.get("task") == task
@@ -94,6 +106,7 @@ def _find_record(records: list[dict], task: str, segment: str, direction=None) -
 
 
 def _cursor_xy(record: dict | None) -> tuple[list[float], list[float]]:
+    """Extract recorded pixel coordinates, skipping malformed coordinate entries."""
     xs: list[float] = []
     ys: list[float] = []
     for point in (record or {}).get("cursor_trajectory") or []:
@@ -106,7 +119,13 @@ def _cursor_xy(record: dict | None) -> tuple[list[float], list[float]]:
 
 
 def cursor_initial_rest_stats(records: list[dict]) -> dict | None:
-    """Cursor steadiness during the initial-rest hold phase."""
+    """Summarise the first initial-rest hold's cursor samples, never its move phase.
+
+    Return arithmetic x/y means, population SDs, max Euclidean distance from
+    the mean position, host-clock duration, sample count and cancellation flag.
+    Missing hold returns None; empty trajectories have unavailable measures.
+    This shared helper applies no notebook opening-time exclusion itself.
+    """
     record = _find_record(records, "initial_rest", "hold")
     if record is None:
         return None
@@ -128,7 +147,13 @@ def cursor_initial_rest_stats(records: list[dict]) -> dict | None:
 
 
 def cursor_range_of_movement_stats(records: list[dict]) -> dict | None:
-    """Cursor extremes reached during each range-of-movement hold phase."""
+    """Summarise first holds for left/right/up/down from saved cursor phases.
+
+    Left/up take minimum x/y, right/down maximum x/y; each also reports its
+    arithmetic axis mean and duration. Horizontal/vertical range is the
+    absolute difference between opposite extremes, unavailable without both.
+    Move phases are not included; cancelled phases are retained and labelled.
+    """
     directions: dict[str, dict] = {}
     for direction in DIRECTIONS:
         record = _find_record(records, "range_of_movement", "hold", direction)
@@ -149,6 +174,7 @@ def cursor_range_of_movement_stats(records: list[dict]) -> dict | None:
         return None
 
     def _extreme(direction: str):
+        """Return a direction's extreme or None when its hold was not recorded."""
         entry = directions.get(direction)
         return entry["extreme_px"] if entry else None
 
@@ -162,6 +188,7 @@ def cursor_range_of_movement_stats(records: list[dict]) -> dict | None:
 
 
 def _phase_samples(samples, phase: str) -> list:
+    """Keep samples whose task_phase label exactly equals phase; do not infer timing."""
     return [
         s for s in samples
         if (getattr(s, "metadata", None) or {}).get("task_phase") == phase
@@ -169,6 +196,12 @@ def _phase_samples(samples, phase: str) -> list:
 
 
 def _pose_stats(samples) -> dict:
+    """Return arithmetic degree means and population SDs of supplied pose fields.
+
+    No wrapping, reference transform or filtering occurs here. Duration is
+    max(host_time)-min(host_time) if at least two host timestamps are present;
+    sample_count includes all supplied samples. Missing means/spreads are None.
+    """
     yaw = [float(s.yaw_deg) for s in samples]
     pitch = [float(s.pitch_deg) for s in samples]
     roll = [float(s.roll_deg) for s in samples]
@@ -186,13 +219,24 @@ def _pose_stats(samples) -> dict:
 
 
 def head_initial_rest_stats(samples) -> dict | None:
-    """Head pose held during ``initial_rest.hold``, from a head-movement session."""
+    """Apply _pose_stats only to initial_rest.hold samples; no hold gives None.
+
+    Calibration and the preceding initial_rest.move phase never contribute.
+    Notebook callers prefilter opening/target exclusions before this function.
+    """
     rest = _phase_samples(samples, "initial_rest.hold")
     return _pose_stats(rest) if rest else None
 
 
 def head_range_of_movement_stats(samples, rest: dict | None = None) -> dict | None:
-    """Head pose extremes held during each ``range_of_movement.*.hold`` phase."""
+    """Measure directional held poses, not the preceding move phases.
+
+    Compute _pose_stats for each labelled hold. Left/right use arithmetic yaw
+    mean; up/down use pitch mean. Offset = held mean - initial-rest mean.
+    Overall yaw/pitch range = abs(opposite held means' difference), not the
+    max-min over every movement-exercise sample (a separate notebook measure).
+    Without both opposite holds the corresponding range is None.
+    """
     directions: dict[str, dict] = {}
     for direction in DIRECTIONS:
         held = _phase_samples(samples, f"range_of_movement.{direction}.hold")
@@ -212,6 +256,7 @@ def head_range_of_movement_stats(samples, rest: dict | None = None) -> dict | No
         return None
 
     def _angle(direction: str):
+        """Return a direction's held mean angle, or None when absent."""
         entry = directions.get(direction)
         return entry["angle_mean_deg"] if entry else None
 
@@ -225,7 +270,12 @@ def head_range_of_movement_stats(samples, rest: dict | None = None) -> dict | No
 
 
 def summarise_pretest(metadata: dict | None, head_samples=None) -> dict:
-    """Combined cursor and (optional) head-pose pre-test statistics."""
+    """Combine the cursor/head hold summaries without further sample filtering.
+
+    Head initial-rest statistics supply the reference for directional offsets.
+    Configuration is copied, not reconstructed; available is true if any
+    component summary exists. Cancelled recorded phases are not discarded.
+    """
     records = pretest_records(metadata)
     head_samples = list(head_samples or [])
     head_rest = head_initial_rest_stats(head_samples)

@@ -500,7 +500,14 @@ class FittsPlaybackWindow(QMainWindow):
         return max(max(xs) + 20.0, 100.0), max(max(ys) + 20.0, 100.0)
 
     def _prepare_series(self) -> None:
-        """Per-trial absolute times/points/speeds and the concatenated graph series."""
+        """Calculate per-trial cursor speed/distance graphs on the playback clock.
+
+        Absolute sample time = trial start + saved relative trajectory time.
+        Speed = Euclidean sampled displacement / positive dt (px/s); first
+        sample and non-positive dt yield 0. Distance is |cursor-target| (px).
+        Insert NaNs between trials so plots never bridge them. Plot y bounds
+        add 3% of range, or 1 for constant/empty data; this is display-only.
+        """
         self._traj_times, self._traj_xy, self._traj_speed = [], [], []
         graph_t, graph_speed, graph_dist = [], [], []
         for trial, start in zip(self.trials, self._starts):
@@ -553,10 +560,22 @@ class FittsPlaybackWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _filtered_trials(self) -> list[TrialResult]:
+        """Keep repetition_index >= desktop exclusion setting for summary only.
+
+        This is per saved repetition index, unlike the notebook's first-N
+        target list filter. Playback graphs retain every trial.
+        """
         n = self.exclude_spin.value()
         return [t for t in self.trials if t.repetition_index >= n]
 
     def _refresh_summary(self) -> None:
+        """Display pooled FittsStats/path means for repetition-filtered trials.
+
+        Recompute Ae/We/IDe/MT/TP over retained targets including misses, not a
+        mean of condition metrics. Error fraction is formatted as a percentage;
+        MT seconds as milliseconds. Displayed duration spans all loaded trials,
+        including excluded repetitions. No notebook matching/dwell adjustment.
+        """
         if not self.trials:
             self.stats_label.setText(
                 "<b>HeadMovement only</b><br>No mouse trials were recorded.<br>"
@@ -596,7 +615,10 @@ class FittsPlaybackWindow(QMainWindow):
         )
 
     def _refresh_pretest_summary(self) -> None:
-        """Initial rest position / range of movement stats for the loaded session."""
+        """Display shared cursor/head hold summaries without notebook exclusions.
+
+        Delegate mean/population-SD/held-offset calculations to summarise_pretest.
+        """
         summary = summarise_pretest(self.metadata, self._head_samples)
         self.pretest_summary = summary
         self.pretest_box.setVisible(bool(summary["available"]))
@@ -607,6 +629,15 @@ class FittsPlaybackWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_clock_time(self, t: float) -> None:
+        """Recalculate live cursor/path measures at the last sample at/before t.
+
+        Select the latest started trial, take recorded trajectory samples up
+        to t, and after selection include the click via path_points. Delegate
+        live accuracy to path_measures; elapsed = clip(t,start,end)-start and
+        distance = |cursor-target| pixels. Before samples, keep prior click
+        (or first start position); cursor speed uses the precomputed series.
+        This seek-time subset is not the participant/condition summary pool.
+        """
         if not self.trials or (self._head_task_range is not None and t < self._starts[0]):
             if self._head_task_range is not None:
                 self._show_head_task(t)

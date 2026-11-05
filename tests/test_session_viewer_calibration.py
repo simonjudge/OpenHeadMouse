@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from core import quaternion_math as qm
 from core.recorder import Recorder
-from session_viewer.mesh_visualizer import calculate_neutral_quaternion
+from session_viewer.mesh_visualizer import calculate_neutral_quaternion, reference_pose_source
 
 
 def _save_session(tmp_path, with_calibration: bool):
@@ -62,6 +62,22 @@ def test_viewer_uses_saved_calibration_without_recenter_event(qt_app, tmp_path):
         np.testing.assert_allclose(window.neutral_q, window.recorder.calibration["neutral_quaternion"])
     finally:
         window.close()
+
+
+def test_reference_pose_source_tracks_reference_priority():
+    recorder = Recorder()
+    pose = qm.from_euler_zyx(0.3, 0.2, 0.1)
+    assert reference_pose_source([], recorder) == "No head recording"
+    recorder.record_sample(0, pose)
+    assert reference_pose_source(recorder._samples, recorder).startswith("First samples")
+    recorder.record_sample(1, pose, metadata={"task_phase": "initial_rest.hold"})
+    assert reference_pose_source(recorder._samples, recorder) == "Initial rest"
+    assert reference_pose_source(recorder._samples[:1], recorder, recorder._samples) == "Initial rest"
+    recorder.set_calibration([(0, pose)], pose)
+    assert reference_pose_source(recorder._samples, recorder) == "Calibration pose"
+    recorder.record_event(0, "recenter", {"quaternion": qm.IDENTITY_QUATERNION.tolist()})
+    assert reference_pose_source(recorder._samples, recorder) == "Saved recenter pose"
+    np.testing.assert_allclose(calculate_neutral_quaternion(recorder._samples, recorder), qm.IDENTITY_QUATERNION)
 
 
 def test_neutral_uses_initial_rest_instead_of_range_of_movement():
