@@ -20,10 +20,17 @@
       "ring_color": "#0055ff",
       "ring_diameter_px": 31,
       "ring_thickness_px": 6,
-      "zoom_enabled": true,
+      "zoom_enabled": false,
       "zoom_height_px": 200,
       "zoom_scale": 4.0,
-      "zoom_width_px": 300
+      "zoom_width_px": 300,
+      "context_menu_distance_px": 60,
+      "context_menu_enabled": false,
+      "context_menu_lock_time_s": 3.0,
+      "context_menu_size_px": 54,
+      "snap_enabled": true,
+      "snap_backend": "uia",
+      "snap_radius_px": 42
     }
   },
   "calibration": {

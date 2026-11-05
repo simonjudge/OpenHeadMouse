@@ -46,7 +46,8 @@ def _write_upload(directory: Path, name: str, content: bytes, prefix: str) -> Pa
 
 
 class NotebookViewer:
-    def __init__(self, *, demo_directory: str | None = None):
+    def __init__(self, *, demo_directory: str | None = None, demo_mode: bool = False):
+        self.demo_mode = demo_mode
         self.sessions: list[Session] = []
         self.exclusions: dict[str, int] = {}
         self._changing = False
@@ -100,6 +101,8 @@ class NotebookViewer:
             widgets.HBox([self.archive_upload, bulk]),
             self.archive_review, self.manifest_downloads, self.message,
         ], layout=widgets.Layout(width="100%"))
+        if self.demo_mode:
+            self.loading_widget.children = (self.message,)
         self.session_widget = widgets.VBox([
             widgets.HTML("<h2>Session viewer</h2>"),
             widgets.HBox([self.participant, self.session]), self.viewer,
@@ -123,6 +126,8 @@ class NotebookViewer:
             layout=widgets.Layout(width="100%"),
         )
         self._show_empty()
+        if self.demo_mode:
+            self.load_demo.value = True
 
     def show(self):
         display(self.widget)
@@ -173,9 +178,10 @@ class NotebookViewer:
                     self._save_manifest_link(dataset.assignments)
                 self._loaded_demo_archives.update(pending)
             self._notify(
-                f"Loaded {len(sessions)} demo session(s) from {len(pending)} ZIP(s). "
-                f"{len(archives) - len(pending)} previously loaded ZIP(s) skipped. "
-                + ("Import notes: " + "; ".join(notes) if notes else "")
+                ("Loaded Demo Data" if self.demo_mode else
+                 f"Loaded {len(sessions)} demo session(s) from {len(pending)} ZIP(s). "
+                 f"{len(archives) - len(pending)} previously loaded ZIP(s) skipped. ")
+                + (" Import notes: " + "; ".join(notes) if notes else "")
             )
         except (ValueError, TypeError, KeyError, OSError, csv.Error, zipfile.BadZipFile) as error:
             self.load_demo.value = False

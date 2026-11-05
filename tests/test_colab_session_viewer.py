@@ -88,6 +88,59 @@ def test_loading_and_session_outputs_share_one_viewer(monkeypatch):
     assert outputs == [viewer.loading_widget, viewer.session_widget]
 
 
+def test_demo_mode_autoloads_and_displays_only_status(tmp_path, monkeypatch):
+    from colab_session_viewer.app import NotebookViewer
+
+    (tmp_path / "demo.zip").write_bytes(archive_bytes(
+        "participant,session,head_file,fitts_file\nDemo,Test,,test.json\n",
+        {"test.json": make_fitts(tmp_path).read_bytes()},
+    ))
+    viewer = NotebookViewer(demo_directory=str(tmp_path), demo_mode=True)
+    assert len(viewer.sessions) == 1
+    assert viewer.load_demo.value
+    assert viewer.loading_widget.children == (viewer.message,)
+    assert viewer.message.value.endswith(">Loaded Demo Data</p>")
+    assert viewer.head_upload not in viewer.widget.children
+    assert viewer.demo_directory not in viewer.widget.children
+    assert viewer.manifest_downloads not in viewer.widget.children
+    assert viewer.viewer in viewer.widget.children
+    shown = []
+    monkeypatch.setattr("colab_session_viewer.app.display", shown.append)
+    viewer.show_loading()
+    viewer.show_loading()
+    viewer.show_session()
+    assert shown == [viewer.loading_widget, viewer.loading_widget, viewer.session_widget]
+    assert len(viewer.sessions) == 1
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_demo_mode_reports_failure_without_success_or_controls(tmp_path, invalid):
+    from colab_session_viewer.app import NotebookViewer
+
+    if invalid:
+        (tmp_path / "bad.zip").write_bytes(b"not a zip")
+    viewer = NotebookViewer(demo_directory=str(tmp_path), demo_mode=True)
+    assert viewer.loading_widget.children == (viewer.message,)
+    assert "Demo import failed:" in viewer.message.value
+    assert "Loaded Demo Data" not in viewer.message.value
+    assert not viewer.sessions
+    assert not viewer.load_demo.value
+
+
+def test_demo_mode_preserves_import_warnings(tmp_path):
+    from colab_session_viewer.app import NotebookViewer
+
+    (tmp_path / "demo.zip").write_bytes(archive_bytes(
+        "participant,session,head_file,fitts_file\nDemo,Test,,test.json\n",
+        {"test.json": make_fitts(tmp_path).read_bytes(), "unrelated.csv": b"\xff\xfe"},
+    ))
+    viewer = NotebookViewer(demo_directory=str(tmp_path), demo_mode=True)
+    assert len(viewer.sessions) == 1
+    assert "Loaded Demo Data" in viewer.message.value
+    assert "Import notes:" in viewer.message.value
+    assert "unrelated.csv" in viewer.message.value
+
+
 def test_demo_loads_multiple_manifest_zips_once_and_can_add_new_zips(tmp_path):
     from colab_session_viewer.app import NotebookViewer
 

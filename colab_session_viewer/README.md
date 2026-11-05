@@ -41,6 +41,17 @@ it is not a pixel-identical native UI. No data is resampled or time-stretched.
 
 ### Bundled demo data
 
+For a demo-only presentation, use `NotebookViewer(demo_mode=True)` (optionally
+with `demo_directory=...`), or set `DEMO_MODE = True` in the notebook's loading
+cell before creating the viewer. This automatically imports the bundled demos.
+`show_loading()` then displays only **Loaded Demo Data**, without upload controls,
+folder settings or manifest links. `show_session()` is unchanged; the combined
+`show()` also hides loading controls in this mode. Import errors or warnings are
+still displayed rather than claiming success. The default `demo_mode=False`
+preserves the full loading interface and optional demo checkbox.
+Restart the kernel before changing modes for an already-created notebook viewer;
+rerunning display cells intentionally preserves the existing instance and data.
+
 Check **Load Demo Data** at the top of the loading block to import ZIPs from
 `colab_session_viewer/demodata` in the current project checkout. This default
 is resolved from the project/module location, not the notebook working directory,

@@ -13,6 +13,7 @@ fitts_sessions/
 
 build/
 dist/
+native/
 
 # Downloaded ML/mesh assets (fetched automatically or per README instructions)
 models/
