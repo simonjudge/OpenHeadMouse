@@ -271,6 +271,260 @@ def test_app_receives_pose_reports_loss_and_stops(qt_app, tmp_path):
         app.shutdown()
 
 
+@pytest.fixture
+def missing_tracker_bridge(monkeypatch, sony_port):
+    monkeypatch.setattr(sony_provider.sys, "platform", "win32")
+    monkeypatch.setattr(sony_provider.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(sony_provider, "ensure_bridge", lambda: "sony-head-tracker.exe")
+    calls = []
+    processes = []
+
+    def launch(command, **kwargs):
+        calls.append(command)
+        process = _BridgeProcess()
+        processes.append(process)
+        if command[1] == "bridge" and len(calls) == 1:
+            kwargs["stdout"].write(b"No Android Head Tracker was found on any connected headset.")
+            kwargs["stdout"].flush()
+            process.returncode = 3
+        elif command[1] == "repair":
+            process.returncode = 0
+        return process
+
+    monkeypatch.setattr(sony_provider.subprocess, "Popen", launch)
+    provider = SonyProvider(udp_port=sony_port, startup_timeout_s=0.15)
+    return provider, calls, processes
+
+
+def test_missing_tracker_waits_for_consent_then_repairs_and_receives(missing_tracker_bridge):
+    provider, calls, processes = missing_tracker_bridge
+    provider.start()
+    try:
+        _wait_until(lambda: provider.repair_requested)
+        time.sleep(0.2)
+        assert len(calls) == 1
+        assert provider.state == ProviderState.TRACKING_LOST
+        assert not provider.has_received_sample
+        provider.respond_to_repair(True)
+        _wait_until(lambda: len(calls) == 3)
+        assert calls[1] == ["sony-head-tracker.exe", "repair", "--no-launch"]
+        assert calls[2] == calls[0]
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            sender.sendto(_packet(device="WF-1000XM5"), provider._sock.getsockname())
+        assert provider.output_queue.get(timeout=3).raw_metadata["device"] == "WF-1000XM5"
+        assert provider.state == ProviderState.RUNNING
+    finally:
+        provider.stop()
+    assert processes[-1].terminated
+    assert provider._repair_process is None
+
+
+def test_declining_repair_never_launches_it(missing_tracker_bridge):
+    provider, calls, _ = missing_tracker_bridge
+    provider.start()
+    try:
+        _wait_until(lambda: provider.repair_requested)
+        provider.respond_to_repair(False)
+        _wait_until(lambda: provider.state == ProviderState.ERROR)
+        assert len(calls) == 1
+        assert "cancelled" in provider.connection_error_summary
+    finally:
+        provider.stop()
+
+
+def test_stop_while_consent_pending_never_repairs(missing_tracker_bridge):
+    provider, calls, _ = missing_tracker_bridge
+    provider.start()
+    _wait_until(lambda: provider.repair_requested)
+    provider.stop()
+    provider.respond_to_repair(True)
+    assert len(calls) == 1
+    assert not provider.repair_requested
+    assert provider._sock is None
+
+
+@pytest.mark.parametrize("code", [5, 4])
+def test_repair_cancelled_or_failed_does_not_retry(missing_tracker_bridge, monkeypatch, code):
+    provider, calls, processes = missing_tracker_bridge
+    original = sony_provider.subprocess.Popen
+
+    def launch(command, **kwargs):
+        process = original(command, **kwargs)
+        if command[1] == "repair":
+            process.returncode = code
+        return process
+
+    monkeypatch.setattr(sony_provider.subprocess, "Popen", launch)
+    provider.start()
+    try:
+        _wait_until(lambda: provider.repair_requested)
+        provider.respond_to_repair(True)
+        _wait_until(lambda: provider.state == ProviderState.ERROR)
+        assert len(calls) == 2
+        expected = "cancelled" if code == 5 else "failed"
+        assert expected in provider.connection_error_summary
+        assert f"Repair exit code: {code}" in provider.connection_error
+        assert not processes[-1].terminated
+    finally:
+        provider.stop()
+
+
+def test_repair_is_not_offered_twice(missing_tracker_bridge, monkeypatch):
+    provider, calls, _ = missing_tracker_bridge
+    original = sony_provider.subprocess.Popen
+
+    def launch(command, **kwargs):
+        process = original(command, **kwargs)
+        if command[1] == "bridge":
+            kwargs["stdout"].write(b"No Android Head Tracker was found on any connected headset.")
+            kwargs["stdout"].flush()
+            process.returncode = 3
+        return process
+
+    monkeypatch.setattr(sony_provider.subprocess, "Popen", launch)
+    provider.start()
+    try:
+        _wait_until(lambda: provider.repair_requested)
+        provider.respond_to_repair(True)
+        _wait_until(lambda: provider.state == ProviderState.ERROR)
+        assert len(calls) == 3
+        assert not provider.repair_requested
+        assert "after repair" in provider.connection_error_summary
+    finally:
+        provider.stop()
+
+
+def test_macos_missing_tracker_never_offers_windows_repair(missing_tracker_bridge, monkeypatch):
+    provider, calls, _ = missing_tracker_bridge
+    monkeypatch.setattr(sony_provider.sys, "platform", "darwin")
+    provider.start()
+    try:
+        _wait_until(lambda: provider.state == ProviderState.ERROR)
+        assert not provider.repair_requested
+        assert len(calls) == 1
+    finally:
+        provider.stop()
+
+
+def test_missing_tracker_after_streaming_never_offers_driver_repair(monkeypatch, sony_port):
+    monkeypatch.setattr(sony_provider, "ensure_bridge", lambda: "bridge")
+    process = _BridgeProcess()
+    logs = []
+
+    def launch(command, **kwargs):
+        assert command[1] == "bridge"
+        logs.append(kwargs["stdout"])
+        return process
+
+    monkeypatch.setattr(sony_provider.subprocess, "Popen", launch)
+    provider = SonyProvider(udp_port=sony_port)
+    provider.start()
+    try:
+        _wait_until(lambda: provider._bridge_process is not None)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            sender.sendto(_packet(), provider._sock.getsockname())
+        _wait_until(lambda: provider.has_received_sample)
+        logs[0].write(b"No Android Head Tracker was found on any connected headset.")
+        logs[0].flush()
+        process.returncode = 3
+        _wait_until(lambda: provider.state == ProviderState.ERROR)
+        assert not provider.repair_requested
+        assert len(logs) == 1
+    finally:
+        provider.stop()
+
+
+def test_stop_during_repair_does_not_kill_elevated_wrapper_or_retry(
+    missing_tracker_bridge, monkeypatch,
+):
+    provider, calls, processes = missing_tracker_bridge
+    original = sony_provider.subprocess.Popen
+
+    def launch(command, **kwargs):
+        process = original(command, **kwargs)
+        if command[1] == "repair":
+            process.returncode = None
+        return process
+
+    monkeypatch.setattr(sony_provider.subprocess, "Popen", launch)
+    provider.start()
+    try:
+        _wait_until(lambda: provider.repair_requested)
+        provider.respond_to_repair(True)
+        _wait_until(lambda: provider._repair_process is not None)
+        with pytest.raises(RuntimeError, match="repair is still running"):
+            provider.stop(timeout=0.01)
+        assert not processes[-1].terminated
+        assert provider._thread.is_alive()
+    finally:
+        processes[-1].returncode = 0
+        provider.stop()
+    assert len(calls) == 2
+    assert provider._repair_process is None
+
+
+@pytest.mark.parametrize("action", ["repair", "cancel", "stop"])
+def test_app_repair_prompt_is_short_single_and_preserves_startup(
+    qt_app, tmp_path, monkeypatch, missing_tracker_bridge, action,
+):
+    from core.headmouse import TrackingState
+    from main import App, load_config
+    from PySide6.QtWidgets import QMessageBox
+
+    class Mouse:
+        position = (400.0, 400.0)
+
+    provider, calls, _ = missing_tracker_bridge
+    provider.startup_timeout_s = 3
+    monkeypatch.setattr("main.make_provider", lambda *args: provider)
+    config = copy.deepcopy(load_config())
+    config["active_provider"] = "sony"
+    config["ui"].update(recording_enabled=False, mouse_control_enabled=False,
+                        calibration_enabled=True)
+    app = App(config, auto_start_listeners=False, mouse_controller=Mouse(),
+              config_path=tmp_path / "config.json")
+    ready = []
+    try:
+        assert app.start_head_tracking(ready.append, mouse_control=False, recording=False)
+        _wait_until(lambda: provider.repair_requested)
+        app._poll()
+        dialog = app._sony_connection_dialog
+        app._poll()
+        assert app._sony_connection_dialog is dialog
+        assert len(dialog.text()) < 200
+        assert "administrator approval" in dialog.informativeText()
+        assert "No Android Head Tracker" in dialog.detailedText()
+        assert ready == []
+        assert app.headmouse.state != TrackingState.ACTIVE
+        assert not app._calibrating
+        if action == "stop":
+            app._on_stop_requested()
+            assert app._sony_connection_dialog is None
+            assert ready == [False]
+            assert len(calls) == 1
+        elif action == "cancel":
+            dialog.button(QMessageBox.StandardButton.Cancel).click()
+            _wait_until(lambda: provider.state == ProviderState.ERROR)
+            app._poll()
+            assert "cancelled" in app._sony_connection_dialog.text()
+            assert ready == [False]
+            assert len(calls) == 1
+        else:
+            next(button for button in dialog.buttons() if button.text() == "Repair and retry").click()
+            _wait_until(lambda: len(calls) == 3)
+            app._poll()
+            assert not app._calibrating
+            assert ready == []
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+                sender.sendto(_packet(), provider._sock.getsockname())
+            _wait_until(lambda: provider.has_received_sample)
+            app._poll()
+            assert app._calibrating
+            assert app._sony_connection_dialog is None
+    finally:
+        app.shutdown()
+
+
 class _BridgeProcess:
     def __init__(self):
         self.returncode = None
@@ -344,7 +598,7 @@ def test_managed_bridge_exit_reports_output_and_repair_hint(monkeypatch, sony_po
         _wait_until(lambda: provider.state == ProviderState.ERROR)
         assert "code 2" in provider.connection_error
         assert "No verified tracker found" in provider.connection_error
-        assert "Repair Tracker" in provider.connection_error
+        assert "Repair and retry" in provider.connection_error
     finally:
         provider.stop()
 
@@ -467,10 +721,13 @@ def test_app_waits_before_calibration_and_reports_failed_start(
             assert app._provider is None
             assert app.window.setup_panel._start_button.isEnabled()
             assert ready == [False]
-            assert len(messages) == 1
-            assert messages[0][1] == "Sony Connection Failed"
-            assert "Repair Tracker" in messages[0][2]
+            dialog = app._sony_connection_dialog
+            assert dialog.windowTitle() == "Sony Connection Failed"
+            assert "No Sony tracking data arrived" in dialog.text()
+            assert len(dialog.text()) < 200
+            assert "Repair and retry" in dialog.detailedText()
             app._poll()
-            assert len(messages) == 1
+            assert app._sony_connection_dialog is dialog
+            assert messages == []
     finally:
         app.shutdown()

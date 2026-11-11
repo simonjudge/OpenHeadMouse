@@ -4,6 +4,8 @@ altgraph==0.17.5
     # via pyinstaller
 asttokens==3.0.2
     # via stack-data
+bleak==1.1.1
+    # via -r requirements.txt
 certifi==2026.10.19
     # via mediapipe
 cffi==2.1.1
@@ -150,11 +152,37 @@ traitlets==5.16.1
     #   ipython
     #   ipywidgets
     #   matplotlib-inline
+typing_extensions==4.16.0
+    # via winrt-runtime
 tzdata==2026.5
     # via python-dateutil
 wcwidth==0.9.3
     # via prompt-toolkit
 widgetsnbextension==4.0.16
     # via ipywidgets
+winrt-Windows.Devices.Bluetooth==4!10.0.28000.2957
+    # via bleak
+winrt-Windows.Devices.Bluetooth.Advertisement==4!10.0.28000.2957
+    # via bleak
+winrt-Windows.Devices.Bluetooth.GenericAttributeProfile==4!10.0.28000.2957
+    # via bleak
+winrt-Windows.Devices.Enumeration==4!10.0.28000.2957
+    # via bleak
+winrt-Windows.Foundation==4!10.0.28000.2957
+    # via bleak
+winrt-Windows.Foundation.Collections==4!10.0.28000.2957
+    # via bleak
+winrt-Windows.Storage.Streams==4!10.0.28000.2957
+    # via bleak
+winrt-runtime==4.1.0
+    # via
+    #   bleak
+    #   winrt-Windows.Devices.Bluetooth
+    #   winrt-Windows.Devices.Bluetooth.Advertisement
+    #   winrt-Windows.Devices.Bluetooth.GenericAttributeProfile
+    #   winrt-Windows.Devices.Enumeration
+    #   winrt-Windows.Foundation
+    #   winrt-Windows.Foundation.Collections
+    #   winrt-Windows.Storage.Streams
 ximu3==1.9.1
     # via -r requirements.txt

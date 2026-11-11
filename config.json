@@ -28,7 +28,7 @@
       "context_menu_enabled": false,
       "context_menu_lock_time_s": 3.0,
       "context_menu_size_px": 54,
-      "snap_enabled": true,
+      "snap_enabled": false,
       "snap_backend": "uia",
       "snap_radius_px": 42
     }
@@ -70,6 +70,13 @@
       "ahrs_axes_convention": 2,
       "ahrs_ignore_magnetometer": true,
       "target_rate_hz": 200
+    },
+    "xiao_ble": {
+      "service_uuid": "b28a0001-7f2d-4c9a-9b23-1d43c6e8a501",
+      "characteristic_uuid": "b28a0002-7f2d-4c9a-9b23-1d43c6e8a501",
+      "device_to_head": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+      "sample_timeout_s": 1.0,
+      "scan_timeout_s": 2.0
     },
     "airpods": {
       "udp_host": "127.0.0.1",
@@ -166,6 +173,34 @@
         "time_constant_s": 20.0
       }
     },
+    "xiao_ble": {
+      "mode": "velocity",
+      "absolute": {
+        "kx": 90.0,
+        "ky": 90.0
+      },
+      "velocity": {
+        "kx": 40,
+        "ky": 40,
+        "gamma": 1.2,
+        "deadband_deg_s": 0.0
+      },
+      "one_euro_filter": {
+        "enabled": true,
+        "min_cutoff": 1.0,
+        "beta": 0.2,
+        "d_cutoff": 1.0
+      },
+      "auto_zero": {
+        "enabled": false,
+        "stationary_window_ms": 200,
+        "stationary_threshold_deg_s": 2.0
+      },
+      "yaw_drift_correction": {
+        "enabled": false,
+        "time_constant_s": 20.0
+      }
+    },
     "airpods": {
       "mode": "velocity",
       "absolute": {
@@ -208,8 +243,8 @@
       },
       "one_euro_filter": {
         "enabled": true,
-        "min_cutoff": 2.0,
-        "beta": 0.5,
+        "min_cutoff": 0.4,
+        "beta": 0.15,
         "d_cutoff": 1.0
       },
       "auto_zero": {

@@ -34,12 +34,14 @@ class SetupPanel(QWidget):
         self._provider_combo.addItem("UniFace (webcam)", userData="uniface")
         self._provider_combo.addItem("OpenSeeFace (webcam)", userData="openseeface")
         self._provider_combo.addItem("xIMU3 (IMU)", userData="ximu3")
+        self._provider_combo.addItem("XIAO nRF52840 Sense (BLE)", userData="xiao_ble")
         self._provider_combo.addItem("Sony headphones (Sony Head Tracker)", userData="sony")
         if show_airpods:
             self._provider_combo.addItem("AirPods (CoreMotion)", userData="airpods")
         self._provider_combo.setToolTip(
             "Head-tracking input: UniFace uses the webcam with MediaPipe; OpenSeeFace "
             "uses the webcam with OpenSeeFace's models; xIMU3 uses a head-mounted IMU; "
+            "XIAO nRF52840 Sense uses its onboard IMU over Bluetooth LE; "
             "Sony starts its bundled Sony Head Tracker bridge and waits for tracking "
             "(JSON UDP port 4243; Windows 11/macOS 14+)"
             + (", AirPods their motion sensors." if show_airpods else ".")

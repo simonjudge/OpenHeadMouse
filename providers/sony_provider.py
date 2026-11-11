@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 import queue
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zipfile
+from typing import BinaryIO
 
 import numpy as np
 
@@ -85,6 +88,12 @@ class SonyProvider(BaseProvider):
         self._last_timestamp: float | None = None
         self._error_message = ""
         self._startup_status = ""
+        self._error_summary = ""
+        self._repair_requested = False
+        self._repair_details = ""
+        self._repair_response = False
+        self._repair_response_event = threading.Event()
+        self._repair_process: subprocess.Popen | None = None
 
     @property
     def has_received_sample(self) -> bool:
@@ -110,11 +119,28 @@ class SonyProvider(BaseProvider):
     def connection_error(self) -> str:
         return self._error_message
 
+    @property
+    def connection_error_summary(self) -> str:
+        return self._error_summary or "Could not connect to the Sony head tracker. Check the Bluetooth connection and retry."
+
+    @property
+    def repair_requested(self) -> bool:
+        return self._repair_requested
+
+    @property
+    def repair_details(self) -> str:
+        return self._repair_details
+
+    def respond_to_repair(self, approved: bool) -> None:
+        if self._repair_requested and not self._repair_response_event.is_set():
+            self._repair_response = approved
+            self._repair_response_event.set()
+
     def _connection_help(self) -> str:
         return (
             "Pair and connect the headphones, and close other Sony Head Tracker instances. "
-            "On Windows 11, if no sensor is found, open Sony Head Tracker and use "
-            "'Repair Tracker' (administrator approval required), then close it and retry. "
+            "On Windows 11, use 'Repair and retry' when offered "
+            "(administrator approval required), or run Sony Head Tracker repair --no-launch. "
             "On macOS, allow Input Monitoring for the bridge. "
             f"Check that v2 JSON reaches {self.udp_host}:{self.udp_port}."
         )
@@ -124,10 +150,83 @@ class SonyProvider(BaseProvider):
         if self._thread is not None:
             self._thread.join(timeout=timeout)
             if self._thread.is_alive():
+                if self._repair_process is not None:
+                    raise RuntimeError(
+                        "Sony repair is still running. Approve or cancel the Windows administrator prompt, "
+                        "wait for repair to finish, then press Stop again."
+                    )
                 raise RuntimeError(
                     "Sony dependency setup is still finishing. Wait for it to finish, then press Stop again."
                 )
         self._state = ProviderState.STOPPED
+
+    def _launch_bridge(self, executable: Path, bridge_log: BinaryIO) -> None:
+        if self._stop_event.is_set():
+            return
+        bridge_log.seek(0)
+        bridge_log.truncate()
+        self._startup_status = "connecting headphones through Sony Head Tracker..."
+        self._bridge_process = subprocess.Popen(
+            [str(executable), "bridge", "--port", str(self.udp_port - 1),
+             "--axis-map", "XYZ", "--invert", "none", "--smoothing", "1"],
+            stdout=bridge_log, stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+
+    def _stop_bridge(self) -> None:
+        if self._bridge_process is None:
+            return
+        process = self._bridge_process
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=1.0)
+        self._bridge_process = None
+
+    def _offer_repair_and_wait(self, executable: Path, detail: str) -> bool:
+        self._stop_bridge()
+        self._repair_details = detail
+        self._repair_response = False
+        self._repair_response_event.clear()
+        self._startup_status = "tracker not detected; waiting for repair approval..."
+        _LOGGER.info("Sony tracker not detected; offering user-approved repair")
+        self._repair_requested = True
+        try:
+            while not self._stop_event.is_set():
+                if self._repair_response_event.wait(timeout=0.05):
+                    break
+        finally:
+            self._repair_requested = False
+        if self._stop_event.is_set():
+            return False
+        if not self._repair_response:
+            self._error_summary = "Sony tracker repair was cancelled. Connect the headphones and press Start to try again."
+            raise RuntimeError(f"{self._error_summary}\n{detail}")
+        self._startup_status = "repairing Sony tracker; approve the Windows administrator prompt..."
+        _LOGGER.info("Starting user-approved Sony tracker repair")
+        # The wrapper waits for its elevated child. Never kill it and orphan a driver repair.
+        self._repair_process = subprocess.Popen(
+            [str(executable), "repair", "--no-launch"],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        process = self._repair_process
+        while process.poll() is None:
+            time.sleep(0.05)
+        self._repair_process = None
+        if self._stop_event.is_set():
+            return False
+        if process.returncode != 0:
+            self._error_summary = (
+                "Windows administrator approval was cancelled. Press Start to try again."
+                if process.returncode == 5
+                else "Sony tracker repair failed. Power-cycle the headphones, reconnect Bluetooth, and try again."
+            )
+            raise RuntimeError(f"{self._error_summary}\nRepair exit code: {process.returncode}\n{detail}")
+        _LOGGER.info("Sony tracker repair completed; retrying connection")
+        return True
 
     def _update_tracking_state(self) -> None:
         if (
@@ -188,6 +287,9 @@ class SonyProvider(BaseProvider):
         self._last_timestamp = None
         self._error_message = ""
         self._startup_status = ""
+        self._error_summary = ""
+        self._repair_requested = False
+        repair_attempted = False
         self._state = ProviderState.TRACKING_LOST
         # Do not let a restarted receiver replay samples from its previous run.
         while True:
@@ -215,24 +317,40 @@ class SonyProvider(BaseProvider):
                     executable = ensure_bridge()
                     if self._stop_event.is_set():
                         return
-                    self._startup_status = "connecting headphones through Sony Head Tracker..."
-                    self._bridge_process = subprocess.Popen(
-                        [str(executable), "bridge", "--port", str(self.udp_port - 1),
-                         "--axis-map", "XYZ", "--invert", "none", "--smoothing", "1"],
-                        stdout=bridge_log, stderr=subprocess.STDOUT,
-                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-                    )
+                    self._launch_bridge(executable, bridge_log)
                 deadline = time.monotonic() + self.startup_timeout_s
                 while not self._stop_event.is_set():
                     if self._bridge_process is not None and self._bridge_process.poll() is not None:
                         bridge_log.seek(0, 2)
                         bridge_log.seek(max(0, bridge_log.tell() - 4096))
                         detail = bridge_log.read().decode("utf-8", errors="replace").strip()
+                        if (
+                            sys.platform == "win32"
+                            and not self.has_received_sample
+                            and not repair_attempted
+                            and self._bridge_process.returncode == 3
+                            and "No Android Head Tracker was found on any connected headset." in detail
+                        ):
+                            repair_attempted = True
+                            if not self._offer_repair_and_wait(executable, detail):
+                                return
+                            self._launch_bridge(executable, bridge_log)
+                            deadline = time.monotonic() + self.startup_timeout_s
+                            continue
+                        if repair_attempted:
+                            self._error_summary = (
+                                "The Sony tracker is still unavailable after repair. "
+                                "Power-cycle the headphones, reconnect Bluetooth, and try again."
+                            )
                         raise RuntimeError(
                             f"Sony Head Tracker exited (code {self._bridge_process.returncode}). "
                             f"{detail}\n\n{self._connection_help()}"
                         )
                     if not self.has_received_sample and time.monotonic() >= deadline:
+                        self._error_summary = (
+                            "No Sony tracking data arrived. Check the headphones are connected "
+                            "and close any other Sony Head Tracker instance, then retry."
+                        )
                         raise RuntimeError(
                             f"No valid Sony tracking data received within {self.startup_timeout_s:g} seconds. "
                             + self._connection_help()
@@ -253,14 +371,6 @@ class SonyProvider(BaseProvider):
             self._state = ProviderState.ERROR
             _LOGGER.exception("Sony provider failed")
         finally:
-            if self._bridge_process is not None:
-                process = self._bridge_process
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=1.0)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=1.0)
-                self._bridge_process = None
+            self._repair_requested = False
+            self._stop_bridge()
             self._sock = None

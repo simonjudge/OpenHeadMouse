@@ -129,6 +129,19 @@ reported as an error, while malformed datagrams are logged and discarded.
 Each provider gets an independent mouse profile, initially copied from the active
 profile when no saved profile exists.
 
+### Seeed XIAO nRF52840 Sense provider
+
+The XIAO Sense provider uses the onboard LSM6DS3TR-C IMU and communicates with
+the board over Bluetooth LE. Upload the Arduino sketch and install the board
+libraries using [`providers/xiao_ble/README.md`](./providers/xiao_ble/README.md),
+then select **XIAO nRF52840 Sense (BLE)**. The default orientation assumes the
+sensor axes already align with the canonical head frame; configure
+`providers.xiao_ble.device_to_head` in `config.json` for the board's actual
+mounting. This is a six-axis sensor without a magnetometer, so yaw is relative
+and drifts over time. Check its signs with
+`python test_orientation.py --provider xiao_ble --duration 20` before enabling
+mouse control.
+
 ### Sony headphone provider
 
 The separate `providers/sony_provider.py` adapter implements `BaseProvider` and
@@ -158,18 +171,23 @@ compatibility reports, not hardware validation of this adapter.
    with XYZ axes, no inversions and smoothing `1`, then waits for a valid v2 JSON
    sample before activating tracking or starting calibration. Stop terminates
    only the bridge process launched by this run.
-3. If the bridge exits or no valid sample arrives within **15 seconds** after
-   launch, startup fails with a connection dialog, diagnostic details and retry
-   guidance; Start becomes available again. Bluetooth audio pairing alone does
-   not guarantee the Android Head Tracker sensor is available.
-   **On Windows 11, particularly after a fresh boot**, upstream recommends opening
-   the native Sony Head Tracker GUI and selecting **Repair Tracker** if the sensor
-   is missing. This requires administrator approval; OpenHeadMouse never performs
-   driver repair or elevation automatically. The source checkout's GUI is
-   `native\sony-head-tracker\2.2.0\sony-head-tracker.exe`; packaged users can use the
-   [upstream application](https://github.com/NicholasSlattery/sony-head-tracker/releases/tag/v2.2.0).
-   Close the GUI after repair, then retry Start.
-4. Check `python test_orientation.py --provider sony --duration 20`:
+3. **On Windows 11, particularly after a fresh boot**, Bluetooth audio pairing
+   may not expose the Android Head Tracker sensor. If the managed bridge reports
+   that no tracker was found, OpenHeadMouse offers **Repair and retry**. Connect
+   and power on the headphones, accept the offer, then approve the Windows
+   administrator prompt. The bundled `repair --no-launch` command recreates the
+   Bluetooth HID sensor/driver binding without opening the native GUI. It may
+   briefly interrupt the headphones and closes other Sony Head Tracker windows.
+   OpenHeadMouse itself does not run as administrator; repair is never performed
+   without approval. Connection is retried once after a successful repair.
+   Cancelling either prompt stops startup; press Start to try again.
+   During repair, allow it to finish before stopping: OpenHeadMouse must not kill
+   the wrapper and leave its elevated driver-repair process running unattended.
+4. Other failures (or no valid data within **15 seconds** after bridge launch/retry)
+   show a short connection message with diagnostics under **Show Details**.
+   Start becomes available again. Repair is not offered for socket conflicts,
+   missing dependencies, a stalled stream, or macOS/external bridges.
+5. Check `python test_orientation.py --provider sony --duration 20`:
    left turn, upward nod and left-ear-down tilt must give positive yaw, pitch
    and roll. Then use OpenHeadMouse's calibration/recenter controls.
 

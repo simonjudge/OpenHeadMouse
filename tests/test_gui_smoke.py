@@ -88,9 +88,61 @@ def test_setup_panel_only_shows_airpods_when_enabled(qt_app):
 
     non_mac_panel = SetupPanel(show_airpods=False)
     assert non_mac_panel._provider_combo.findData("airpods") == -1
+    assert non_mac_panel._provider_combo.findData("xiao_ble") != -1
 
     mac_panel = SetupPanel(show_airpods=True)
     assert mac_panel._provider_combo.findData("airpods") != -1
+
+
+def test_xiao_ble_start_waits_for_first_sample_before_calibration(qt_app, tmp_path, monkeypatch):
+    import struct
+
+    from main import App, load_config
+    from providers.base_provider import ProviderState
+    from providers.xiao_ble_provider import XiaoBleProvider
+
+    monkeypatch.setattr(
+        "main._screen_geometry", lambda _screen, window_id=None: (800, 800, 0, 0)
+    )
+    monkeypatch.setattr(XiaoBleProvider, "_run", lambda provider: provider._stop_event.wait())
+    config = copy.deepcopy(load_config())
+    config["active_provider"] = "xiao_ble"
+    config["ui"].update(
+        recording_enabled=False,
+        mouse_control_enabled=False,
+        calibration_enabled=True,
+    )
+    app = App(
+        config,
+        auto_start_listeners=False,
+        mouse_controller=FakeMouseController(),
+        config_path=tmp_path / "config.json",
+    )
+    try:
+        app._on_start_requested("xiao_ble")
+        app._poll()
+        assert not app._calibrating
+        assert app._xiao_ble_waiting_to_start
+
+        packet = struct.pack("<Ihhhhhh", 10_000, 0, 0, 1000, 0, 0, 0)
+        app._provider._process_packet(packet, received_at=time.monotonic())
+        app._poll()
+
+        assert app._calibrating
+        assert not app._xiao_ble_waiting_to_start
+
+        app._provider._state = ProviderState.TRACKING_LOST
+        app._poll()
+        assert not app._calibrating
+        assert app._xiao_ble_waiting_to_start
+
+        packet = struct.pack("<Ihhhhhh", 20_000, 0, 0, 1000, 0, 0, 0)
+        app._provider._process_packet(packet, received_at=time.monotonic())
+        app._poll()
+        assert app._calibrating
+        assert not app._xiao_ble_waiting_to_start
+    finally:
+        app.shutdown()
 
 
 def test_ximu3_ignore_magnetometer_button_visibility_and_signal(qt_app):

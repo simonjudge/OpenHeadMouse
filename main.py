@@ -210,6 +210,23 @@ def make_provider(name: str, config: dict):
             ahrs_ignore_magnetometer=provider_config.get("ahrs_ignore_magnetometer", False),
             target_rate_hz=provider_config.get("target_rate_hz", 200),
         )
+    if name == "xiao_ble":
+        from providers.xiao_ble_provider import XiaoBleProvider
+
+        return XiaoBleProvider(
+            device_name=provider_config.get("device_name"),
+            service_uuid=provider_config.get(
+                "service_uuid", "b28a0001-7f2d-4c9a-9b23-1d43c6e8a501"
+            ),
+            characteristic_uuid=provider_config.get(
+                "characteristic_uuid", "b28a0002-7f2d-4c9a-9b23-1d43c6e8a501"
+            ),
+            device_to_head=provider_config.get(
+                "device_to_head", [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+            ),
+            sample_timeout_s=provider_config.get("sample_timeout_s", 1.0),
+            scan_timeout_s=provider_config.get("scan_timeout_s", 2.0),
+        )
     if name == "airpods":
         from providers.airpods.airpods_provider import AirPodsProvider
 
@@ -283,6 +300,8 @@ class App:
         self._calibration_warning = None
         self._ximu_waiting_to_start = False
         self._sony_waiting_to_start = False
+        self._xiao_ble_waiting_to_start = False
+        self._sony_connection_dialog = None
         self._ximu_was_streaming = False
         self._ximu_status = None
         self._ximu_wifi_provider = False
@@ -419,6 +438,9 @@ class App:
         if self._provider is not None:
             self._provider.stop()
             self._provider = None
+        if self._sony_connection_dialog is not None:
+            self._sony_connection_dialog.close()
+            self._sony_connection_dialog = None
         self._stop_airpods_helper()
         self.headmouse.stop()
 
@@ -509,6 +531,9 @@ class App:
         )
 
     def _on_start_requested(self, provider_name: str) -> None:
+        if self._provider is None and self._sony_connection_dialog is not None:
+            self._sony_connection_dialog.close()
+            self._sony_connection_dialog = None
         if self.window.controls.recording_enabled and self.ensure_recordings_base_dir() is None:
             # Starting anyway would record head movement that can't be saved.
             self.window.setup_panel.reset_to_stopped()
@@ -656,10 +681,14 @@ class App:
             self._ximu_was_streaming = False
             self._ximu_status = None
             self._sony_waiting_to_start = provider_name == "sony"
+            self._xiao_ble_waiting_to_start = provider_name == "xiao_ble"
             self._provider.start()
             if self._sony_waiting_to_start:
                 self.headmouse.set_tracking_state(False)
                 self.window.setup_panel.set_connection_status("Connecting to Sony headphones...")
+            elif self._xiao_ble_waiting_to_start:
+                self.headmouse.set_tracking_state(False)
+                self.window.setup_panel.set_connection_status("Scanning for XIAO BLE sensor...")
             elif self._ximu_waiting_to_start:
                 self.headmouse.set_tracking_state(False)
                 self.window.setup_panel.set_connection_status("Connecting to xIMU3...")
@@ -726,8 +755,12 @@ class App:
                 QMessageBox.critical(self.window, "Disconnection Failed", str(exc))
                 return None
             self._provider = None
+        if self._sony_connection_dialog is not None:
+            self._sony_connection_dialog.close()
+            self._sony_connection_dialog = None
         self._ximu_waiting_to_start = False
         self._sony_waiting_to_start = False
+        self._xiao_ble_waiting_to_start = False
         self._ximu_was_streaming = False
         self._ximu_status = None
         self._ximu_wifi_provider = False
@@ -1594,6 +1627,55 @@ class App:
                 break
         return samples
 
+    def _show_sony_repair_prompt(self, provider) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        if self._sony_connection_dialog is not None:
+            return
+        dialog = QMessageBox(self.window)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Sony tracker not detected")
+        dialog.setText("The Sony head-tracking sensor could not be found, even if Bluetooth audio is paired.")
+        dialog.setInformativeText(
+            "Connect and power on your headphones, then choose Repair and retry. "
+            "Windows will ask for administrator approval to repair the Bluetooth sensor/driver. "
+            "This may briefly interrupt the headphones and closes other Sony Head Tracker windows."
+        )
+        dialog.setDetailedText(provider.repair_details)
+        repair_button = dialog.addButton("Repair and retry", QMessageBox.ButtonRole.AcceptRole)
+        cancel_button = dialog.addButton(QMessageBox.StandardButton.Cancel)
+        dialog.setDefaultButton(cancel_button)
+        self._sony_connection_dialog = dialog
+
+        def finished(_result):
+            if self._sony_connection_dialog is dialog:
+                self._sony_connection_dialog = None
+            if self._provider is provider:
+                provider.respond_to_repair(dialog.clickedButton() is repair_button)
+            dialog.deleteLater()
+
+        dialog.finished.connect(finished)
+        dialog.open()
+
+    def _show_sony_connection_error(self, summary: str, detail: str) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        dialog = QMessageBox(self.window)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Sony Connection Failed")
+        dialog.setText(summary)
+        dialog.setDetailedText(detail)
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        self._sony_connection_dialog = dialog
+
+        def finished(_result):
+            if self._sony_connection_dialog is dialog:
+                self._sony_connection_dialog = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(finished)
+        dialog.open()
+
     def _poll(self) -> None:
         from core.headmouse import TrackingState
         from providers.base_provider import ProviderState
@@ -1609,17 +1691,19 @@ class App:
         sony = sys.modules.get("providers.sony_provider")
         if sony is not None and isinstance(self._provider, sony.SonyProvider):
             self.window.setup_panel.set_connection_status(f"Sony: {self._provider.status_text}")
+            if self._provider.repair_requested:
+                self._show_sony_repair_prompt(self._provider)
+                return
             if self._provider.state == ProviderState.ERROR:
-                from PySide6.QtWidgets import QMessageBox
-
                 detail = self._provider.connection_error
+                summary = self._provider.connection_error_summary
                 self._on_stop_requested()
                 if self._provider is None:
                     self.window.setup_panel.reset_to_stopped()
                 self.window.setup_panel.set_connection_status(
                     "Sony: connection failed (see diagnostic dialog); retry Start."
                 )
-                QMessageBox.critical(self.window, "Sony Connection Failed", detail)
+                self._show_sony_connection_error(summary, detail)
                 return
             if self._provider.state != ProviderState.RUNNING:
                 self._last_sample = None
@@ -1633,6 +1717,44 @@ class App:
                 if not self._provider.has_received_sample:
                     return
                 self._sony_waiting_to_start = False
+                self.dsp.reset(position=self.headmouse.cursor_position)
+                if self.window.controls.calibration_enabled:
+                    self._begin_calibration()
+                else:
+                    self.headmouse.set_tracking_state(True)
+
+        xiao_ble = sys.modules.get("providers.xiao_ble_provider")
+        if xiao_ble is not None and isinstance(self._provider, xiao_ble.XiaoBleProvider):
+            self.window.setup_panel.set_connection_status(
+                f"XIAO BLE: {self._provider.status_text}"
+            )
+            if self._provider.state == ProviderState.ERROR:
+                detail = self._provider.connection_error
+                self._on_stop_requested()
+                if self._provider is None:
+                    self.window.setup_panel.reset_to_stopped()
+                self.window.setup_panel.set_connection_status(
+                    "XIAO BLE: connection failed; retry Start."
+                )
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.critical(
+                    self.window,
+                    "XIAO BLE Connection Failed",
+                    f"Could not run the XIAO BLE provider:\n\n{detail}",
+                )
+                return
+            if self._provider.state != ProviderState.RUNNING:
+                self._last_sample = None
+                self._mouse_was_active = False
+                self._set_cursor_driven(False)
+                self._xiao_ble_waiting_to_start = True
+                if self._calibrating:
+                    self._end_calibration()
+                return
+            if self._xiao_ble_waiting_to_start:
+                if not self._provider.has_received_sample:
+                    return
+                self._xiao_ble_waiting_to_start = False
                 self.dsp.reset(position=self.headmouse.cursor_position)
                 if self.window.controls.calibration_enabled:
                     self._begin_calibration()

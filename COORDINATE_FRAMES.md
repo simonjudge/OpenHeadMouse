@@ -59,11 +59,13 @@ to `R_head = M · R_device · Mᵀ`.
 | AirPods (CMHeadphoneMotionManager) | X right, Y forward, Z up | `[0,1,0]; [−1,0,0]; [0,0,1]` | `[w, y, −x, z]` |
 | Sony (bridge configured XYZ, no inversions) | X right, Y forward, Z up | `[0,1,0]; [−1,0,0]; [0,0,1]` | `[w, y, −x, z]` |
 | xIMU3 (AHRS NED, axes aligned to FRD) | X forward, Y right, Z down | `[1,0,0]; [0,−1,0]; [0,0,−1]` | `[w, x, −y, −z]` |
+| XIAO nRF52840 Sense | LSM6DS3TR-C sensor axes | Configured as `providers.xiao_ble.device_to_head` | `qm.change_basis(q, M)` |
 
 Code: `providers/uniface_provider.py` (`_CAMERA_TO_HEAD_FRAME`),
 `providers/airpods/airpods_provider.py` (`_AIRPODS_TO_HEAD_FRAME`),
 `providers/sony_provider.py` (`_SONY_TO_HEAD_FRAME`),
-`providers/ximu3_provider.py` (`_XIMU3_TO_HEAD_FRAME`). The session viewer's face mesh is in
+`providers/ximu3_provider.py` (`_XIMU3_TO_HEAD_FRAME`),
+`providers/xiao_ble_provider.py` (`device_to_head`). The session viewer's face mesh is in
 MediaPipe coordinates, so it maps canonical rotations back with the UniFace matrix
 (`session_viewer/mesh_visualizer.py`).
 
