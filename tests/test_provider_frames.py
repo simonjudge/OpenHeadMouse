@@ -1,5 +1,5 @@
 """Cross-provider frame consistency: the same physical head motion must give the same
-yaw/pitch/roll signs whichever provider measured it (see COORDINATE_FRAMES.md)."""
+yaw/pitch/roll signs whichever provider measured it (see docs/coordinate-frames.md)."""
 
 import json
 

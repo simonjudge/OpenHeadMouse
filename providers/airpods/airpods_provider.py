@@ -8,7 +8,7 @@ COORDINATE FRAME & ALIGNMENT:
 =============================
 
 Canonical head frame (right-handed, shared across all providers; see
-COORDINATE_FRAMES.md):
+docs/coordinate-frames.md):
   +X: Forward (out of the nose)
   +Y: Left (toward the left ear)
   +Z: Up (toward the top of the head)
@@ -36,7 +36,7 @@ Swift Helper & Normalization:
   happens here in Python.
 
 Reference: CMHeadphoneMotionManager documentation (Apple Developer),
-           COORDINATE_FRAMES.md (this project)
+           docs/coordinate-frames.md (this project)
 
 UDP JSON schema (shared with tests/test_udp.py):
     {

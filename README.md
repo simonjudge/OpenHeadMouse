@@ -42,7 +42,8 @@ above. This does not imply feature parity with unsupported environments: AirPods
 is macOS-only; global pointer control and hotkeys require X11 on Linux; the 3D viewer needs
 a working desktop OpenGL context; Snap to can only detect controls exposed by accessibility
 APIs. Windows elevated/secure desktops and taskbar previews have additional restrictions
-described below. Native hardware and packaged-app checks remain necessary on each OS.
+described in the [dwell-click guide](docs/dwell-click.md). Native hardware and packaged-app
+checks remain necessary on each OS.
 
 ## Windows quick start
 
@@ -67,7 +68,15 @@ described below. Native hardware and packaged-app checks remain necessary on eac
 The portable EXE can be run without installing, but still uses per-user settings.
 Do not expect portable settings alongside the EXE.
 
-See [coordinate frames](COORDINATE_FRAMES.md) for mounting and movement conventions.
+See [coordinate frames](docs/coordinate-frames.md) for mounting and movement conventions.
+
+## Documentation
+
+- [Recording formats](docs/recording-formats.md) — head and Fitts file fields, clocks and the ZIP assignment manifest.
+- [Dwell click](docs/dwell-click.md) — settings, standalone operation, context menu, snap, zoom and platform limits.
+- [Colab analysis](docs/colab-analysis.md) — calculations, dwell estimates, exclusions, aggregation and result interpretation.
+- [Release building](docs/release-building.md) — Windows build prerequisites, commands, outputs and redistribution checks.
+- [Coordinate frames](docs/coordinate-frames.md) — head axes, angle signs, provider conversions and hardware checks.
 
 ## Layout
 
@@ -250,38 +259,18 @@ publishing it requires manual test and redistribution approval.
   head tracking or mouse control.
 
 The Dwell Click edition starts its tray application when launched. Its settings and command-line
-options are the same as the standalone `python -m dwell_click` mode described below.
+options are the same as the standalone `python -m dwell_click` mode in the [dwell-click guide](docs/dwell-click.md).
 Windows executables for all four editions are built without a console window. The Fitts'
 Law suite and session viewer run within the full edition without opening a separate terminal.
 This applies to newly built executables; existing downloads must be rebuilt or replaced.
 
-Use the release build script below for consistent Windows packaging. Root-level
+Use the [release build script](docs/release-building.md) for consistent Windows packaging. Root-level
 generated spec files are ignored and may contain stale local options; running
 `pyinstaller main.py` directly can produce a console application.
 
 ### Building Windows executables and installers locally
 
-Install [Inno Setup 6](https://jrsoftware.org/isdl.php) and install the Python dependencies
-and PyInstaller into your build environment:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-windows-py312.lock
-.\build-release.ps1 -Version 0.2.0-rc.1
-```
-
-Run these commands in PowerShell from the project root. If script execution is blocked,
-use `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-release.ps1 -Version 0.2.0-rc.1`.
-The script builds all four editions without console windows, then compiles their installers.
-Executables and `*-setup.exe` installers are written to `dist`. Generated specs and Inno Setup
-definitions go under `build/local-release`, leaving existing root-level specs untouched.
-The script downloads missing pinned model assets, verifies their SHA-256 hashes,
-exports dependency versions and discovered licence files, and smoke-tests each EXE
-without starting tracking or clicking. It also writes checksums and a notices ZIP.
-
-By default, the script uses `.venv\Scripts\python.exe` if present, otherwise `python` on PATH.
-Use `-Python "C:\path\to\python.exe"` or `-Iscc "C:\path\to\ISCC.exe"` to override the tools.
-It does not install Python dependencies. Installers are unsigned. Single-file binary
-publication is deferred pending the [LGPL/model review](THIRD_PARTY_NOTICES.md).
+See the [Windows release-building guide](docs/release-building.md) for dependencies, commands, outputs and redistribution checks.
 
 ## Setup (running from source)
 
@@ -404,13 +393,13 @@ table (including session-level and matched views), with **-** for inapplicable
 non-dwell fields rather than zero. Individual imports and ZIP
 review rows accept a selection method and configured dwell duration; manifests
 preserve these as `selection_method` and `dwell_time_s` (seconds). Unknown methods
-are not guessed. See the [dwell analysis notes](colab_session_viewer/README.md#dwell-timing-and-movement-estimates)
+are not guessed. See the [dwell analysis notes](docs/colab-analysis.md#dwell-timing-and-movement-estimates)
 for definitions, contributing counts and trajectory/timer limitations.
 The existing difficulty column is labelled **Effective ID (IDe)**: measured
 click accuracy can make it differ even when planned ID matches. Calculation
 notes explain why the legacy pooled formulas are not sequence-level ISO estimates.
 To audit formulas, sample selection and aggregation, start with the
-[calculation source guide](colab_session_viewer/README.md#where-to-inspect-the-calculations).
+[calculation source guide](docs/colab-analysis.md#where-to-inspect-the-calculations).
 It links the shared Python calculation functions and browser live-path equivalent;
 their docstrings document units, formulas, exclusions and edge cases.
 The main Fitts table also shows average planned ID immediately before IDe.
@@ -431,194 +420,16 @@ wireframes), task-only range of movement, whole-session head movement, Fitts
 targets/hits and Fitts performance, with one-decimal display and CSV export. Each participant can
 exclude the first N targets **per Fitts file** from the summary without changing
 playback or removing whole tests. See the [notebook guide](colab_session_viewer/README.md)
-for setup, batch import format, aggregation definitions and data-privacy notes.
+for setup, batch import format and data-privacy notes, and the
+[analysis guide](docs/colab-analysis.md) for aggregation definitions.
 
 ### Dwell click
 
-Tick **Dwell Click** in the Subsystems panel to click automatically when the pointer remains
-inside the configured movement tolerance (default 10 pixels) for the dwell time (default 1
-second). A translucent red ring around the cursor fills clockwise as the dwell completes. After
-a click, the pointer must leave the activation area before another click can occur.
-The main window shows **Dwell Click Settings** only while **Dwell Click** is ticked.
-Unticking it hides the settings without discarding their values; tray settings remain available.
-
-Ticking the box only arms the feature. Dwell clicking starts only once the input provider is
-actually controlling the cursor (mouse control active and head data moving the pointer), not
-merely when **Start** is pressed or tracking is resumed. It stops whenever mouse control is
-switched off, paused by the toggle hotkey or corner failsafe, or suspended during initial
-calibration.
-
-If the pointer leaves an activation area and returns within the configurable resume time
-(default 0.5 seconds), progress continues from where it paused. Dwell time, movement tolerance,
-and resume time can be changed in the main window and are persisted in `config.json`.
-
-The timer ring's appearance is also configurable: **Diameter** (size of the circle, default 40
-pixels), **Thickness** (width of the timer segment, default 4 pixels), and **Colour** (click
-the swatch to open a colour picker). These are saved as `ring_diameter_px`,
-`ring_thickness_px`, and `ring_color` under `ui.dwell_click` in `config.json`, and the same
-options appear in the tray's dwell-click settings dialog.
-
-The module can also run independently of OpenHeadMouse:
-
-```
-python -m dwell_click
-python -m dwell_click --dwell-time 1.5 --movement-tolerance 12 --resume-time 0.75
-python -m dwell_click --diameter 60 --thickness 8 --color "#00a0ff"
-python -m dwell_click --zoom --zoom-width 300 --zoom-height 200 --zoom-scale 4
-```
-
-Both standalone mode and OpenHeadMouse provide a cross-platform system-tray icon. Its menu starts
-or stops dwell clicking, opens the dwell-click settings dialog, and exits standalone mode.
-Left-clicking the tray icon opens the settings dialog directly; right-clicking opens its menu.
-The settings dialog also has a **Start/Stop Dwell Clicking** button. It stays open when
-the button is used and follows changes made through the tray or OpenHeadMouse lifecycle.
-On desktops without a system tray, standalone mode opens the settings window instead;
-**Apply** keeps those controls open, and **Close** exits the application. Errors use a dialog
-when tray notifications are unavailable.
-
-**Click Context Menu** is optional and disabled by default. Enable it in the main window's
-dwell settings or the tray settings dialog. A completed dwell opens six icons around
-the original click point: **left click** at 135 degrees (upper-left), **zoom** at 90 degrees
-(above), **right click** at 45 degrees (upper-right), **double click** at 225 degrees
-(lower-left), **pause** at 315 degrees (lower-right), and **Snap to** at 270 degrees
-(below). Dwell on an icon to choose it.
-Each icon samples the screen beneath it when the menu opens: dark backgrounds use white
-artwork and a 20%-opacity white backing; light backgrounds use dark artwork and a
-20%-opacity black backing. Rounded corners remain transparent and active choices have a
-contrasting blue outline. If screen sampling is unavailable, a warning is logged and the
-application colour scheme is used. **Icon size** sets each square target's size
-(default 54 pixels, 50% larger than the original 36; range 24-200), with artwork scaled
-proportionally. **Distance** sets P, the distance to each icon centre (default 60 pixels;
-minimum 48). Spacing grows when needed to prevent larger targets overlapping.
-The group shifts together near screen edges to keep the icons visible; spacing is reduced
-if the configured distance would make the group wider or taller than the display.
-When the dwell target is on the taskbar (outside the screen's usable area), the menu is
-placed at least 260 pixels away from the taskbar, clear of the window previews that pop up
-there; the zoom box is moved clear in the same way (it still magnifies the taskbar area). Windows draws those previews above all normal programs, even always-on-top ones;
-see the UIAccess next step below.
-
-Left, right and double click are the click buttons ("L/R" below includes double click).
-The first L/R choice is remembered across menu openings. Each new menu has its own original
-target: selecting an icon clicks that target, not the icon or a target from a previous menu.
-The menu closes before clicking and the cursor stays at the clicked location; it is not
-warped back to the icons. Menu and zoom clicks rest on the target for about 120 ms before
-pressing, so custom-drawn title-bar buttons (e.g. browser or Windows 11 app close buttons)
-register the hover and accept the click.
-
-| Menu choice | Effect | Menu |
-| --- | --- | --- |
-| First L or R selection | Click the original target once using that button; remember the choice | Closes |
-| Same L/R at a later target | Lock that button and click this target once | Closes |
-| Already-locked L/R icon | Unlock that button, clear its remembered choice; no click | Closes |
-| Different L/R while a button is locked | Unlock the old button and click once with the new choice; choosing it again later locks it | Closes |
-| First zoom selection, with L/R already chosen | Magnify this pending click and click with the locked or remembered L/R | Closes |
-| First zoom selection, no L/R chosen yet | Highlight zoom and wait; choosing L or R then magnifies and clicks with that button | Stays open |
-| Second zoom selection (a later menu) | Lock zoom independently of L/R; magnify and click as above | Closes, or stays open if no L/R is chosen |
-| Already-locked zoom icon | Unlock zoom only; no click | Closes |
-| Zoom selected after an automatic click was already sent | Arm zoom for the next target, or lock it on the second selection; never repeat the completed click | Closes |
-| Pause | Cancel the pending click and pause dwell clicking; locks are kept | Closes |
-| Snap to | Toggle cursor snapping to nearby clickable controls; no click | Closes |
-| Dwell outside an unlocked menu | Cancel without clicking | Closes |
-
-**Snap to** is off by default. Use **Start with Snap to enabled** in the main window or
-tray settings dialog to change the startup default. Dwell on its crosshair icon to toggle
-the current state; a blue outline indicates that it is enabled. While dwell clicking is active, the pointer snaps to the
-centre of a nearby enabled control exposed by the application's accessibility API, when its
-centre is within the configured radius (default 48 px; adjustable from 8 to 500 px).
-Move away to leave a target; head-driven movement stays snapped until the head target
-leaves that radius. Snapping does not activate the
-control, and is suspended while paused or using the menu or magnifier. It preserves
-click-button and zoom choices. Stopping dwell clicking or changing settings restores the
-configured startup default.
-On Windows, **Windows method** selects native UI Automation (UIA, the default) or the
-previous MSAA point-lookup implementation. UIA gets the element at each sampled point,
-checks its enabled state and supported action patterns (such as Invoke and Toggle), and
-walks to its control-view ancestors when needed. MSAA uses `AccessibleObjectFromPoint` and
-can also reach some controls exposed through the UIA-to-MSAA bridge. Compare both methods
-for target applications; either can miss controls that do not expose usable accessibility
-information. Increasing the radius only helps with exposed controls and does not discover
-inaccessible ones. The selected method is saved as `snap_backend` under `ui.dwell_click`.
-macOS requires Accessibility permission for OpenHeadMouse or its Python executable.
-Linux requires an X11 session, AT-SPI 2 (`libatspi2.0-0`) and desktop accessibility enabled;
-snapping is restricted to the active window to avoid covered background controls.
-Custom-drawn controls that do not expose accessibility actions cannot be detected.
-Accessibility queries run outside the UI thread; failures turn snapping off and report an error.
-
-**Pause** stops all dwell clicking and shows a floating **Resume** (play) button in the
-bottom-right corner of the screen. Dwell on it to resume hands-free, or use **Start Dwell
-Clicking** in the tray menu or settings dialog. While paused the tray shows Start; the main
-window's Dwell Click checkbox stays ticked. If Resume appears under the pointer, move off it
-and back before dwelling. Stopping dwell clicking also clears the pause.
-
-Locked options have blue outlines. Future target dwells use the selected button directly
-when L/R is locked, opening the magnifier first when zoom is also locked. If only zoom is
-locked, the menu still opens so L or R can be chosen for the zoomed click.
-After these automatic clicks, the menu appears for **Stay** seconds (S, default 3), allowing
-unlocking or a different choice. Switching to the other L/R intentionally sends one click
-with the newly selected button at that menu's target, even if the previous automatic click
-was already sent. Dwelling outside this timed menu performs the next automatic click.
-The dismissal timer pauses during an icon dwell so an action can finish near the deadline.
-If the menu opens underneath the pointer, leave the icon and re-enter it before selecting;
-remaining stationary cannot immediately unlock a newly locked option.
-
-**Use zoom (start locked)** seeds the independent zoom lock when starting dwell clicking.
-Menu selections change runtime locks only: they do not toggle the checkbox or save locks.
-For example, unlocking zoom in the menu leaves the checkbox checked; restarting restores
-the configured zoom default. Stopping or changing settings clears remembered selections and
-L/R locks, and reapplies that zoom default.
-
-OpenHeadMouse persists `snap_enabled`, `snap_radius_px`, `snap_backend`, `context_menu_enabled`,
-`context_menu_distance_px`, `context_menu_size_px`, and `context_menu_lock_time_s` under
-`ui.dwell_click`. Standalone mode also accepts
-`--context-menu --menu-distance 60 --menu-size 54 --menu-lock-time 3`.
-After zoom opens, move away from the icon-selection position before dwelling on the image;
-remaining still will not complete or cancel the precise click.
-
-**Zoom clicking** is optional and disabled by default. Enable it in the main window or tray
-settings to start with zoom locked, or select zoom once from the context menu. The magnifying
-dwell opens a borderless screenshot around that point without
-clicking the application. Move the pointer beyond the movement tolerance, then dwell on the
-desired pixel inside the box to complete the selected L/R click at the original screen location
-(left click when running without the context menu).
-Dwelling outside the box cancels without clicking. Simply remaining still after the box opens
-does not complete a click. The same dwell time and tolerance apply to both stages.
-
-**Width** and **Height** set the displayed box size (default 300 by 200 pixels);
-**Scale** sets magnification (default 4x, without image smoothing). The box and captured area
-are kept on the pointer's display and the box is reduced to fit smaller screens. These sizes
-use Qt screen coordinates (logical pixels on scaled displays); selection maps back to
-individual captured screen pixels, including on high-DPI displays. OpenHeadMouse saves
-`zoom_enabled`, `zoom_width_px`, `zoom_height_px`, and `zoom_scale` under `ui.dwell_click`
-in `config.json`. Standalone settings apply for the current run, with command-line options
-available as above. Stopping dwell clicking or changing settings cancels any pending zoom click.
-Screen capture must be permitted by the OS; capture failures are logged and shown through
-a tray notification rather than falling back to an unzoomed click. Pointer-control permission
-is also required; if the cursor cannot reach the selected point, the click is cancelled and
-an error is reported.
-
-**Possible next step: UIAccess (Windows).** Taskbar previews, the Start menu and windows of
-programs running as administrator sit in Windows z-order layers above every normal program,
-so the dwell menu can be hidden by them and clicks into elevated windows are blocked.
-Accessibility software such as OptiKey avoids this with *UIAccess*, which lets an app
-draw above those layers and interact with elevated windows without itself running as
-administrator. Requirements:
-
-* Manifest flag `uiAccess="true"` (PyInstaller: `uac_uiaccess=True` in `EXE(...)` in the
-  `.spec` file). Make it opt-in for release builds only: an unsigned UIAccess exe will not
-  start ("A referral was returned from the server").
-* Authenticode-sign the exe with a certificate trusted by the installing PC. Options:
-  * Trusted, no extra steps for users: an open-source code-signing certificate (e.g.
-    Certum Open Source, as OptiKey uses), SignPath Foundation (free for open-source
-    projects) or Azure Trusted Signing.
-  * Self-signed (for testing on your own PCs): each PC must import the certificate into
-    *Local Machine > Trusted Root Certification Authorities* (admin rights). That PC
-    then trusts anything signed with the key, so keep the private key safe and out of
-    the repository.
-* Install the exe in a secure location such as `C:\Program Files\...`; by default Windows
-  refuses to start a UIAccess exe from user folders such as Downloads.
-
-Running Dwell Click as administrator is a simpler interim workaround for clicking into
-elevated windows, but it does not lift the menu above taskbar previews or the Start menu.
+Tick **Dwell Click** in the Subsystems panel to click when the pointer remains
+within the configured tolerance for the dwell time. It starts only while an input
+provider controls the cursor, and stops when mouse control is paused or suspended.
+For settings, standalone use, the context menu, snap, zoom and platform limits,
+see the [dwell-click guide](docs/dwell-click.md).
 
 ## GENERAL NOTES:
 ### Coordinate frame and gain signs
@@ -629,7 +440,7 @@ tilting the left ear down gives **positive roll**. Cursor mapping uses the same 
 absolute and velocity mode: **positive gains make the cursor follow the head** (turn left →
 cursor left, look up → cursor up). A negative gain inverts that axis. If a provider needs
 negative gains to feel natural, its frame conversion is wrong. See
-[COORDINATE_FRAMES.md](COORDINATE_FRAMES.md) for the per-provider conversions and a checklist
+[docs/coordinate-frames.md](docs/coordinate-frames.md) for the per-provider conversions and a checklist
 for adding a new provider.
 
 Main-window labels are kept short and related options sit side by side; hover over any
@@ -653,7 +464,7 @@ suppressed after touch/pen input, independently of whether **Dwell Click** is en
 Blocked input pauses tracking and displays a permissions warning.
 
 The real Windows pointer is separate from the dwell ring, zoom box and click-menu overlays.
-Those overlays can be covered by taskbar previews or privileged windows (see UIAccess above);
+Those overlays can be covered by taskbar previews or privileged windows (see [UIAccess](docs/dwell-click.md#uiaccess-windows));
 UIAccess is not a general fix for an invisible native pointer. If pointer movement or clicking
 is blocked over an application running as administrator, OpenHeadMouse needs matching permissions
 or an appropriately signed/installed UIAccess build. Secure-desktop prompts remain out of scope.
@@ -690,6 +501,9 @@ once either way. Source runs use `fitts_law/fitts_settings.json`; packaged editi
 per-user application data so settings survive upgrades and work in read-only installations.
 
 ### Session files
+
+See the [recording format reference](docs/recording-formats.md) for head
+JSON/CSV and Fitts JSON fields, clocks, and the ZIP assignment manifest.
 
 Each Start → Stop run of a provider is saved as its own session file when **Recording** is on.
 The recorder is cleared after every save. Earlier versions kept every sample since launch, so
@@ -755,7 +569,7 @@ The selection saves `axes_alignment` and `ahrs_axes_convention` and sends both
 settings to a connected device (USB or Wi-Fi). During a Wi-Fi outage it is applied
 on reconnection. Changing a live mount resets cursor mapping and restarts calibration
 if enabled. Existing non-preset settings appear as **Custom (from config)** and
-are preserved until a preset is selected. See [Coordinate Frame Conventions](COORDINATE_FRAMES.md)
+are preserved until a preset is selected. See [Coordinate Frame Conventions](docs/coordinate-frames.md)
 for the preset alignments.
 
 ### xIMU3 Wi-Fi AP connection

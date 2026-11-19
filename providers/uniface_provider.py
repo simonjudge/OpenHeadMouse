@@ -4,7 +4,7 @@ Pipeline: OpenCV grabs BGR frames -> MediaPipe Tasks `FaceLandmarker` (VIDEO
 running mode, ``output_facial_transformation_matrixes=True``) returns a 4x4
 facial transformation matrix per detected face -> the rotation part is
 re-expressed in this project's canonical [+X forward, +Y left, +Z up] head
-frame (see core/quaternion_math.py and COORDINATE_FRAMES.md) -> converted to
+frame (see core/quaternion_math.py and docs/coordinate-frames.md) -> converted to
 a [w, x, y, z] quaternion.
 
 MediaPipe's facial transformation matrix is expressed in the canonical face

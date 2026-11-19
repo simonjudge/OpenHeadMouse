@@ -5,7 +5,7 @@ Convention: quaternions are represented as numpy arrays ``[w, x, y, z]``
 which uses scalar-last ``[x, y, z, w]`` — any interop with scipy must
 explicitly reorder components.
 
-Canonical head frame (right-handed "FLU"; see COORDINATE_FRAMES.md):
+Canonical head frame (right-handed "FLU"; see docs/coordinate-frames.md):
     +X — forward (direction of view, out of nose)
     +Y — left (ear-to-ear lateral axis, toward the LEFT ear)
     +Z — up (vertical axis, toward the top of the head)

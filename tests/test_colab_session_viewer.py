@@ -99,8 +99,31 @@ def test_playback_uses_iframe_without_html_warning(tmp_path, monkeypatch):
     assert parser.frame["sandbox"] == "allow-scripts"
     assert parser.frame["src"] == "about:blank"
     assert parser.frame["width"] == "100%"
-    assert parser.frame["height"] == "1150"
+    assert parser.frame["height"] == "900"
     assert parser.frame["title"] == "Head and cursor session playback"
+
+
+def test_exclusion_controls_explain_scopes_in_tooltips_and_keep_summaries_compact(tmp_path):
+    from colab_session_viewer.app import NotebookViewer
+
+    viewer = NotebookViewer()
+    tooltips = [
+        viewer.exclusion_controls.children[0].value,
+        *(control.children[0].value for control in viewer.time_exclusion_controls.children),
+    ]
+    assert all('title="' in tooltip for tooltip in tooltips)
+    assert "every Fitts file" in tooltips[0]
+    assert "every labelled still hold" in tooltips[1]
+    assert "whole-recording movement range" in tooltips[2]
+    assert all("?" in tooltip for tooltip in tooltips)
+
+    viewer._add_sessions([Session.load("P", "Test", head_path=make_head(tmp_path))])
+    assert "Download all summary measures (CSV)" in viewer.table.value
+    assert "only samples labelled initial_rest.hold" in viewer.table.value
+    assert "X points forward, Y left, and Z up" in viewer.table.value
+    assert "positive left" in viewer.table.value
+    reference_index = viewer.table.value.index("Neutral/Reference Head Pose")
+    assert reference_index < viewer.table.value.index('<table class="report-data"', reference_index)
 
 
 def test_loading_and_session_outputs_share_one_viewer(monkeypatch):
@@ -527,7 +550,7 @@ def test_archive_multiple_datasets_and_atomic_duplicates(tmp_path):
     viewer.exclude_targets.value = 2
     assert viewer.summary_rows()[0]["targets_analysed"] == 6
     assert viewer.summary_rows()[1]["targets_analysed"] == 3
-    assert "Download summary CSV" in viewer.table.value
+    assert "Download all summary measures (CSV)" in viewer.table.value
     with pytest.raises(ValueError, match="Duplicate"):
         viewer._add_sessions(load_archive(archive))
     assert len(viewer.sessions) == 3
@@ -870,8 +893,8 @@ def test_split_tables_keep_one_row_per_participant_and_rom_task_only(tmp_path):
     rows = participant_rows([head, mouse])
     tables = participant_tables(rows)
     assert list(tables) == [
-        "Session summary", "Neutral Recorded Head Positions", "Range of Movement Task",
-        "Head Movement During Fitts Task", "Fitts Session", "Fitts Throughput Stats",
+        "Session summary", "Initial head positions", "Range of movement stats",
+        "Head movement stats", "Fitts targets and hits", "Fitts stats",
     ]
     for table in tables.values():
         assert [r["participant"] for r in table] == ["P01", "P02"]
@@ -889,13 +912,20 @@ def test_split_tables_keep_one_row_per_participant_and_rom_task_only(tmp_path):
     viewer = NotebookViewer()
     viewer.initial_rest_exclude.value = 0
     viewer._add_sessions([head, mouse])
-    markup = viewer.table.value
-    assert markup.count("<table ") == 14  # Six summaries, six session tables, conditions and diagnostics.
+    head_markup = viewer.table.value
+    fitts_markup = viewer.fitts_table.value
+    assert "<h3>Initial head positions</h3>" in head_markup
+    assert "<h3>Fitts stats</h3>" not in head_markup
+    assert "<h3>Fitts stats</h3>" in fitts_markup
+    assert "<h3>Initial head positions</h3>" not in fitts_markup
+    markup = head_markup + fitts_markup
+    assert markup.count('class="report-data"') == 14
+    assert markup.count('class="field-key"') == 8
     assert markup.count('class="session-details"') == 6
-    assert markup.count("<svg ") == 5  # Four reference views plus the participant pose.
+    assert markup.count("<svg ") == 4  # Three reference views plus the participant pose.
     assert markup.index("<svg ") > markup.index("<h3>Initial head positions</h3>")
     assert markup.index("<svg ") < markup.index("<h3>Range of movement stats</h3>")
-    assert "Angle zero references (schematic head mesh)" in markup
+    assert "Neutral/Reference Head Pose" in markup
     assert "Webcam pitch/roll are relative to the camera, not gravity" in markup
     for title in tables:
         assert f"<h3>{title}</h3>" in markup
@@ -919,20 +949,34 @@ def test_initial_pose_reference_diagram_uses_mesh_and_distinguishes_references()
     markup = initial_pose_reference_diagram()
     root = ET.fromstring("<section>" + markup.replace("<br>", "<br/>") + "</section>")
     svgs = root.findall(".//{http://www.w3.org/2000/svg}svg")
-    assert len(svgs) == 4
+    assert len(svgs) == 3
     for svg in svgs:
         assert svg.attrib["role"] == "img"
         assert len(svg.findall(".//{http://www.w3.org/2000/svg}line")) == 3
         assert "0.0 deg" in svg.attrib["aria-label"]
+        labels = "".join(svg.itertext())
+        assert "0" in labels and "+" in labels and "-" in labels
+        assert "Dashed:" not in labels and "Camera:" not in labels
+    assert "<h4>Neutral/Reference Head Pose</h4>" in markup
     assert "Camera axes follow the camera" in markup
     assert "IMU tilt assumes correct sensor mounting/fit" in markup
-    assert "Calibration heading uses this same tracker reference" in markup
-    assert "Example heading only; not a participant measurement" in markup
+    assert "calibration heading" not in markup.lower()
     from session_viewer.mesh_visualizer import ANGLE_COLORS
-    for svg, angle in zip(svgs, ("pitch", "roll", "yaw", "yaw")):
+    expected_stems = (
+        ("M42 100 L42.0 70.0", "M178 100 L178.0 137.0"),
+        ("M42 94 L42.0 66.0", "M178 106 L178.0 137.0"),
+        ("M78 160 L36.0 160.0", "M142 160 L184.0 160.0"),
+    )
+    ns = {"svg": "http://www.w3.org/2000/svg"}
+    for svg, angle, expected in zip(svgs, ("pitch", "roll", "yaw"), expected_stems):
         assert ANGLE_COLORS[angle] in ET.tostring(svg, encoding="unicode")
-    assert "L110.0 20.0" in markup  # Provider yaw zero points forward.
-    assert "L155.9 34.5" in markup  # Relative yaw zero follows the illustrated calibration.
+        paths = svg.findall(".//svg:path", ns)
+        stems = [path for path in paths if path.attrib.get("fill") == "none"
+                 and "stroke-dasharray" not in path.attrib]
+        arrowheads = [path for path in paths if path.attrib.get("fill") == ANGLE_COLORS[angle]]
+        assert tuple(path.attrib["d"] for path in stems) == expected
+        assert len(arrowheads) == 2
+        assert all(path.attrib["d"].endswith(" Z") for path in arrowheads)
 
 
 def test_rom_table_does_not_fall_back_to_unlabelled_head_ranges(tmp_path):
@@ -946,6 +990,7 @@ def test_rom_table_does_not_fall_back_to_unlabelled_head_ranges(tmp_path):
 
 
 def test_head_only_tables_numeric_precision_and_calibration_pose_wireframes(tmp_path):
+    import base64
     import re
     from colab_session_viewer.app import NotebookViewer
     from colab_session_viewer.data import initial_pose_wireframes, participant_tables
@@ -972,6 +1017,10 @@ def test_head_only_tables_numeric_precision_and_calibration_pose_wireframes(tmp_
     svg = initial_pose_wireframes(tables["Initial head positions"])
     assert "&lt;P&gt;" in svg
     assert "30.3 / -10.3 / 5.2 deg" in svg
+    pose_svg = base64.b64decode(re.search(r'data:image/svg\+xml;base64,([^"]+)', svg)[1]).decode("utf-8")
+    assert all(note not in pose_svg for note in (
+        "Head axes:", "Yaw: + left", "Pitch: + up", "Roll: + left ear down",
+    ))
     neutral = [dict(rows[0], head_initial_rest_yaw_calibration_mean_deg_session_mean=0,
                     head_initial_rest_pitch_mean_deg_session_mean=0,
                     head_initial_rest_roll_mean_deg_session_mean=0)]
@@ -1117,45 +1166,35 @@ def test_collapsed_reference_sources_and_complete_field_keys(tmp_path):
     )
 
 
-@pytest.mark.parametrize("zero_axes", [
-    (), ("yaw",), ("pitch",), ("roll",), ("yaw", "pitch"),
-    ("yaw", "roll"), ("pitch", "roll"), ("yaw", "pitch", "roll"),
-])
-def test_pose_zero_axes_redraw_without_mutating_measurements(zero_axes):
-    import copy
-    import re
+def test_pose_wireframe_uses_reference_angles_without_override_controls():
+    from colab_session_viewer.app import NotebookViewer
     from colab_session_viewer.data import initial_pose_wireframes
 
-    rows = [{
-        "participant": "<P>",
+    row = {
+        "participant": "P",
         "head_initial_rest_yaw_calibration_mean_deg_session_mean": 30,
         "head_initial_rest_pitch_mean_deg_session_mean": 20,
         "head_initial_rest_roll_mean_deg_session_mean": -10,
-    }]
-    before = copy.deepcopy(rows)
-    markup = initial_pose_wireframes(rows, zero_axes=zero_axes)
-    expected = [0 if axis in zero_axes else value
-                for axis, value in zip(("yaw", "pitch", "roll"), (30, 20, -10))]
-    assert " / ".join(f"{v:.1f}" for v in expected) + " deg" in markup
-    assert rows == before
-    for axis in ("X", "Y", "Z"):
-        assert f">+{axis}</text>" in markup
-        assert f">-{axis}</text>" in markup
-    assert "Yaw: + left / - right" in markup
-    assert "Pitch: + up / - down" in markup
-    assert "Roll: + left ear down / - right ear down" in markup
-    assert f"Pitch {expected[1]:+.1f} deg</text>" in markup
-    assert f"Yaw {expected[0]:+.1f} deg</text>" in markup
-    if zero_axes:
-        original = initial_pose_wireframes(rows)
-        assert re.findall(r"<line [^>]+", markup) != re.findall(r"<line [^>]+", original)
+    }
+    markup = initial_pose_wireframes([row])
+    assert "Yaw / pitch / roll: 30.0 / 20.0 / -10.0 deg" in markup
+    assert "Display-only zero" not in markup
+    viewer = NotebookViewer()
+    assert not hasattr(viewer, "pose_zero_controls")
+    assert "Zero yaw" not in "".join(
+        getattr(child, "value", "") for child in viewer.session_widget.children
+    )
 
 
-def test_zero_pose_wireframe_is_projected_front_on(mesh_file):
+def test_pose_wireframe_projects_reference_angles(mesh_file):
     import re
     import xml.etree.ElementTree as ET
     from colab_session_viewer.data import initial_pose_wireframes
-    from session_viewer.mesh_visualizer import centre_and_scale, load_obj_wireframe
+    from session_viewer.mesh_visualizer import (
+        ANGLE_COLORS, centre_and_scale, head_rotation_to_mesh_frame,
+        load_obj_wireframe, rotation_from_quaternion,
+    )
+    from core import quaternion_math as qm
 
     rows = [{
         "participant": "P",
@@ -1163,68 +1202,26 @@ def test_zero_pose_wireframe_is_projected_front_on(mesh_file):
         "head_initial_rest_pitch_mean_deg_session_mean": 20,
         "head_initial_rest_roll_mean_deg_session_mean": -10,
     }]
-    markup = initial_pose_wireframes(rows, zero_axes=("yaw", "pitch", "roll"))
+    markup = initial_pose_wireframes(rows)
     root = ET.fromstring(re.search(r"<svg\b.*?</svg>", markup).group())
     ns = {"svg": "http://www.w3.org/2000/svg"}
     lines = root.findall(".//svg:line", ns)
     vertices, _, edges = load_obj_wireframe(mesh_file)
     vertices = centre_and_scale(vertices)
-    scale = 240 / (4 - vertices[:, 2])
-    projected = np.column_stack((120 + vertices[:, 0] * scale, 110 - vertices[:, 1] * scale))
+    rotation = head_rotation_to_mesh_frame(rotation_from_quaternion(
+        *qm.from_euler_zyx(*np.radians([30, 20, -10]))
+    ))
+    rotated = vertices @ rotation.T
+    scale = 240 / np.maximum(0.2, 4 - rotated[:, 2])
+    projected = np.column_stack((120 + rotated[:, 0] * scale, 110 - rotated[:, 1] * scale))
     for line, (a, b) in zip(lines, edges):
         actual = [float(line.attrib[key]) for key in ("x1", "y1", "x2", "y2")]
         np.testing.assert_allclose(actual, projected[[a, b]].reshape(-1), atol=0.05)
     assert len(lines) == len(edges)
     paths = root.findall(".//svg:path", ns)
-    assert paths[0].attrib["d"] == "M120 110 L120.0 110.0"
-    assert paths[1].attrib["d"] == "M120 110 L120.0 110.0"
-    from session_viewer.mesh_visualizer import ANGLE_COLORS
     for index, angle in enumerate(("roll", "pitch", "yaw")):
         assert paths[index * 2].attrib["stroke"] == ANGLE_COLORS[angle]
         assert paths[index * 2 + 1].attrib["stroke"] == ANGLE_COLORS[angle]
-
-
-def test_pose_controls_redraw_restore_and_preserve_exports_and_playback(tmp_path):
-    import base64
-    import re
-    import xml.etree.ElementTree as ET
-    from colab_session_viewer.app import NotebookViewer
-
-    def downloaded_pose(markup):
-        match = re.search(
-            r'<b>P</b> - \(<a download="head_pose_P.svg" href="data:image/svg\+xml;base64,([^"]+)">',
-            markup,
-        )
-        svg = base64.b64decode(match[1]).decode("utf-8")
-        ET.fromstring(svg)
-        assert svg in markup  # Saved image matches the currently displayed pose exactly.
-        return svg
-
-    recorder = Recorder(tmp_path)
-    q = qm.from_euler_zyx(*np.radians([30, 20, -10]))
-    recorder.set_calibration([(0, q)], q)
-    for i in range(2):
-        recorder.record_sample(i, q, metadata={"task_phase": "initial_rest.hold"}, host_time=1000 + i)
-    session = Session.load("P", "Head", head_path=recorder.save("pose.json"))
-    viewer = NotebookViewer()
-    viewer._add_sessions([session])
-    before_markup = viewer.table.value
-    before_rows = viewer.summary_rows()
-    before_csv = summary_csv(before_rows)
-    before_playback = playback_payload(session)
-    original_svg = downloaded_pose(before_markup)
-    for control in viewer.pose_zero_controls.values():
-        assert not control.value
-        control.value = True
-    assert "0.0 / 0.0 / 0.0 deg" in viewer.table.value
-    assert viewer.table.value != before_markup
-    assert downloaded_pose(viewer.table.value) != original_svg
-    assert viewer.summary_rows() == before_rows
-    assert summary_csv(viewer.summary_rows()) == before_csv
-    assert playback_payload(session) == before_playback
-    for control in viewer.pose_zero_controls.values():
-        control.value = False
-    assert viewer.table.value == before_markup
 
 
 def test_pose_download_filenames_and_labels_are_safe_and_unavailable_poses_have_no_download():
@@ -1248,19 +1245,16 @@ def test_pose_download_filenames_and_labels_are_safe_and_unavailable_poses_have_
     assert "download=" not in initial_pose_wireframes([{"participant": "Missing"}])
 
 
-def test_zero_missing_yaw_is_explicit_but_does_not_invent_initial_pose():
+def test_missing_yaw_is_explicit_and_does_not_invent_initial_pose():
     from colab_session_viewer.data import initial_pose_wireframes
 
     row = {"participant": "P",
            "head_initial_rest_pitch_mean_deg_session_mean": 20,
            "head_initial_rest_roll_mean_deg_session_mean": -10}
     assert "No initial head pose recorded" in initial_pose_wireframes([row])
-    assert "0.0 / 20.0 / -10.0 deg" in initial_pose_wireframes([row], zero_axes=("yaw",))
     assert "No initial head pose recorded" in initial_pose_wireframes(
-        [{"participant": "No head"}], zero_axes=("yaw", "pitch", "roll"),
+        [{"participant": "No head"}],
     )
-    with pytest.raises(ValueError, match="Plot zero axes"):
-        initial_pose_wireframes([row], zero_axes=("invalid",))
 
 
 def test_ranges_use_quaternions_and_do_not_pool_different_euler_wrap_sheets(tmp_path):

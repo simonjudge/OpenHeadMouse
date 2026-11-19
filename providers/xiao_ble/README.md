@@ -98,7 +98,7 @@ identity matrix assumes sensor +X points forward, +Y points left, and +Z points
 up. If your mounting differs, change that matrix in `config.json` and repeat
 the direction test. It must be a proper rotation (`det(M) = +1`); do not fix
 direction signs by changing mouse gains. See
-[`COORDINATE_FRAMES.md`](../../COORDINATE_FRAMES.md) for the frame convention.
+[`coordinate-frames.md`](../../docs/coordinate-frames.md) for the frame convention.
 
 ## What the board sends
 

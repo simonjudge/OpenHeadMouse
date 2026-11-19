@@ -7,7 +7,7 @@ and streams quaternions at up to 400 Hz.
 
 COORDINATE FRAME & AXES ALIGNMENT LOGIC:
 =========================================
-See: COORDINATE_FRAMES.md for the canonical head frame definition.
+See: docs/coordinate-frames.md for the canonical head frame definition.
 
 LEFT HAND SIDE OF HEAD:
 Mode 1 - hanging from glasses.  USB pointing back, printing of arrows pointing out of head.  Alignment: "+X-Z+Y"
@@ -24,7 +24,7 @@ The alignment maps the sensor axes onto the device body frame, which with NED is
 Forward-Right-Down (FRD) in head terms. The software then converts FRD into the
 canonical FLU head frame with a 180 deg rotation about X: q_head = [w, x, -y, -z]
 (_XIMU3_TO_HEAD_FRAME). Do not "fix" sign problems by picking a different
-alignment; that just hides a frame error (see COORDINATE_FRAMES.md).
+alignment; that just hides a frame error (see docs/coordinate-frames.md).
 
 NOTE: the axesAlignment numeric enum in the x-IMU3 user manual / App does not
 match the firmware. _AXES_ALIGNMENT_VALUES holds the mapping verified on hardware.

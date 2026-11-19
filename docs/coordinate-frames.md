@@ -76,13 +76,13 @@ headphone axes unremapped. Its default YXZ order with X/Z inverted is **not**
 this frame and must not be used with the adapter. JSON v2 does not include the
 axis configuration; OpenHeadMouse cannot verify it automatically. The provider
 converts the scalar-first quaternion directly rather than reconstructing it from
-the bridge's differently defined Euler angles. See the [setup guide](README.md#sony-headphone-provider).
+the bridge's differently defined Euler angles. See the [setup guide](../README.md#sony-headphone-provider).
 Synthetic tests cover isolated motions and combined rotations; physical Sony
 headphone validation remains required.
 
 ### OpenSeeFace camera alignment
 
-[providers/openSeeFace.py](providers/openSeeFace.py) uses the upstream XYZW
+[providers/openSeeFace.py](../providers/openSeeFace.py) uses the upstream XYZW
 quaternion, whether it is computed in-process from the camera or received over
 UDP. That quaternion represents the inverse PnP rotation, not a conventional active
 model-to-camera quaternion. PnP also uses swapped image coordinates (row, column).

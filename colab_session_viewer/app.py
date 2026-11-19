@@ -108,14 +108,7 @@ class NotebookViewer:
             value=False, description="Show dwell behaviour estimates",
             indent=False, layout=widgets.Layout(width="auto"),
         )
-        self.include_dwell.observe(self._pose_zero_changed, names="value")
-        self.pose_zero_controls = {
-            axis: widgets.Checkbox(value=False, description=f"Zero {axis}", indent=False,
-                                   layout=widgets.Layout(width="120px"))
-            for axis in ("yaw", "pitch", "roll")
-        }
-        for control in self.pose_zero_controls.values():
-            control.observe(self._pose_zero_changed, names="value")
+        self.include_dwell.observe(self._refresh_after_analysis_change, names="value")
         self.initial_rest_exclude = widgets.BoundedFloatText(
             value=1.0, min=0.0, max=1e6, step=0.1,
             description="Skip opening of each hold (s):",
@@ -140,16 +133,37 @@ class NotebookViewer:
             control.style.description_width = "0px"
             control.layout = widgets.Layout(width="150px")
 
-        def labelled(control, label):
+        def labelled(control, label, tooltip):
+            label_widget = widgets.HTML(
+                f'<span title="{html.escape(tooltip, quote=True)}" '
+                f'style="cursor:help;border-bottom:1px dotted #777">{html.escape(label)} (?)</span>'
+            )
             return widgets.VBox(
-                [widgets.Label(label), control], layout=widgets.Layout(margin="0 20px 0 0"),
+                [label_widget, control], layout=widgets.Layout(margin="0 20px 0 0"),
             )
 
-        self.exclusion_controls = labelled(self.exclude_targets, "First targets per Fitts file")
+        self.exclusion_controls = labelled(
+            self.exclude_targets, "First targets per Fitts file",
+            "Skips the first N completed targets in every Fitts file, across all participants. "
+            "These targets are omitted from pointing results; their time intervals are also omitted "
+            "from head statistics when paired recordings have a shared clock. Target numbering and "
+            "source recordings stay unchanged.",
+        )
         self.time_exclusion_controls = widgets.HBox(
             [
-                labelled(self.initial_rest_exclude, "Each hold opening (s)"),
-                labelled(self.head_opening_exclude, "Head recording opening (s)"),
+                labelled(
+                    self.initial_rest_exclude, "Each hold opening (s)",
+                    "Skips this many seconds from the start of every labelled still hold. "
+                    "Affects initial-pose, exercise and movement estimates, but not move phases, "
+                    "calibration, playback or pointing results. Use 0 to include each whole hold.",
+                ),
+                labelled(
+                    self.head_opening_exclude, "Head recording opening (s)",
+                    "Skips this many seconds from the first sample of each head recording for "
+                    "whole-recording movement range, speed and acceleration only. Initial pose, "
+                    "exercise results, pointing results, calibration and source recordings are unchanged. "
+                    "Use 0 to include the full recording.",
+                ),
             ],
             layout=widgets.Layout(flex_flow="row wrap"),
         )
@@ -220,41 +234,13 @@ class NotebookViewer:
         self.fitts_calculation_review.set_title(0, "Fitts calculation review")
         self.session_widget = widgets.VBox([
             widgets.HTML("<h2>Session viewer</h2>"),
-            widgets.HTML("<h3>Exclusions</h3><p>Exclude the first N completed targets "
-                         "<b>from every Fitts file, for all participants</b>, in chronological order. "
-                         "The same targets and their time intervals are excluded from pointing and head statistics. "
-                         "Plots retain coloured traces, with excluded time periods shaded grey behind them. "
-                         "Source recordings and saved calibration are unchanged.</p>"),
+            widgets.HTML("<h3>Exclusions</h3>"),
             self.analysis_exclusions,
-            widgets.HTML(
-                "<p><b>Skip opening of head recording</b> excludes the chosen duration from each recording's "
-                "first sample for whole-recording ranges, speed and acceleration only. Both time controls "
-                "default to 1 second; 0 disables that exclusion. Calibration, reference pose, "
-                "movement-exercise results and pointing results are preserved. Recording counts and durations "
-                "still describe the original files. No retained samples means blank movement estimates.</p>"
-            ),
             self.head_exclusion_note,
             widgets.HBox([self.participant, self.session]), self.viewer,
-            widgets.HTML("<h3>Participant summaries</h3><p>One row per participant in each table, pooling retained "
-                         "trials across all imported sessions using the desktop FittsStats formulas. "
-                         "Times are seconds, angles degrees, distances pixels; error rates display as percentages. "
-                         "Blank values mean unavailable. Pre-test columns are averages across available sessions. "
-                         "Expand Individual sessions below each main table to inspect each session's values.</p>"),
-            widgets.HTML(
-                "<p><b>Initial head positions use hold samples only</b> "
-                "(<code>initial_rest.hold</code>), never the preceding move-to-rest phase "
-                "(<code>initial_rest.move</code>). Skip the chosen opening duration from each hold's start; "
-                "0 includes the full hold. Without a saved hold-start time, use the first labelled hold sample. "
-                "The same exclusion applies to left/right/up/down holds. Excluded hold samples are omitted "
-                "from head pose, exercise and recording movement calculations and marked by grey chart backgrounds. "
-                "Move phases are not trimmed by this control. Saved calibration/reference, raw playback and "
-                "pointing results are unchanged. A hold with no samples left has no held-pose estimate.</p>"
-            ),
+            widgets.HTML("<h3>Participant summaries</h3><p>One row per participant. "
+                         "Expand <b>Table Notes</b> for field definitions, session details and angle references.</p>"),
             self.rest_exclusion_note,
-            widgets.HTML("<b>Initial head position plots only</b>: set selected angles to 0.0 deg for all "
-                         "participant plots. Tables, CSVs and playback are unchanged. Uncheck to restore recorded angles."),
-            widgets.HBox(list(self.pose_zero_controls.values()),
-                         layout=widgets.Layout(flex_flow="row wrap")),
             self.table,
             widgets.HTML("<h2>Fitts results</h2>"),
             self.target_review,
@@ -555,11 +541,11 @@ class NotebookViewer:
             self._show_analysis_error(error)
             return
         iframe = IFrame(
-            src="about:blank", width="100%", height=1150,
+            src="about:blank", width="100%", height=900,
             extras=[
                 'title="Head and cursor session playback"',
                 'sandbox="allow-scripts"',
-                'style="width:100%;height:1150px;border:0"',
+                'style="width:100%;height:900px;border:0"',
                 f'srcdoc="{html.escape(document, quote=True)}"',
             ],
         )
@@ -584,7 +570,7 @@ class NotebookViewer:
             excluded_trial_ids=self._excluded_fitts_trials,
         )
 
-    def _pose_zero_changed(self, change):
+    def _refresh_after_analysis_change(self, _change):
         try:
             self._refresh_table()
         except ValueError as error:
@@ -666,11 +652,12 @@ class NotebookViewer:
         descriptions = {
             "Session summary": "Recording counts and durations.",
             "Initial head positions": (
-                "Initial rest is the labelled still period before the movement exercise. "
-                "Only initial_rest.hold samples are used, never the preceding initial_rest.move phase. "
-                f"The opening {self.initial_rest_exclude.value:g} seconds of each initial-rest hold are excluded "
-                "from rest measurements, their meshes and offsets from rest. Set the opening exclusion to 0 "
-                "for the full hold. A hold with no samples left contributes no rest-pose estimate. "
+                "Initial head positions use only samples labelled initial_rest.hold, never the preceding "
+                "initial_rest.move phase. The opening "
+                f"{self.initial_rest_exclude.value:g} seconds of each hold are excluded; without a saved "
+                "hold-start time, the first labelled hold sample is the start. The same rule applies to "
+                "directional holds. A fully excluded hold contributes no held-pose estimate; move phases "
+                "are not trimmed. Saved calibration, playback and pointing results are unchanged. "
                 "Recorded yaw is the heading reported by the tracker during that period; it is not "
                 "necessarily a compass heading, because gravity does not determine yaw. "
                 "Yaw from calibration heading measures that same initial-rest heading from the saved calibration heading, "
@@ -753,8 +740,14 @@ class NotebookViewer:
             notes = ""
             if label == "Initial head positions":
                 notes += (
-                    "<h4>Angle references and zero-position diagrams</h4>"
-                    f"<p>{descriptions[label]}</p>" + initial_pose_reference_diagram()
+                    "<h4>Angle interpretation</h4>"
+                    f"<p>{descriptions[label]}</p>"
+                    "<p>Axis and sign key: X points forward, Y left, and Z up. "
+                    "<span style=\"color:#2ca02c\">Yaw (about Z): positive left, negative right.</span> "
+                    "<span style=\"color:#d62728\">Pitch (about Y): positive up, negative down.</span> "
+                    "<span style=\"color:#1f77b4\">Roll (about X): positive left ear down, "
+                    "negative right ear down.</span> Solid participant-plot axes are positive; dashed axes are negative. "
+                    "The rotation-angle colors are green yaw, red pitch and blue roll.</p>"
                 )
             else:
                 notes += self._notes_details(descriptions[label])
@@ -776,16 +769,18 @@ class NotebookViewer:
                         "relative pitch/roll when the reference pose is tilted. Drift and unusually large values "
                         "are not automatically removed.</p></details>"
                     )
-            sections.append(
-                f"<h3>{label}</h3>" +
-                self._table_html(table_rows, filename, f"Download {label.lower()} CSV", extra_notes=notes)
-            )
+            section = f"<h3>{label}</h3>"
             if label == "Initial head positions":
-                zero_axes = tuple(axis for axis, control in self.pose_zero_controls.items() if control.value)
-                sections.append(initial_pose_wireframes(table_rows, zero_axes=zero_axes))
+                section += initial_pose_reference_diagram()
+            sections.append(section + self._table_html(
+                table_rows, filename, f"Download {label.lower()} CSV", extra_notes=notes,
+            ))
+            if label == "Initial head positions":
+                sections.append(initial_pose_wireframes(table_rows))
         encoded = base64.b64encode(summary_csv(rows).encode("utf-8-sig")).decode("ascii")
         self.table.value = (
-            f'<a download="participant_summary.csv" href="data:text/csv;base64,{encoded}">Download summary CSV (all metrics)</a>'
+            f'<a download="participant_summary.csv" href="data:text/csv;base64,{encoded}">'
+            "Download all summary measures (CSV)</a>"
             + "".join(head_sections)
         )
         self.fitts_table.value = "".join(fitts_sections)
@@ -878,14 +873,14 @@ class NotebookViewer:
     def _restore_review_targets(self, _button):
         self._excluded_fitts_trials.clear()
         self._target_review_controls.clear()
-        self._pose_zero_changed(None)
+        self._refresh_after_analysis_change(None)
 
     def _target_review_changed(self, trial_id, included):
         if included:
             self._excluded_fitts_trials.discard(trial_id)
         else:
             self._excluded_fitts_trials.add(trial_id)
-        self._pose_zero_changed(None)
+        self._refresh_after_analysis_change(None)
 
     def _refresh_selection_tables(self):
         labels = {"available": "available after exclusions", "used": "contributing",

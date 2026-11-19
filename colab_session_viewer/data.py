@@ -1256,24 +1256,44 @@ def format_field(key: str, value) -> str:
 
 
 def initial_pose_reference_diagram(mesh_path: Path | None = None) -> str:
-    """Illustrative zero poses, not participant measurements."""
+    """Illustrate neutral/reference pose and signed directions, not measurements."""
     vertices, _, edges = load_obj_wireframe(mesh_path or OBJ_PATH)
     vertices = centre_and_scale(vertices)
     cards = []
     definitions = (
         ("Pitch = 0.0 deg", "Side view: forward axis is horizontal.",
-         "IMU: gravity-level. Camera: level relative to the camera.", (2, 1), 0, "pitch"),
+         "IMU: gravity-level. Camera: level relative to the camera.",
+         (2, 1), "pitch"),
         ("Roll = 0.0 deg", "Front view: left/right axis is horizontal.",
-         "IMU: no sideways tilt from gravity. Camera: level in the image.", (0, 1), 0, "roll"),
-        ("Recorded yaw / calibration heading = 0.0 deg", "Top view: facing the tracker's heading zero.",
-         "Calibration heading uses this same tracker reference.", (0, 2), 0, "yaw"),
-        ("Yaw from calibration heading = 0.0 deg", "Top view: facing the calibration heading.",
-         "Example heading only; not a participant measurement.", (0, 2), 35, "yaw"),
+         "IMU: no sideways tilt from gravity. Camera: level in the image.",
+         (0, 1), "roll"),
+        ("Yaw = 0.0 deg", "Top view: facing the neutral/reference pose.",
+         "Yaw zero follows the selected neutral/reference pose.",
+         (0, 2), "yaw"),
     )
-    for title, description, note, axes, yaw, angle in definitions:
+
+    def direction_arrow(start, end, sign, label):
+        x1, y1 = start
+        x2, y2 = end
+        angle = math.atan2(y2 - y1, x2 - x1)
+        base_x = x2 - 8 * math.cos(angle)
+        base_y = y2 - 8 * math.sin(angle)
+        side_x = 3.5 * math.sin(angle)
+        side_y = -3.5 * math.cos(angle)
+        label_x, label_y = label
+        return (
+            f'<path fill="none" d="M{x1} {y1} L{base_x:.1f} {base_y:.1f}" '
+            f'stroke="{color}" stroke-width="2"/>'
+            f'<path d="M{x2} {y2} L{base_x + side_x:.1f} {base_y + side_y:.1f} '
+            f'L{base_x - side_x:.1f} {base_y - side_y:.1f} Z" fill="{color}" stroke="{color}"/>'
+            f'<text x="{label_x}" y="{label_y}" fill="{color}" font-size="14" '
+            f'font-weight="bold">{sign}</text>'
+        )
+
+    for title, description, note, axes, angle in definitions:
         color = ANGLE_COLORS[angle]
         rotation = head_rotation_to_mesh_frame(rotation_from_quaternion(
-            *qm.from_euler_zyx(np.radians(yaw), 0, 0)
+            *qm.from_euler_zyx(0, 0, 0)
         ))
         rotated = vertices @ rotation.T
         projected = np.column_stack((110 + 65 * rotated[:, axes[0]], 100 - 65 * rotated[:, axes[1]]))
@@ -1282,23 +1302,27 @@ def initial_pose_reference_diagram(mesh_path: Path | None = None) -> str:
             f'x2="{projected[b, 0]:.1f}" y2="{projected[b, 1]:.1f}"/>'
             for a, b in edges
         )
-        if axes == (0, 2):
-            end_x, end_y = 110 + 80 * np.sin(np.radians(yaw)), 100 - 80 * np.cos(np.radians(yaw))
+        if angle == "pitch":
             guides = (
-                '<path d="M110 185 V15" stroke="#777" stroke-dasharray="4 3"/>'
-                f'<path d="M110 100 L{end_x:.1f} {end_y:.1f}" stroke="{color}" stroke-width="3"/>'
-                '<text x="5" y="205" font-size="11">Dashed: tracker heading zero</text>'
-                '<text x="5" y="220" font-size="11">Green: this yaw measure is zero</text>'
+                f'<path d="M15 100 H205" stroke="{color}" stroke-width="2" stroke-dasharray="4 3"/>'
+                '<text x="193" y="94" font-size="12" font-weight="bold">0</text>'
+                + direction_arrow((42, 100), (42, 62), "+", (35, 55))
+                + direction_arrow((178, 100), (178, 145), "-", (172, 160))
+            )
+        elif angle == "roll":
+            guides = (
+                f'<path d="M15 100 H205" stroke="{color}" stroke-width="2" stroke-dasharray="4 3"/>'
+                '<text x="193" y="94" font-size="12" font-weight="bold">0</text>'
+                + direction_arrow((42, 94), (42, 58), "+", (35, 52))
+                + direction_arrow((178, 106), (178, 145), "-", (172, 160))
             )
         else:
             guides = (
-                f'<path d="M15 100 H205" stroke="{color}" stroke-width="2" stroke-dasharray="4 3"/>'
-                '<path d="M190 25 V75 l-4 -8 M190 75 l4 -8" stroke="#555"/>'
-                '<text x="140" y="20" font-size="11">IMU gravity</text>'
-                '<text x="5" y="205" font-size="11">Dashed: zero-tilt horizontal</text>'
-                '<text x="5" y="220" font-size="11">Camera: image/frame horizontal</text>'
+                '<path d="M110 185 V15" stroke="#777" stroke-dasharray="4 3"/>'
+                '<text x="116" y="24" font-size="12" font-weight="bold">0</text>'
+                + direction_arrow((78, 160), (28, 160), "+", (22, 153))
+                + direction_arrow((142, 160), (192, 160), "-", (195, 153))
             )
-        guides = guides.replace("<path ", '<path fill="none" ')
         cards.append(
             '<figure style="margin:8px;flex:0 1 240px;max-width:100%">'
             f'<figcaption><b>{title}</b><br>{description}</figcaption>'
@@ -1309,29 +1333,25 @@ def initial_pose_reference_diagram(mesh_path: Path | None = None) -> str:
             f'<p style="font-size:11px">{note}</p></figure>'
         )
     return (
-        '<h4>Angle zero references (schematic head mesh)</h4>'
-        '<p>These are reference poses, not participant data. IMU tilt assumes correct sensor mounting/fit. '
+        '<h4>Neutral/Reference Head Pose</h4>'
+        '<p>Dashed lines marked 0 show the neutral/reference direction; colored arrows mark positive and negative rotation. '
+        'These schematic poses are not participant measurements. IMU tilt assumes correct sensor mounting/fit. '
         'Camera axes follow the camera, so a tilted camera does not define gravity-level. '
         'xIMU3 yaw may be magnetic when enabled and reliable; AirPods yaw has an arbitrary heading reference. '
-        'Positive directions: yaw left, pitch up, roll left ear down. '
-        'Participant plots use a front-on view: zero yaw, pitch and roll faces straight out of the screen.</p>'
+        'Participant wireframes show the neutral/reference pose facing straight out of the screen.</p>'
         '<div style="display:flex;flex-wrap:wrap">' + "".join(cards) + '</div>'
     )
 
 
-def initial_pose_wireframes(
-    rows: list[dict], mesh_path: Path | None = None, *, zero_axes: tuple[str, ...] = (),
-) -> str:
-    """Draw a display-only pose from calibration yaw and initial-rest pitch/roll.
+def initial_pose_wireframes(rows: list[dict], mesh_path: Path | None = None) -> str:
+    """Draw a pose from reference yaw and initial-rest pitch/roll.
 
-    Use participant summary angles (degrees), optionally replace checked axes
-    with zero for display, construct a canonical quaternion and map its rotation
-    into mesh coordinates. This is a composite pose, not a pure rest/calibration
-    estimate; it does not change statistical rows or calculate anatomical axes.
-    Missing required angles produce a labelled unavailable plot.
+    Use participant summary angles (degrees) to construct a canonical quaternion
+    and map its rotation into mesh coordinates. This is a composite pose, not a
+    pure rest/reference estimate; it does not change statistical rows or
+    calculate anatomical axes. Missing required angles produce a labelled
+    unavailable plot.
     """
-    if set(zero_axes) - {"yaw", "pitch", "roll"}:
-        raise ValueError("Plot zero axes must be yaw, pitch or roll")
     cards = []
     geometry = None
     for row in rows:
@@ -1346,12 +1366,10 @@ def initial_pose_wireframes(
             participant = html.escape(row["participant"])
             cards.append(f"<figure><figcaption>{participant}</figcaption><p>No initial head pose recorded.</p></figure>")
             continue
-        angles = [0.0 if axis in zero_axes else value
-                  for axis, value in zip(("yaw", "pitch", "roll"), angles)]
         participant = html.escape(row["participant"])
         if any(value is None for value in angles):
             cards.append(f"<figure><figcaption>{participant}</figcaption><p>No initial head pose recorded "
-                         "with a saved calibration heading.</p></figure>")
+                         "with a saved yaw reference.</p></figure>")
             continue
         if geometry is None:
             vertices, _, edges = load_obj_wireframe(mesh_path or OBJ_PATH)
@@ -1396,13 +1414,9 @@ def initial_pose_wireframes(
         caption = " / ".join(format_number(angle) for angle in angles)
         svg = (
             f'<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{participant} initial head pose" '
-            f'viewBox="-60 0 360 285" style="width:360px;max-width:100%">'
-            f'<title>{participant}: calibration heading / initial-rest pitch / roll: {caption} deg</title>'
+            f'viewBox="-60 0 360 225" style="width:360px;max-width:100%">'
+            f'<title>{participant}: Yaw / pitch / roll: {caption} deg</title>'
             f'<g fill="none" stroke="#333" stroke-width="0.7">{lines}</g>{"".join(axes_markup)}'
-            '<text x="5" y="220" font-size="10">Head axes: X forward, Y left, Z up</text>'
-            '<text x="5" y="237" font-size="10">Yaw: + left / - right (about Z)</text>'
-            '<text x="5" y="254" font-size="10">Pitch: + up / - down</text>'
-            '<text x="5" y="271" font-size="10">Roll: + left ear down / - right ear down</text>'
             '</svg>'
         )
         encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
@@ -1410,8 +1424,7 @@ def initial_pose_wireframes(
         cards.append(
             f'<figure style="margin:8px;max-width:100%"><figcaption><b>{participant}</b> - '
             f'(<a download="head_pose_{filename}.svg" href="data:image/svg+xml;base64,{encoded}">download svg</a>)<br>'
-            f'Calibration heading / initial-rest pitch / roll: {caption} deg'
-            + ("<br>Display-only zero: " + ", ".join(zero_axes) if zero_axes else "") + '</figcaption>'
+            f'Yaw / pitch / roll: {caption} deg</figcaption>'
             + svg + '</figure>'
         )
     return '<div style="display:flex;flex-wrap:wrap">' + "".join(cards) + "</div>"
