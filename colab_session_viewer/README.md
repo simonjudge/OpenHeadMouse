@@ -245,7 +245,12 @@ P02,Test 1,,P02/fitts1.json,dwell,0.6
 ```
 
 Paths use `/` inside the ZIP; either file column may be blank. Files can share
-names in different folders. Any root-level CSV name (for example `A manifest.csv`)
+names in different folders when their full relative paths are specified.
+Filename-only entries are also searched recursively through subfolders: an exact
+root-level match takes priority, otherwise there must be exactly one matching
+filename. Ambiguous matches are rejected with the matching paths listed, rather
+than guessing which recording to use. Downloaded ZIP manifests contain the resolved
+relative paths. Any root-level CSV name (for example `A manifest.csv`)
 is checked for the manifest columns `participant,session,head_file,fitts_file`;
 the name need not be `manifest.csv`. Only a CSV with those columns and valid
 nonempty assignments is treated as a manifest. A recognized but invalid manifest

@@ -568,6 +568,60 @@ def test_archive_multiple_datasets_and_atomic_duplicates(tmp_path):
     assert len(viewer.sessions) == 3
 
 
+@pytest.mark.parametrize("head_name", ["head.json", "head.csv"])
+def test_archive_manifest_filename_resolves_nested_recordings_and_roundtrips(tmp_path, head_name):
+    from colab_session_viewer.archive import ArchiveDataset, manifest_csv
+
+    files = {
+        f"participant/sessions/{head_name}": make_head(tmp_path, head_name).read_bytes(),
+        "participant/fitts_sessions/fitts.json": make_fitts(tmp_path).read_bytes(),
+        "__MACOSX/fitts.json": b"not a recording",
+    }
+    manifest = (
+        "participant,session,head_file,fitts_file,selection_method,dwell_time_s\n"
+        f"P01,Test 1,{head_name},fitts.json,dwell,0.6\n"
+    )
+    dataset = ArchiveDataset.read(archive_bytes(manifest, files))
+    assert set(dataset.recordings) == set(files) - {"__MACOSX/fitts.json"}
+    row = dataset.assignments[0]
+    assert row.head_file == f"participant/sessions/{head_name}"
+    assert row.fitts_file == "participant/fitts_sessions/fitts.json"
+    session = dataset.build_sessions(dataset.assignments)[0]
+    assert (session.participant, session.name) == ("P01", "Test 1")
+    assert session.samples and session.trials
+    assert (session.selection_method, session.dwell_time_s) == ("dwell", 0.6)
+
+    restored = ArchiveDataset.read(archive_bytes(manifest_csv(dataset.assignments), files))
+    assert restored.assignments == dataset.assignments
+    assert len(restored.build_sessions(restored.assignments)) == 1
+
+
+@pytest.mark.parametrize("reference", ["test.json", "selected/test.json"])
+def test_archive_manifest_exact_path_takes_priority_over_same_filenames(tmp_path, reference):
+    from colab_session_viewer.archive import ArchiveDataset
+
+    files = {path: b"must not be loaded" for path in
+             ("test.json", "selected/test.json", "other/test.json")}
+    files[reference] = make_fitts(tmp_path).read_bytes()
+    dataset = ArchiveDataset.read(archive_bytes(
+        f"participant,session,head_file,fitts_file\nP,Test,,{reference}\n", files,
+    ))
+    assert list(dataset.recordings) == [reference]
+    assert dataset.assignments[0].fitts_file == reference
+
+
+def test_archive_manifest_ambiguous_filename_requires_explicit_path():
+    from colab_session_viewer.archive import ArchiveDataset
+
+    with pytest.raises(ValueError, match="ambiguous file test.json") as error:
+        ArchiveDataset.read(archive_bytes(
+            "participant,session,head_file,fitts_file\nP,Test,,test.json\n",
+            {"a/test.json": b"unused", "b/test.json": b"unused"},
+        ))
+    assert "a/test.json" in str(error.value)
+    assert "b/test.json" in str(error.value)
+
+
 def test_archive_paths_errors_and_html_escaping(tmp_path):
     from colab_session_viewer.app import load_archive, viewer_document
 

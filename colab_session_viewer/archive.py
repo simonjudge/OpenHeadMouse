@@ -32,6 +32,29 @@ def _safe_path(name: str) -> None:
         raise ValueError(f"Use relative ZIP paths with / separators: {name}")
 
 
+def _resolve_manifest_path(name: str, names: list[str]) -> str:
+    if not name:
+        return ""
+    _safe_path(name)
+    if name in names:
+        return name
+    if "/" not in name:
+        matches = sorted(
+            path for path in names
+            if not path.endswith("/") and not path.startswith("__MACOSX/")
+            and PurePosixPath(path).name == name
+        )
+        if len(matches) == 1:
+            _safe_path(matches[0])
+            return matches[0]
+        if len(matches) > 1:
+            raise ValueError(
+                f"Manifest: ambiguous file {name}: matches {', '.join(matches)}. "
+                "Use a full relative ZIP path."
+            )
+    raise ValueError(f"Manifest: missing file {name}")
+
+
 def manifest_csv(assignments: list[Assignment]) -> str:
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=MANIFEST_COLUMNS)
@@ -92,6 +115,14 @@ class ArchiveDataset:
             dataset.has_manifest = bool(manifests)
             if dataset.has_manifest:
                 dataset.manifest_filename, dataset.assignments = manifests[0]
+                dataset.assignments = [
+                    replace(
+                        row,
+                        head_file=_resolve_manifest_path(row.head_file, names),
+                        fitts_file=_resolve_manifest_path(row.fitts_file, names),
+                    )
+                    for row in dataset.assignments
+                ]
                 requested = {name for row in dataset.assignments for name in (row.head_file, row.fitts_file) if name}
             else:
                 requested = {name for name in names
