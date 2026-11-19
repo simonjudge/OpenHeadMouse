@@ -255,8 +255,8 @@ def test_optional_dwell_results_flow_to_main_session_matched_tables_and_csvs():
     viewer._refresh_table()
     original = viewer.summary_rows()
     viewer.include_dwell.value = True
-    assert "MTnodwell average (s)" in viewer.table.value
-    assert "dwell_inside_time_s_mean" in viewer.table.value
+    assert "dwell_inside_time_s_mean" in viewer.fitts_table.value
+    assert 'title="mtnodwell_s:' not in viewer.fitts_table.value
     for old, new in zip(original, viewer.summary_rows()):
         assert all(new[key] == value for key, value in old.items())
     for method in ("strict_id", "target_conditions"):
@@ -266,15 +266,15 @@ def test_optional_dwell_results_flow_to_main_session_matched_tables_and_csvs():
         assert rows[1]["mtnodwell_s"] == pytest.approx(3.4)
     rows = participant_tables(viewer.summary_rows())["Fitts stats"]
     assert all(field_description(key) for key in rows[0])
-    viewer.match_planned_id.value = True
-    assert "mtnodwell_s" in viewer.matched_fitts_table.value
-    # Individual-session tables have the same adjusted measures, not blank placeholders.
-    assert viewer.table.value.count("3.4") >= 2
+    assert 'title="mtnodwell_s:' not in viewer.fitts_table.value
+    # No-dwell MT lives in its own table; participant and individual-session rows agree.
+    assert "no_dwell_stats.csv" in viewer.nodwell_table.value
+    assert viewer.nodwell_table.value.count("<td>3.4</td>") >= 2
     viewer.include_dwell.value = False
     assert viewer.summary_rows() == original
 
 
-def test_dwell_tables_are_separate_in_main_session_matched_results_and_exports():
+def test_dwell_tables_are_separate_in_main_session_results_and_exports():
     switch = Session("A", "Switch", trials=[dwell_trial()], selection_method="external_switch")
     dwell = replace(switch, participant="B", name="Dwell", selection_method="dwell", dwell_time_s=.6,
                     trials=[replace(dwell_trial())])
@@ -282,16 +282,16 @@ def test_dwell_tables_are_separate_in_main_session_matched_results_and_exports()
     viewer.sessions = [switch, dwell]
     viewer.include_dwell.value = True
     tables = participant_tables(viewer.summary_rows())
-    assert set(tables["Fitts stats"][0]) & set(DWELL_FIELDS) == set(NODWELL_FITTS_FIELDS)
+    assert not set(tables["Fitts stats"][0]) & set(DWELL_FIELDS)
     assert list(tables["Dwell behaviour stats"][0]) == ["participant", *DWELL_BEHAVIOUR_FIELDS]
     assert tables["Dwell behaviour stats"][0]["dwell_head_trial_count"] is None
     assert tables["Dwell behaviour stats"][1]["dwell_head_trial_count"] == 0
-    main_fitts, main_dwell = viewer.table.value.split("<h3>Fitts stats</h3>")[1].split(
+    main_fitts, main_dwell = viewer.fitts_table.value.split("<h3>Fitts stats</h3>")[1].split(
         "<h3>Dwell behaviour stats</h3>",
     )
-    assert 'title="dwell_head_trial_count"' not in main_fitts
-    assert 'title="mtnodwell_s"' in main_fitts
-    assert '<details class="session-details">' in main_dwell
+    assert 'title="dwell_head_trial_count:' not in main_fitts
+    assert 'title="mtnodwell_s:' not in main_fitts
+    assert '<div class="session-details">' in main_dwell
     assert "<td>-</td>" in main_dwell
     assert "dwell_behaviour_stats.csv" in main_dwell
 
@@ -300,36 +300,19 @@ def test_dwell_tables_are_separate_in_main_session_matched_results_and_exports()
         return list(csv.DictReader(io.StringIO(base64.b64decode(encoded).decode("utf-8-sig"))))
 
     exported = csv_rows(main_fitts, "fitts_stats.csv")
-    assert set(exported[0]) & set(DWELL_FIELDS) == set(NODWELL_FITTS_FIELDS)
-    assert exported[0]["mtnodwell_s"] == exported[0]["nodwell_throughput_bits_per_s"] == ""
-    columns = list(exported[0])
-    assert columns[columns.index("mean_movement_time_s") + 1] == "mtnodwell_s"
-    assert columns[columns.index("throughput_bits_per_s") + 1] == "nodwell_throughput_bits_per_s"
-    assert "<td>-</td>" in main_fitts
+    fitts_columns = list(exported[0])
+    assert not set(fitts_columns) & set(DWELL_FIELDS)
     exported = csv_rows(main_dwell, "dwell_behaviour_stats.csv")
     assert exported[0]["dwell_head_trial_count"] == ""  # Numeric exports keep missing values blank.
-    assert exported[1]["dwell_head_trial_count"] == "0.0"
-    viewer.match_planned_id.value = True
-    for method in ("strict_id", "target_conditions"):
-        viewer.fitts_matching_method.value = method
-        markup = viewer.matched_fitts_table.value
-        assert "<h4>Dwell behaviour stats: matched targets</h4>" in markup
-        exported = csv_rows(markup, "matched_planned_id_fitts_stats.csv")
-        assert set(exported[0]) & set(DWELL_FIELDS) == set(NODWELL_FITTS_FIELDS)
-        columns = list(exported[0])
-        assert columns[columns.index("mean_movement_time_s") + 1] == "mtnodwell_s"
-        assert columns[columns.index("throughput_bits_per_s") + 1] == "nodwell_throughput_bits_per_s"
-        assert exported[0]["mtnodwell_s"] == exported[0]["nodwell_throughput_bits_per_s"] == ""
-        exported = csv_rows(markup, "matched_dwell_behaviour_stats.csv")
-        assert exported[0]["dwell_head_trial_count"] == ""
-        assert exported[1]["dwell_head_trial_count"] == "0.0"
-        for table_markup in markup.split("<h4>Dwell behaviour stats: matched targets</h4>"):
-            assert re.findall(r'<th title="([^"]+)"', table_markup) == re.findall(
-                r"<code>([^<]+)</code>", table_markup,
-            )
+    assert exported[1]["dwell_head_trial_count"] == "0"
+    assert list(csv_rows(viewer.nodwell_table.value, "no_dwell_stats.csv")[0]) == fitts_columns
+    for markup in (main_fitts, main_dwell):
+        keys = re.findall(r"<code[^>]*>([^<]+)</code>", markup)
+        titles = re.findall(r'<th title="([^"]+)"', markup)[:len(keys)]
+        assert [title.split(": ", 1)[0] for title in titles] == keys
+        assert all(len(title.split(": ", 1)[1]) >= 12 for title in titles)
     viewer.include_dwell.value = False
-    assert "Dwell behaviour stats" not in viewer.table.value
-    assert "Dwell behaviour stats" not in viewer.matched_fitts_table.value
+    assert "Dwell behaviour stats" not in viewer.fitts_table.value
 
 
 @pytest.mark.parametrize("method", ["external_switch", "mouse", "other", "unknown"])

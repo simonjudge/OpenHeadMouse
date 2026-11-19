@@ -274,16 +274,15 @@ def test_demo_defaults_to_bundled_folder_independent_of_cwd(tmp_path, monkeypatc
 
 def test_notebook_has_separate_loading_and_session_cells():
     notebook = json.loads((ROOT / "colab_session_viewer" / "session_viewer.ipynb").read_text(encoding="utf-8"))
-    cells = {cell["id"]: "".join(cell["source"]) for cell in notebook["cells"]}
+    by_id = {cell["id"]: cell for cell in notebook["cells"]}
+    cells = {cell_id: "".join(cell["source"]) for cell_id, cell in by_id.items()}
     assert "viewer.show_loading()" in cells["loading"]
     assert "DEMO_DATA_DIR =" in cells["loading"]
     assert "PROJECT_DIR / 'colab_session_viewer' / 'demodata'" in cells["loading"]
     assert cells["viewer"].strip() == "viewer.show_session();"
     assert "NotebookViewer(" not in cells["viewer"]
-    assert "**Skip opening of initial-rest hold (s)** defaults to **1.0 seconds**" in cells["usage"]
-    assert "never the preceding `initial_rest.move` phase" in cells["usage"]
-    assert "session tables start collapsed" in cells["usage"]
-    assert "**Skip opening of head recording (s)** defaults to **1.0 seconds**" in cells["usage"]
+    assert by_id["viewer"]["metadata"]["scrolled"] is False
+    assert "View output fullscreen" in cells["session-viewer-heading"]
 
 
 def test_notebook_loading_and_viewing_cells_execute_and_keep_imports(tmp_path, monkeypatch):
@@ -871,8 +870,8 @@ def test_split_tables_keep_one_row_per_participant_and_rom_task_only(tmp_path):
     rows = participant_rows([head, mouse])
     tables = participant_tables(rows)
     assert list(tables) == [
-        "Session summary", "Initial head positions", "Range of movement stats",
-        "Head movement stats", "Fitts targets and hits", "Fitts stats",
+        "Session summary", "Neutral Recorded Head Positions", "Range of Movement Task",
+        "Head Movement During Fitts Task", "Fitts Session", "Fitts Throughput Stats",
     ]
     for table in tables.values():
         assert [r["participant"] for r in table] == ["P01", "P02"]
@@ -1028,8 +1027,8 @@ def test_table_order_compact_headers_and_sources(tmp_path):
     assert list(tables["Initial head positions"][0]) == list(reverse["Initial head positions"][0])
     assert list(tables["Initial head positions"][0])[1:4] == [
         f"head_initial_rest_yaw_{kind}_mean_deg_session_mean" for kind in ("absolute", "relative", "calibration")]
-    assert list(tables["Range of movement stats"][0])[1:4] == [
-        f"head_range_of_movement_task_{axis}_range_deg_session_mean" for axis in ("yaw", "pitch", "roll")
+    assert list(tables["Range of movement stats"][0])[1:3] == [
+        f"head_range_of_movement_task_yaw_{measure}_deg_session_mean" for measure in ("range", "std")
     ]
     session = Session.load("P", "pair", head_path=make_head(tmp_path),
                            fitts_path=make_fitts(tmp_path))
@@ -1040,8 +1039,9 @@ def test_table_order_compact_headers_and_sources(tmp_path):
     assert table_sources([session], "Initial head positions") == {"P": []}
     viewer = NotebookViewer()
     viewer._add_sessions([session])
-    markup = viewer.table.value
-    assert markup.count("<summary><b>Source files</b></summary>") == 6
+    markup = viewer.table.value + viewer.fitts_table.value
+    assert "<summary><b>Source files</b></summary>" not in markup
+    assert markup.count('<div class="session-details">') == 6
     assert "table-layout:auto" in markup
     assert "table-layout:fixed" not in markup
     assert "overflow-wrap:anywhere" in markup
@@ -1050,6 +1050,7 @@ def test_table_order_compact_headers_and_sources(tmp_path):
 
 
 def test_collapsed_reference_sources_and_complete_field_keys(tmp_path):
+    import re
     from html.parser import HTMLParser
     from colab_session_viewer.app import NotebookViewer
     from colab_session_viewer.data import field_description, head_range_diagnostics, participant_tables
@@ -1068,15 +1069,17 @@ def test_collapsed_reference_sources_and_complete_field_keys(tmp_path):
             self.in_field = False
 
         def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
             if tag == "table":
-                self.table_columns.append([])
+                if attrs.get("class") == "field-key":
+                    self.field_keys.append([])
+                else:
+                    self.table_columns.append([])
             if tag == "details":
-                self.details.append(dict(attrs))
-            elif tag == "th":
-                self.headers.append(dict(attrs))
-                self.table_columns[-1].append(dict(attrs)["title"])
-            elif tag == "dl":
-                self.field_keys.append([])
+                self.details.append(attrs)
+            elif tag == "th" and "title" in attrs:
+                self.headers.append(attrs)
+                self.table_columns[-1].append(attrs["title"].split(": ", 1)[0])
             elif tag == "code" and self.field_keys:
                 self.in_field = True
 
@@ -1089,24 +1092,26 @@ def test_collapsed_reference_sources_and_complete_field_keys(tmp_path):
                 self.in_field = False
 
     parser = ReportParser()
-    parser.feed(viewer.table.value)
+    markup = viewer.table.value + viewer.fitts_table.value
+    parser.feed(markup)
     assert parser.details
     assert all("open" not in attrs for attrs in parser.details)
     assert all("font-weight:bold" in attrs["style"] for attrs in parser.headers)
-    assert viewer.table.value.count("<summary><b>Field key</b></summary>") == 14
-    assert parser.field_keys == parser.table_columns
+    assert markup.count("<h4>Field key</h4>") == 8
+    assert all(fields in parser.table_columns for fields in parser.field_keys)
+    assert all(len(fields) == len(set(fields)) for fields in parser.field_keys)
     for table in participant_tables(viewer.summary_rows()).values():
         for key in table[0]:
             assert field_description(key)
-            assert f"<code>{key}</code>" in viewer.table.value
+            assert re.search(r"<code[^>]*>" + re.escape(key) + "</code>", markup)
     for key in head_range_diagnostics(session):
         assert field_description(key)
-        assert f"<code>{key}</code>" in viewer.table.value
+        assert re.search(r"<code[^>]*>" + re.escape(key) + "</code>", markup)
     for text in ("4.133", "log2(Ae / We + 1)", "Target re-entry (TRE)",
                  "Task-axis crossing (TAC)", "Movement-direction change (MDC)",
                  "Orthogonal-direction change (ODC)", "Movement variability (MV)",
                  "Movement error (ME)", "Movement offset (MO)"):
-        assert text in viewer.table.value
+        assert text in markup
     assert "Yaw is measured from the calibration heading when saved calibration is available" in field_description(
         "head_range_of_movement_directions_left_angle_mean_deg_session_mean",
     )
@@ -1180,7 +1185,20 @@ def test_zero_pose_wireframe_is_projected_front_on(mesh_file):
 
 
 def test_pose_controls_redraw_restore_and_preserve_exports_and_playback(tmp_path):
+    import base64
+    import re
+    import xml.etree.ElementTree as ET
     from colab_session_viewer.app import NotebookViewer
+
+    def downloaded_pose(markup):
+        match = re.search(
+            r'<b>P</b> - \(<a download="head_pose_P.svg" href="data:image/svg\+xml;base64,([^"]+)">',
+            markup,
+        )
+        svg = base64.b64decode(match[1]).decode("utf-8")
+        ET.fromstring(svg)
+        assert svg in markup  # Saved image matches the currently displayed pose exactly.
+        return svg
 
     recorder = Recorder(tmp_path)
     q = qm.from_euler_zyx(*np.radians([30, 20, -10]))
@@ -1194,17 +1212,40 @@ def test_pose_controls_redraw_restore_and_preserve_exports_and_playback(tmp_path
     before_rows = viewer.summary_rows()
     before_csv = summary_csv(before_rows)
     before_playback = playback_payload(session)
+    original_svg = downloaded_pose(before_markup)
     for control in viewer.pose_zero_controls.values():
         assert not control.value
         control.value = True
     assert "0.0 / 0.0 / 0.0 deg" in viewer.table.value
     assert viewer.table.value != before_markup
+    assert downloaded_pose(viewer.table.value) != original_svg
     assert viewer.summary_rows() == before_rows
     assert summary_csv(viewer.summary_rows()) == before_csv
     assert playback_payload(session) == before_playback
     for control in viewer.pose_zero_controls.values():
         control.value = False
     assert viewer.table.value == before_markup
+
+
+def test_pose_download_filenames_and_labels_are_safe_and_unavailable_poses_have_no_download():
+    import base64
+    import re
+    import xml.etree.ElementTree as ET
+    from colab_session_viewer.data import initial_pose_wireframes
+
+    row = {
+        "participant": '<A/"&>',
+        "head_initial_rest_yaw_calibration_mean_deg_session_mean": 20,
+        "head_initial_rest_pitch_mean_deg_session_mean": 10,
+        "head_initial_rest_roll_mean_deg_session_mean": -5,
+    }
+    markup = initial_pose_wireframes([row])
+    assert '<b>&lt;A/&quot;&amp;&gt;</b> - (' in markup
+    assert 'download="head_pose_A.svg"' in markup
+    encoded = re.search(r'data:image/svg\+xml;base64,([^"]+)', markup)[1]
+    root = ET.fromstring(base64.b64decode(encoded))
+    assert root.attrib["aria-label"] == '<A/"&> initial head pose'
+    assert "download=" not in initial_pose_wireframes([{"participant": "Missing"}])
 
 
 def test_zero_missing_yaw_is_explicit_but_does_not_invent_initial_pose():
@@ -1319,10 +1360,11 @@ def test_any_root_csv_manifest_imports_only_listed_recordings(tmp_path):
     assert sessions[0].participant == "A"
     viewer = NotebookViewer()
     viewer._add_sessions(sessions)
-    assert viewer.table.value.count("<h3>") == 6
+    markup = viewer.table.value + viewer.fitts_table.value
+    assert markup.count("<h3>") == 6
     for label in ("Session summary", "Initial head positions", "Range of movement stats",
                   "Head movement stats", "Fitts targets and hits", "Fitts stats"):
-        assert f"<h3>{label}</h3>" in viewer.table.value
+        assert f"<h3>{label}</h3>" in markup
 
 
 def test_root_csv_without_manifest_columns_does_not_override_discovery(tmp_path):

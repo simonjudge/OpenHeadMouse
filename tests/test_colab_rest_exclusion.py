@@ -85,10 +85,7 @@ def test_exclusion_is_timed_from_hold_start_and_never_uses_preceding_move(clock)
     assert rest["yaw_calibration_mean_deg"] == pytest.approx(5)
     assert full["head_initial_rest"]["sample_count"] == 7
     assert full["head_initial_rest"]["pitch_mean_deg"] == pytest.approx(142 / 7)
-    direction = trimmed["head_range_of_movement"]["directions"]["up"]
-    assert direction["sample_count"] == 2  # Do not trim a directional hold.
-    assert direction["angle_mean_deg"] == pytest.approx(41)
-    assert direction["offset_from_rest_deg"] == pytest.approx(41 - expected_pitch)
+    assert trimmed["head_range_of_movement"] is None  # The short directional hold is exhausted.
     for actual, original in zip(session.samples, before):
         assert actual.timestamp == original.timestamp
         assert actual.metadata == original.metadata
@@ -108,7 +105,7 @@ def test_exhausted_hold_preserves_calibration_but_has_no_pose_or_offsets():
     assert row["head_initial_rest_yaw_calibration_mean_deg_session_mean"] == pytest.approx(5)
     assert "head_initial_rest_pitch_mean_deg_session_mean" not in row
     assert "head_range_of_movement_directions_up_offset_from_rest_deg_session_mean" not in row
-    assert row["head_range_of_movement_directions_up_angle_mean_deg_session_mean"] == pytest.approx(41)
+    assert "head_range_of_movement_directions_up_angle_mean_deg_session_mean" not in row
     viewer = NotebookViewer()
     viewer._add_sessions([session])
     viewer.initial_rest_exclude.value = 3
@@ -141,7 +138,9 @@ def test_exhausted_and_missing_holds_do_not_bias_available_session_pose_average(
     viewer.sessions = [first, short, missing]
     viewer._refresh_table()
     assert "P / Short" in viewer.rest_exclusion_note.value
-    assert "P / Missing" not in viewer.rest_exclusion_note.value
+    rest_notice = viewer.rest_exclusion_note.value.split("</p>")[0]
+    assert "P / Missing" not in rest_notice
+    assert "P / Missing: up" in viewer.rest_exclusion_note.value
 
 
 def test_each_initial_hold_has_its_own_opening_exclusion():
@@ -182,8 +181,9 @@ def test_opening_control_defaults_to_one_second_and_only_updates_dependent_summa
     after = participant_tables(viewer.summary_rows())
     assert viewer.table.value != markup
     assert before["Initial head positions"] != after["Initial head positions"]
-    assert before["Range of movement stats"] != after["Range of movement stats"]  # Offset from rest only.
-    for table in ("Session summary", "Head movement stats", "Fitts targets and hits", "Fitts stats"):
+    assert before["Range of movement stats"] != after["Range of movement stats"]
+    assert before["Head movement stats"] != after["Head movement stats"]
+    for table in ("Session summary", "Fitts targets and hits", "Fitts stats"):
         assert before[table] == after[table]
     assert playback_payload(session) == before_playback
     assert session.recorder.calibration == before_calibration
@@ -211,7 +211,7 @@ class SessionDetailsParser(HTMLParser):
         attrs = dict(attrs)
         if tag == "table":
             self.table_depth += 1
-        if tag == "details" and attrs.get("class") == "session-details":
+        if tag == "div" and attrs.get("class") == "session-details":
             assert self.table_depth == 0  # Session sections are outside participant tables.
             self.current = {"attrs": attrs, "rows": []}
             self.details.append(self.current)
@@ -235,7 +235,7 @@ class SessionDetailsParser(HTMLParser):
             elif tag == "tr":
                 self.current["rows"].append(self.row)
                 self.row = None
-            elif tag == "details":
+            elif tag == "div" and self.current["rows"]:
                 self.current = None
 
 
@@ -259,7 +259,7 @@ def test_collapsed_session_tables_match_calculations_settings_and_keep_participa
     viewer.sessions = sessions
     viewer._refresh_table()
     parser = SessionDetailsParser()
-    parser.feed(viewer.table.value)
+    parser.feed(viewer.table.value + viewer.fitts_table.value)
     assert len(parser.details) == 6  # One separate session table below each participant table.
     assert all("open" not in detail["attrs"] for detail in parser.details)
     assert "width:max-content;max-width:none;overflow-wrap:normal" in viewer.table.value
@@ -278,8 +278,10 @@ def test_collapsed_session_tables_match_calculations_settings_and_keep_participa
         for actual, session, tables in zip(actual_rows, sessions, expected):
             assert actual[:2] == [session.participant, session.name]
             values = tables[label][0]
+            misses = values.get("misses", values.get("targets_analysed", 0) - values.get("hits", 0))
             assert actual[2:] == [
-                "" if value is None else f"{value:.1f}"
+                f"{100 * value:.1f}% ({misses}/{values['targets_analysed']})"
+                if key == "error_rate" and value is not None else viewer_data.format_field(key, value)
                 for key, value in values.items() if key != "participant"
             ]
     assert "&lt;One&gt;" in viewer.table.value
@@ -409,14 +411,14 @@ def test_target_exclusions_apply_to_initial_pose_session_stats_and_playback_with
     assert expected["targets_analysed"] == 1
     assert expected["head_initial_rest_pitch_mean_deg_session_mean"] == pytest.approx(15)
     assert expected["head_initial_rest_sample_count_session_mean"] == 2
-    assert expected["head_movement_samples"] == 5
+    assert expected["head_movement_samples"] == 3
     assert "15.0" in payload["pretest_html"]
     assert len(payload["frames"]) == len(baseline["frames"])
     assert [f["rotation"] for f in payload["frames"]] == [f["rotation"] for f in baseline["frames"]]
     assert [t["excluded"] for t in payload["trials"]] == [True, False]
     assert len(payload["trials"]) == len(baseline["trials"])
     assert all(f["excluded"] for f in payload["frames"][:5])
-    assert all(not f["excluded"] for f in payload["frames"][5:])
+    assert [f["excluded"] for f in payload["frames"][5:]] == [False, False, True, True, False]
     for graph in payload["head_graphs"]:
         assert [p[2] for p in graph["points"]] == [f["excluded"] for f in payload["frames"]]
         assert [p[:2] for p in graph["points"]] == [

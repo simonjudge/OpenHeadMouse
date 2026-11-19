@@ -39,10 +39,11 @@ button, input, select { font: inherit; }
   <section class="panel">
     <strong>Cursor / Fitts targets</strong>
     <canvas id="cursor" class="scene" width="660" height="280" aria-label="Cursor and target playback"></canvas>
-    <small>Orange: path; red: cursor; green/purple graph markers: target start/click.</small>
+    <small>Orange: path; red: cursor; blue targets: hits; red targets: misses.
+      Pink graph backgrounds: missed trials; green/purple markers: target start/click.</small>
     <div id="cursor-graphs"></div><pre id="cursor-live"></pre>
     <details><summary>Initial pose and range of movement</summary><div id="pretest"></div></details>
-    <p>Grey chart backgrounds mark excluded time periods; traces keep their original colours. Time exclusions have separate scopes: recording opening for session movement statistics; hold opening for initial pose. Excluded target intervals are omitted from both pointing and head statistics.</p>
+    <p>Pink cursor-graph backgrounds mark missed targets, including excluded misses; grey backgrounds mark excluded hits. Missed targets remain red during playback; excluded hits stay grey. Colours show the recorded outcome, even before the click. Traces keep their original colours. Time exclusions have separate scopes: recording opening for session movement statistics; hold opening for initial pose. Excluded target intervals are omitted from both pointing and head statistics.</p>
     <details><summary>Selected session statistics (exclusions applied)</summary><pre id="session-summary"></pre></details>
   </section>
 </div>

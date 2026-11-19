@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import csv
 import io
 import json
 import html
 import math
+import re
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
@@ -175,6 +177,25 @@ def retained_trials(session: Session, exclude: int) -> list[TrialResult]:
     return session.trials[exclude:]
 
 
+def fitts_screen_dimensions(session: Session) -> tuple[float, float, bool]:
+    """Playback screen size and whether it was estimated from saved positions."""
+    width, height = session.metadata.get("screen_width_px"), session.metadata.get("screen_height_px")
+    estimated = not width or not height
+    if estimated:
+        xs, ys = [], []
+        for trial in session.trials:
+            for x, y in (trial.start_pos, trial.target_pos, trial.click_pos):
+                xs.append(x + trial.width_px / 2)
+                ys.append(y + trial.width_px / 2)
+            xs.extend(p[1] for p in trial.trajectory)
+            ys.extend(p[2] for p in trial.trajectory)
+        width, height = (max(max(xs) + 20, 100), max(max(ys) + 20, 100)) if xs else (1920, 1080)
+    _finite([width, height], "Screen dimensions")
+    if width <= 0 or height <= 0:
+        raise ValueError("Screen dimensions must be positive")
+    return float(width), float(height), estimated
+
+
 def _target_sample_mask(session: Session, exclude: int) -> np.ndarray:
     """Keep head samples outside each excluded target's inclusive start/end interval.
 
@@ -252,20 +273,24 @@ def planned_id(trial: TrialResult) -> float:
     return math.log2(distance / trial.width_px + 1)
 
 
-def fitts_condition_rows(sessions: list[Session], exclude_first_targets: int = 0) -> list[dict]:
+def fitts_condition_rows(
+    sessions: list[Session], exclude_first_targets: int = 0, *,
+    excluded_trial_ids: set[int] | None = None,
+) -> list[dict]:
     """Inventory saved conditions, one row per Fitts file, independent of head data.
 
     List distinct block/amplitude/width settings. Within each saved
     (block,label,amplitude,width), count distinct target positions per repetition
     and observed repetition indices. These are observed counts, not proof of
     intended run settings. Recorded count is before exclusions; analysed count
-    uses first-N removal only, never optional matching.
+    uses first-N and individual review removals.
     """
     rows = []
     for session in sorted(sessions, key=lambda s: (s.participant, s.name)):
         if not session.fitts_filename:
             continue
-        analysed = {id(t) for t in retained_trials(session, exclude_first_targets)}
+        analysed = {id(t) for t in retained_trials(session, exclude_first_targets)
+                    if id(t) not in (excluded_trial_ids or ())}
         groups = {}
         for trial in session.trials:
             groups.setdefault(
@@ -298,6 +323,20 @@ def fitts_condition_rows(sessions: list[Session], exclude_first_targets: int = 0
     return rows
 
 
+def fitts_summary_row(participant: str, trials: list[TrialResult]) -> dict:
+    """Shared participant-format pooled Fitts/path results for a supplied trial set."""
+    summary = FittsStats(trials).summary()
+    return participant_tables([{
+        "participant": participant,
+        "targets_analysed": len(trials),
+        "misses": sum(not t.hit for t in trials),
+        "planned_id_mean_bits": float(np.mean([planned_id(t) for t in trials])) if trials else None,
+        **{k.removeprefix("overall_"): v if trials else None
+           for k, v in summary.items() if k.startswith("overall_")},
+        **{f"path_{k}": v for k, v in FittsStats.accuracy_summary(trials).items()},
+    }])["Fitts stats"][0]
+
+
 def _fitts_comparison_row(participant: str, trials: list[TrialResult], available: int) -> dict:
     """Recalculate all Fitts/path measures on this participant's selected targets.
 
@@ -305,7 +344,6 @@ def _fitts_comparison_row(participant: str, trials: list[TrialResult], available
     FittsStats formulas rather than averaging original participant summaries.
     Target selection itself is done by the matching functions, not here.
     """
-    summary = FittsStats(trials).summary()
     difficulty = [planned_id(t) for t in trials]
     row = {
         "participant": participant,
@@ -315,12 +353,7 @@ def _fitts_comparison_row(participant: str, trials: list[TrialResult], available
         "planned_id_mean_bits": float(np.mean(difficulty)),
         "planned_id_min_bits": min(difficulty), "planned_id_max_bits": max(difficulty),
     }
-    row.update(participant_tables([{
-        "participant": participant,
-        "planned_id_mean_bits": row["planned_id_mean_bits"],
-        **{k.removeprefix("overall_"): v for k, v in summary.items() if k.startswith("overall_")},
-        **{f"path_{k}": v for k, v in FittsStats.accuracy_summary(trials).items()},
-    }])["Fitts stats"][0])
+    row.update(fitts_summary_row(participant, trials))
     return row
 
 
@@ -370,7 +403,9 @@ def _condition_test_quotas(pools: dict, counts: dict, tests: dict) -> dict:
     return quotas
 
 
-def _condition_matched_fitts_rows(sessions: list[Session], exclude: int, include_dwell: bool = False) -> list[dict]:
+def _condition_matched_fitts_rows(
+    sessions: list[Session], exclude: int, include_dwell: bool = False, selected_out: dict | None = None,
+) -> list[dict]:
     """Balance counts within exact shared (block, saved amplitude, width) settings.
 
     After first-N removal per file, each shared condition contributes the
@@ -449,12 +484,14 @@ def _condition_matched_fitts_rows(sessions: list[Session], exclude: int, include
         if include_dwell:
             row.update(selection_summary([s for s in sessions if s.participant == participant], selected[participant]))
         rows.append(row)
+    if selected_out is not None:
+        selected_out.update(selected)
     return rows
 
 
 def matched_fitts_rows(
     sessions: list[Session], exclude_first_targets: int = 0, *, method: str = "strict_id",
-    include_dwell: bool = False,
+    include_dwell: bool = False, selected_out: dict | None = None,
 ) -> list[dict]:
     """Build the optional comparison only; never subset original session data.
 
@@ -466,12 +503,13 @@ def matched_fitts_rows(
     Both return equal selected counts and recomputed pooled measures. Optional
     dwell measures use these same selected targets. No selection uses clicks,
     hits or MT; impossible comparisons raise ValueError, not a fallback pool.
+    If supplied, selected_out receives {participant: selected original trials}.
     """
     participants = sorted({s.participant for s in sessions})
     if len(participants) < 2:
         raise ValueError("Matched-ID comparison needs at least two participants")
     if method == "target_conditions":
-        return _condition_matched_fitts_rows(sessions, exclude_first_targets, include_dwell)
+        return _condition_matched_fitts_rows(sessions, exclude_first_targets, include_dwell, selected_out)
     if method != "strict_id":
         raise ValueError(f"Unknown Fitts matching method: {method}")
     pools = {p: [] for p in participants}
@@ -516,6 +554,8 @@ def matched_fitts_rows(
         for row in rows:
             participant = row["participant"]
             row.update(selection_summary([s for s in sessions if s.participant == participant], selected[participant]))
+    if selected_out is not None:
+        selected_out.update(selected)
     return rows
 
 
@@ -556,32 +596,33 @@ def _validate_opening_exclusion(exclude_s: float, label: str) -> None:
         raise ValueError(f"{label} opening exclusion must be a finite, non-negative number of seconds")
 
 
-def _initial_rest_after_opening(session: Session, exclude_s: float) -> list:
-    """Remove only samples before hold_start + exclude_s in each initial-rest hold.
+def _holds_after_opening(session: Session, exclude_s: float) -> list:
+    """Remove samples before hold_start + exclude_s in rest and directional holds.
 
     Use the latest recorded hold-start event/phase start preceding the first
     hold sample, falling back to that sample's time. Prefer host time when
     complete, otherwise provider time. Keep cutoff endpoints and every
-    non-rest sample; exhausted holds contribute no pose samples. Zero skips
+    non-hold sample; exhausted holds contribute no pose samples. Zero skips
     no samples. Calibration/reference data are never modified.
     """
-    _validate_opening_exclusion(exclude_s, "Initial-rest")
+    _validate_opening_exclusion(exclude_s, "Hold")
     if exclude_s == 0:
         return session.samples
-    phase = "initial_rest.hold"
-    events = [
-        e for e in getattr(session.recorder, "_events", [])
-        if e.get("event_type") == "task_phase" and e.get("data") == {"phase": phase, "action": "start"}
-    ]
-    records = [r for r in pretest_records(session.metadata) if r.get("phase") == phase]
+    phases = {"initial_rest.hold", *(f"range_of_movement.{d}.hold" for d in ("left", "right", "up", "down"))}
     selected = []
     index = 0
     while index < len(session.samples):
         sample = session.samples[index]
-        if sample.metadata.get("task_phase") != phase:
+        phase = sample.metadata.get("task_phase")
+        if phase not in phases:
             selected.append(sample)
             index += 1
             continue
+        events = [
+            e for e in getattr(session.recorder, "_events", [])
+            if e.get("event_type") == "task_phase" and e.get("data") == {"phase": phase, "action": "start"}
+        ]
+        records = [r for r in pretest_records(session.metadata) if r.get("phase") == phase]
         end = index + 1
         while end < len(session.samples) and session.samples[end].metadata.get("task_phase") == phase:
             end += 1
@@ -607,13 +648,19 @@ def _initial_rest_after_opening(session: Session, exclude_s: float) -> list:
     return selected
 
 
+def _hold_sample_mask(session: Session, exclude_s: float) -> np.ndarray:
+    """Keep non-hold samples and the retained portions of every labelled hold."""
+    retained = {id(sample) for sample in _holds_after_opening(session, exclude_s)}
+    return np.array([id(sample) in retained for sample in session.samples], dtype=bool)
+
+
 def head_pretest_summary(
     session: Session, *, initial_rest_exclude_s: float = 0.0, exclude_first_targets: int = 0,
 ) -> dict:
-    """Summarise held poses, optionally skipping the opening of initial rest only.
+    """Summarise held poses, optionally skipping the opening of every labelled hold.
 
-    Saved calibration and directional holds are unchanged; offsets from rest use
-    the retained rest samples. The default keeps playback summaries unmodified.
+    Saved calibration is unchanged; directional means/SDs and offsets use the
+    retained directional/rest samples. Zero keeps playback summaries unmodified.
     Excluded target host intervals are also removed before summarise_pretest.
     When calibration exists, replace yaw by the yaw of inverse(calibration
     heading)*sample quaternion, leaving recorded pitch/roll fields unchanged.
@@ -623,7 +670,7 @@ def head_pretest_summary(
     no calibration means unavailable relative yaw, not an inferred heading.
     """
     calibration_yaw = calibration_mean_yaw(session)
-    retained = _initial_rest_after_opening(session, initial_rest_exclude_s)
+    retained = _holds_after_opening(session, initial_rest_exclude_s)
     target_keep = _target_sample_mask(session, exclude_first_targets)
     target_ids = {id(s) for s, keep in zip(session.samples, target_keep) if keep}
     retained = [s for s in retained if id(s) in target_ids]
@@ -680,17 +727,22 @@ def _head_movement_mask(session: Session, exclude_s: float) -> np.ndarray:
 
 def head_range_diagnostics(
     session: Session, *, head_opening_exclude_s: float = 0.0, exclude_first_targets: int = 0,
+    initial_rest_exclude_s: float = 0.0,
 ) -> dict | None:
     """Return relative Euler max-min spans for retained recording/task samples.
 
     Compute inverse(original reference quaternion)*each recorded quaternion,
     convert to degree yaw/pitch/roll and unwrap before applying recording-opening
-    and target masks. Range = max-min; task-only ranges further require the
+    and target/hold-opening masks. Range = max-min; task-only ranges further require the
     fitts_test label. Flag abs(relative pitch)>=80 degrees as near gimbal lock.
     Do not infer a new reference after exclusions or automatically trim drift.
     No retained samples gives None; no task samples gives unavailable task spans.
     """
-    retained = _head_movement_mask(session, head_opening_exclude_s) & _target_sample_mask(session, exclude_first_targets)
+    retained = (
+        _head_movement_mask(session, head_opening_exclude_s)
+        & _target_sample_mask(session, exclude_first_targets)
+        & _hold_sample_mask(session, initial_rest_exclude_s)
+    )
     if not retained.any():
         return None
     neutral = calculate_neutral_quaternion(session.samples, session.recorder)
@@ -702,12 +754,13 @@ def head_range_diagnostics(
     fitts = np.array([s.metadata.get("task_phase") == "fitts_test" for s in session.samples])[retained]
     row = {"participant": session.participant, "session": session.name,
            "head_file": session.head_filename, "samples": len(angles),
-           "fitts_samples": int(fitts.sum()),
-           "max_abs_relative_pitch_deg": float(np.abs(angles[:, 1]).max()),
-           "near_gimbal_samples": int(np.count_nonzero(np.abs(angles[:, 1]) >= 80))}
+           "fitts_samples": int(fitts.sum())}
     for i, axis in enumerate(("yaw", "pitch", "roll")):
         row[f"{axis}_range_deg"] = float(np.ptp(unwrapped[:, i]))
         row[f"fitts_{axis}_range_deg"] = float(np.ptp(unwrapped[fitts, i])) if fitts.any() else None
+        if axis == "pitch":
+            row["max_abs_relative_pitch_deg"] = float(np.abs(angles[:, 1]).max())
+            row["near_gimbal_samples"] = int(np.count_nonzero(np.abs(angles[:, 1]) >= 80))
     return row
 
 
@@ -715,6 +768,7 @@ def participant_rows(
     sessions: list[Session], exclusions: dict[str, int] | None = None, *, initial_rest_exclude_s: float = 0.0,
     head_opening_exclude_s: float = 0.0,
     include_dwell: bool = False,
+    excluded_trial_ids: set[int] | None = None,
 ) -> list[dict]:
     """Calculate all participant measures, pooling or averaging at the stated level.
 
@@ -722,7 +776,7 @@ def participant_rows(
     recompute pooled FittsStats and usable-path means. Planned ID is the
     arithmetic mean of per-target geometry IDs. Optional selection_summary
     applies per-target dwell timing and spatial estimates to that same pool.
-    No optional matching affects these main-table measures.
+    Individual review exclusions affect Fitts measures only, never head samples.
 
     Head movement: pool usable speed/acceleration values from contiguous
     retained runs for arithmetic means/maxima (not session means or time
@@ -733,7 +787,9 @@ def participant_rows(
     Pre-test: head_pretest_summary filters hold-opening/target exclusions;
     numeric leaves are averaged equally over available session summaries.
     Yaw means use circular session averaging. Exercise max-min spans include
-    both move and hold samples and are unwrapped, then averaged across sessions.
+    both move and hold samples and are unwrapped; exercise population SD uses
+    those same samples. Ranges and SDs are then averaged across sessions, not
+    pooled or interpreted as uncertainty of the participant's range.
     Missing measures stay unavailable; existing legacy SD/degenerate conventions
     remain in the shared helpers.
     """
@@ -745,7 +801,8 @@ def participant_rows(
     rows = []
     for participant, recordings in sorted(grouped.items()):
         exclude = exclusions.get(participant, 0)
-        trials = [t for s in recordings for t in retained_trials(s, exclude)]
+        trials = [t for s in recordings for t in retained_trials(s, exclude)
+                  if id(t) not in (excluded_trial_ids or ())]
         total = sum(len(s.trials) for s in recordings)
         row = {
             "participant": participant, "sessions": len(recordings),
@@ -756,9 +813,24 @@ def participant_rows(
             "exclude_first_targets_per_file": exclude,
             "targets_recorded": total, "targets_excluded": total - len(trials),
             "targets_analysed": len(trials), "hits": sum(t.hit for t in trials),
+            "misses": sum(not t.hit for t in trials),
+            "target_widths_px": (
+                ", ".join(f"{value:g}" for value in sorted({t.width_px for t in trials}))
+                if trials else None
+            ),
+            "target_amplitudes_px": (
+                ", ".join(f"{value:g}" for value in sorted({t.amplitude_px for t in trials}))
+                if trials else None
+            ),
         }
         iso = FittsStats(trials).summary()
         row["planned_id_mean_bits"] = float(np.mean([planned_id(t) for t in trials])) if trials else None
+        difficulties = [planned_id(t) for t in trials]
+        row["planned_id_min_bits"] = min(difficulties) if difficulties else None
+        row["planned_id_max_bits"] = max(difficulties) if difficulties else None
+        row["planned_id_range_bits"] = (
+            f"{min(difficulties):.1f} / {max(difficulties):.1f}" if difficulties else None
+        )
         for key, value in iso.items():
             if key.startswith("overall_"):
                 row[key.removeprefix("overall_")] = value if trials else None
@@ -773,12 +845,16 @@ def participant_rows(
             if session.samples:
                 diagnostics = head_range_diagnostics(
                     session, head_opening_exclude_s=head_opening_exclude_s, exclude_first_targets=exclude,
+                    initial_rest_exclude_s=initial_rest_exclude_s,
                 )
                 if diagnostics is not None:
                     ranges.append([diagnostics[f"{axis}_range_deg"] for axis in ("yaw", "pitch", "roll")])
                 if len(session.samples) > 1:
                     duration += SessionStats(session.samples).session_duration()
-                keep = _head_movement_mask(session, head_opening_exclude_s) & _target_sample_mask(session, exclude)
+                keep = (
+                    _head_movement_mask(session, head_opening_exclude_s) & _target_sample_mask(session, exclude)
+                    & _hold_sample_mask(session, initial_rest_exclude_s)
+                )
                 movement_samples += int(keep.sum())
                 speed_series, acceleration_series = _movement_series(session, keep)
                 speeds.extend(speed_series[1])
@@ -790,17 +866,22 @@ def participant_rows(
                 if section.startswith("head_") and isinstance(values, dict):
                     for key, value in _numeric_leaves(values, section):
                         pretests.setdefault(f"{key}_session_mean", []).append(value)
+            rom_keep = _target_sample_mask(session, exclude) & _hold_sample_mask(session, initial_rest_exclude_s)
             rom_samples = [
-                s for s, keep in zip(session.samples, _target_sample_mask(session, exclude))
+                s for s, keep in zip(session.samples, rom_keep)
                 if keep and (s.metadata.get("task_phase") or "").startswith("range_of_movement.")
             ]
             if rom_samples:
                 rom_angles = np.array([[s.yaw_deg, s.pitch_deg, s.roll_deg] for s in rom_samples])
                 rom_angles = np.degrees(np.unwrap(np.radians(rom_angles), axis=0))
                 for index, axis in enumerate(("yaw", "pitch", "roll")):
-                    pretests.setdefault(
-                        f"head_range_of_movement_task_{axis}_range_deg_session_mean", []
-                    ).append(float(np.ptp(rom_angles[:, index])))
+                    for measure, value in (
+                        ("range", np.ptp(rom_angles[:, index])),
+                        ("std", np.std(rom_angles[:, index])),
+                    ):
+                        pretests.setdefault(
+                            f"head_range_of_movement_task_{axis}_{measure}_deg_session_mean", []
+                        ).append(float(value))
         row["head_duration_s"] = duration
         row["head_samples"] = sum(len(s.samples) for s in recordings)
         row["head_movement_samples"] = movement_samples
@@ -849,7 +930,19 @@ def table_sources(sessions: list[Session], label: str) -> dict[str, list[str]]:
 
 
 def column_label(key: str) -> str:
+    if key == "planned_id_range_bits":
+        return "Planned ID min / max (bits)"
+    if key == "target_widths_px":
+        return "Target widths (px)"
+    if key == "target_amplitudes_px":
+        return "Target amplitudes (px)"
+    if key == "error_rate":
+        return "Error rate (%)"
     """Short, wrapping display headings; CSVs keep the full machine-readable names."""
+    if key == "nominal_width_px":
+        return "Nominal width W (px)"
+    if key == "first_entry_id_bits":
+        return "First-entry ID (bits)"
     if key in DWELL_LABELS:
         return DWELL_LABELS[key]
     if key == "index_of_difficulty_bits":
@@ -868,7 +961,7 @@ def column_label(key: str) -> str:
                 "planned_id_min_bits": "Planned ID minimum (bits)",
                 "planned_id_max_bits": "Planned ID maximum (bits)"}[key]
     if key == "initial_rest_exclude_s":
-        return "Initial-rest opening excluded (s)"
+        return "Hold opening excluded (s)"
     if key == "head_opening_exclude_s":
         return "Head-recording opening excluded (s)"
     if key == "head_movement_samples":
@@ -922,30 +1015,31 @@ def participant_tables(rows: list[dict]) -> dict[str, list[dict]]:
     )
     target_columns = (
         "exclude_first_targets_per_file", "targets_recorded", "targets_excluded",
-        "targets_analysed", "hits", "error_rate",
+        "targets_analysed", "hits", "target_widths_px", "target_amplitudes_px",
+        "planned_id_range_bits", "error_rate",
     )
     fitts_columns = (
+        "targets_analysed", "misses",
+        "error_rate",
         "mean_movement_time_s",
         "effective_amplitude_px", "effective_width_px", "planned_id_mean_bits", "index_of_difficulty_bits",
         "throughput_bits_per_s", "path_trial_count", "path_tre", "path_tac",
         "path_mdc", "path_odc", "path_mv_px", "path_me_px", "path_mo_px",
     )
-    if any("mtnodwell_s" in row for row in rows):
-        fitts_columns = tuple(
-            column for key in fitts_columns
-            for column in ((key, NODWELL_EQUIVALENTS[key]) if key in NODWELL_EQUIVALENTS else (key,))
-        )
     initial = [f"head_initial_rest_yaw_{kind}_mean_deg_session_mean"
                for kind in ("absolute", "relative", "calibration")]
-    initial += [f"head_initial_rest_{axis}_mean_deg_session_mean" for axis in ("pitch", "roll")]
-    initial += [f"head_initial_rest_{axis}_std_deg_session_mean" for axis in ("yaw", "pitch", "roll")]
+    initial += ["head_initial_rest_yaw_std_deg_session_mean"]
+    initial += [f"head_initial_rest_{axis}_{measure}_deg_session_mean"
+                for axis in ("pitch", "roll") for measure in ("mean", "std")]
     initial += ["head_initial_rest_sample_count_session_mean", "head_initial_rest_duration_s_session_mean"]
     initial += ["initial_rest_exclude_s"]
-    rom = [f"head_range_of_movement_task_{axis}_range_deg_session_mean"
-           for axis in ("yaw", "pitch", "roll")]
-    rom += [f"head_range_of_movement_directions_{direction}_{measure}_session_mean"
-            for measure in ("angle_mean_deg", "offset_from_rest_deg")
-            for direction in ("left", "right", "up", "down")]
+    rom = []
+    for axis, directions in (("yaw", ("left", "right")), ("pitch", ("up", "down")), ("roll", ())):
+        rom += [f"head_range_of_movement_task_{axis}_{measure}_deg_session_mean"
+                for measure in ("range", "std")]
+        rom += [f"head_range_of_movement_directions_{direction}_{measure}_session_mean"
+                for direction in directions
+                for measure in ("angle_mean_deg", "angle_std_deg", "offset_from_rest_deg")]
     tables = {
         label: [{"participant": row["participant"], **{key: row.get(key) for key in columns}} for row in rows]
         for label, columns in (
@@ -967,6 +1061,19 @@ def field_description(key: str) -> str:
     if key in DWELL_FIELDS:
         return DWELL_FIELDS[key]
     definitions = {
+        "available after exclusions": "Number of retained targets before method-specific validity checks.",
+        "contributing": "Number of retained targets that contributed to this analysis.",
+        "unknown selection method": "Targets omitted because their selection method is not labelled.",
+        "MT shorter than dwell": "Dwell targets omitted from no-dwell timing because configured dwell exceeds recorded movement time.",
+        "missing cursor path": "First-entry targets omitted because no cursor path was recorded.",
+        "no target contact": "First-entry targets whose recorded cursor path did not reach the target.",
+        "unsupported typing geometry": "Typing trials omitted because their rectangular hit regions cannot be reconstructed from saved circular-target geometry.",
+        "misses": "Number of contributing targets with an unsuccessful selection. Error-rate numerator; first-entry results use estimated contact-based success.",
+        "target_widths_px": "Distinct target widths (diameters for circular targets), in pixels, from the Fitts trials remaining after first-target and review exclusions.",
+        "target_amplitudes_px": "Distinct saved amplitude values, in pixels, from the Fitts trials remaining after first-target and review exclusions. For circle tasks, this saved value is the configured radius (subject to screen fitting), not necessarily the actual movement distance.",
+        "planned_id_range_bits": "Minimum / maximum planned ID = log2(D/W + 1), in bits, across analysed targets after first-target and review exclusions. D is saved start-to-target-centre distance; W is target width. Blank when no targets remain.",
+        "nominal_width_px": "Mean nominal target width W across contributing first-entry trials, in pixels. Each trial's own W is used for its ID, not this displayed average.",
+        "first_entry_id_bits": "Mean log2(Aentry / W + 1), where Aentry is the original start-to-first-contact Euclidean distance and W is that trial's nominal width. No effective-width endpoint-spread adjustment.",
         "participant": "The participant name or label chosen when importing the recordings.",
         "selection_method": "Selection method labelled at import for this file: external_switch, dwell, mouse, other (non-dwell), or unknown. Never inferred from participant identity or head input device.",
         "dwell_time_s": "Configured dwell duration in seconds, supplied at import. Required and positive for dwell; blank for other selection methods. Used for MTnodwell, not inferred from cursor residence.",
@@ -981,7 +1088,7 @@ def field_description(key: str) -> str:
         "condition_targets_per_repetition_observed": "Distinct target-centre positions observed in each saved repetition of this condition. Lists distinct counts if repetitions differ. This is an observed count, not proof of the original circle-target setting: incomplete recordings or repeated positions can reduce it.",
         "condition_repetitions_observed": "Number of distinct repetition_index values recorded for this condition. Missing or incomplete repetitions cannot be recovered from these files.",
         "condition_trials_recorded": "Number of completed trials saved in this Fitts file, before exclusions. This is not a guaranteed planned trial count.",
-        "condition_trials_analysed": "Recorded trials in this Fitts file remaining after the global first-target exclusion. Planned-ID matching does not change this inventory.",
+        "condition_trials_analysed": "Recorded trials in this Fitts file remaining after first-target and individual review exclusions.",
         "condition_distance_min_px": "Smallest saved start-centre to target-centre distance for this condition, in pixels, before exclusions. This is presented movement distance, not configured circle radius.",
         "condition_distance_max_px": "Largest saved start-centre to target-centre distance for this condition, in pixels, before exclusions.",
         "matching_targets_available": "Targets available after the global first-target exclusion, before planned-ID matching.",
@@ -992,7 +1099,7 @@ def field_description(key: str) -> str:
         "matching_tests_retained": "Number of this participant's tests contributing targets. Closest-condition matching requires every imported Fitts test to contribute; it reports an error instead of silently dropping a test.",
         "matching_targets_by_test": "Selected target counts by session/test. Within each shared condition, test quotas are balanced as evenly as availability allows before nearest-ID selection. These counts do not modify any other analysis.",
         "matching_max_id_gap_bits": "Largest absolute planned-ID difference between this participant's selected targets and reference targets. Each condition's reference is the participant with the fewest available targets (label breaks ties). There is no cutoff in closest-condition mode; a nonzero difference is retained and reported, not corrected.",
-        "planned_id_mean_bits": "Average target difficulty from the recorded geometry: log2(start-to-target distance / target width + 1). In the main Fitts table, uses all targets across all files after global first-target exclusions, exactly like the other Fitts measures; matching never removes targets from that table. Only the separate matched-target table uses a matched subset. ID uses target width, whereas IDe uses effective width from click spread, so ID can be much higher than IDe. Circle radius is not necessarily the movement distance.",
+        "planned_id_mean_bits": "Average target difficulty from recorded geometry: log2(start-to-target distance / target width + 1), across analysed targets after first-target and review exclusions. ID uses target width; IDe uses effective width from click spread, so a large spread can make IDe much lower. Configured circle radius is not necessarily movement distance.",
         "planned_id_min_bits": "Smallest planned Shannon ID among selected trials. Strict-ID matching limits each matched set's span to 0.1 bits. Closest-condition matching balances block type/amplitude/width counts and retains all tests without an ID cutoff.",
         "planned_id_max_bits": "Largest planned Shannon ID among selected trials. Neither matching method changes target distances or guarantees identical directions or identical measured effective ID.",
         "sessions": "Number of imported sessions for this participant. Includes sessions with only a head recording or only a pointing-task recording.",
@@ -1000,14 +1107,14 @@ def field_description(key: str) -> str:
         "fitts_files": "Number of imported sessions that contain a pointing-task recording.",
         "head_samples": "Total number of recorded head poses across this participant's recordings.",
         "head_opening_exclude_s": "Opening duration excluded from each head recording's movement statistics, in seconds from its first sample. Affects ranges, speed and acceleration, but does not change the reference pose, saved calibration, playback, rest or movement-exercise results. Zero includes the full recording.",
-        "head_movement_samples": "Number of head poses retained for session movement statistics after the recording-opening and target-interval exclusions. With none remaining, movement estimates are blank; speed and acceleration require consecutive retained samples.",
+        "head_movement_samples": "Number of head poses retained for session movement statistics after the recording-opening, hold-opening and target-interval exclusions. With none remaining, movement estimates are blank; speed and acceleration require consecutive retained samples.",
         "head_duration_s": "Total time covered by the head recordings, in seconds. Each recording runs from its first sample to its last; gaps between files are not included.",
         "exclude_first_targets_per_file": "Number of completed targets to leave out at the start of every pointing-task file, in time order. The notebook uses the same setting for all participants. Their start-to-click intervals (including endpoints) are also left out of head statistics, using shared host timestamps. All source data and playback frames remain available; excluded chart periods have grey background shading while traces retain their colours.",
         "targets_recorded": "Number of completed targets before any are left out. Includes clicks that missed.",
-        "targets_excluded": "Number of targets left out by the setting that skips the first targets in each file.",
+        "targets_excluded": "Number of targets omitted by first-target exclusions and individual target-review exclusions.",
         "targets_analysed": "Number of targets used in the results after exclusions. Includes clicks that missed, combined across pointing-task files.",
         "hits": "Number of analysed targets where the click landed inside the target.",
-        "error_rate": "Share of analysed targets where the click missed: misses divided by analysed targets. Shown as a fraction from 0 to 1, not a percentage.",
+        "error_rate": "Misses divided by contributing targets. Displayed as a percentage to 1 decimal place followed by (misses/contributing targets); CSVs retain the unrounded fraction from 0 to 1. First-entry tables use contact-based success on their contributing subset; see their calculation notes.",
         "mean_movement_time_s": "Average recorded time to reach and click a target (movement time, MT), in seconds, across analysed targets.",
         "effective_amplitude_px": "Effective amplitude (Ae): average straight-line distance from the cursor's starting position to its final click, in pixels, across analysed targets.",
         "effective_width_px": "Effective width (We): how widely the clicks are spread along the line from start to target, in pixels. Calculated as 4.133 times the sample standard deviation (SD) of click errors along that line, combining analysed targets. Zero if fewer than two targets are available.",
@@ -1024,11 +1131,11 @@ def field_description(key: str) -> str:
         "session": "The session name or label chosen when importing the recording.",
         "head_file": "Name of the imported head-recording file.",
         "fitts_file": "Name of the imported pointing-task recording file.",
-        "initial_rest_exclude_s": "Opening duration left out of each labelled initial-rest hold, in seconds. Measured from the saved hold-start time, or the first labelled hold sample if that time is unavailable. The preceding move-to-rest phase is never included. Affects initial-rest measurements, summary meshes and offsets from rest, not saved calibration, playback, directional holds or whole-recording statistics.",
-        "samples": "Number of head poses retained in this recording after the head-recording opening and target-interval exclusions.",
+        "initial_rest_exclude_s": "Opening duration left out of every labelled initial-rest and left/right/up/down hold, in seconds. Measured from each saved hold-start time, or its first labelled sample if unavailable. Excluded hold samples do not contribute to held poses, SDs, offsets, exercise ranges/SDs, or recording movement statistics/diagnostics. Move phases remain subject to their usual analysis scopes. Saved calibration/reference and raw playback stay unchanged; chart backgrounds mark excluded periods. The legacy CSV/API key is retained.",
+        "samples": "Number of head poses retained in this recording after the head-recording opening, hold-opening and target-interval exclusions.",
         "fitts_samples": "Number of retained head samples labelled as part of the pointing task (task_phase = fitts_test), after the head-recording opening and target-interval exclusions.",
-        "max_abs_relative_pitch_deg": "Largest retained relative pitch away from zero in either direction, in degrees, after the head-recording opening exclusion. Uses the original reference pose, not the recorded pose.",
-        "near_gimbal_samples": "Number of retained samples where relative pitch is 80 degrees or more away from zero, after the head-recording opening exclusion. Near +/-90 degrees, yaw and roll become difficult to separate, so their angle ranges may be misleading.",
+        "max_abs_relative_pitch_deg": "Largest retained relative pitch away from zero in either direction, in degrees, after recording-opening, hold-opening and target-interval exclusions. Uses the original reference pose, not the recorded pose.",
+        "near_gimbal_samples": "Number of retained samples where relative pitch is 80 degrees or more away from zero, after recording-opening, hold-opening and target-interval exclusions. Near +/-90 degrees, yaw and roll become difficult to separate, so their angle ranges may be misleading.",
     }
     if key in definitions:
         return definitions[key]
@@ -1063,9 +1170,17 @@ def field_description(key: str) -> str:
         )
     if key.startswith("head_range_of_movement_task_"):
         axis = key.removeprefix("head_range_of_movement_task_").split("_")[0]
+        if "_std_deg_" in key:
+            return (
+                f"Population SD of recorded {axis} in degrees across the whole movement exercise "
+                "(both moving and holding), after unwrapping +/-180 degree jumps and excluding skipped "
+                "target intervals and each directional hold's opening. This describes exercise-wide spread, not steadiness of a single hold. "
+                "The participant result is the arithmetic mean of available session SDs, not pooled SD "
+                "or the SD of session ranges. The recording-opening exclusion does not apply; move phases are not trimmed by the hold-opening control."
+            )
         return (
             f"Movement range: largest minus smallest recorded {axis}, in degrees, during the movement exercise only "
-            "(both moving and holding), excluding any skipped target intervals. "
+            "(both moving and holding), excluding skipped target intervals and each directional hold's opening. "
             "Jumps at +/-180 degrees are removed before measuring the range. "
             "The participant result averages the available session ranges. Unlike Head movement stats, this uses "
             "recorded angles, not angles measured from the reference pose."
@@ -1076,13 +1191,16 @@ def field_description(key: str) -> str:
         measure = (
             f"Difference between average {axis} while holding {direction} and average {axis} during initial rest. "
             "The sign shows the direction of the change"
-            if "_offset_from_rest_" in key else f"Average {axis} while holding the {direction} position in the movement exercise"
+            if "_offset_from_rest_" in key else
+            f"Population SD of {axis} while holding the {direction} position; measures steadiness of this hold, not uncertainty in the range"
+            if "_angle_std_" in key else
+            f"Average {axis} while holding the {direction} position in the movement exercise"
         )
         reference = (
             " Yaw is measured from the calibration heading when saved calibration is available; otherwise it is recorded yaw."
             if axis == "yaw" else " Pitch is recorded tilt: estimated relative to gravity for IMUs, or relative to the camera for webcam trackers."
         )
-        return measure + ", in degrees. Only samples labelled as holding that position are used, excluding skipped target intervals. The participant result averages the available session values." + reference
+        return measure + ", in degrees. Only samples labelled as holding that position are used, excluding its chosen opening duration and skipped target intervals. Fully excluded holds have unavailable estimates. The participant result averages the available session values." + reference
     if key.startswith(("head_speed_", "head_acceleration_")):
         measure = (
             "Angular speed: how fast the head turns, in deg/s. Uses the shortest 3D rotation between consecutive head poses divided by the time between them"
@@ -1092,7 +1210,7 @@ def field_description(key: str) -> str:
         aggregate = "Average" if key.endswith("_mean") else "Largest value"
         return (
             f"{aggregate} across usable sample intervals from all head recordings. {measure}. "
-            "Excludes the selected opening duration of each head recording and skipped target intervals, "
+            "Excludes the selected opening duration of each head recording, each hold's opening and skipped target intervals, "
             "including differences that cross any excluded interval. "
             "Otherwise includes preparation and the movement exercise, not just pointing. Changes across file boundaries "
             "are not used. Before calculating speed, intervals with zero/negative duration or less than half the "
@@ -1104,7 +1222,7 @@ def field_description(key: str) -> str:
         aggregate = " The participant result is the largest single-recording range, not a range spanning different files." if key.startswith("head_") else ""
         return (
             f"Movement range: largest minus smallest relative {axis}, in degrees, using {scope}, "
-            "after the selected head-recording opening and target-interval exclusions. "
+            "after the selected head-recording opening, hold-opening and target-interval exclusions. "
             "The reference pose is removed as a 3D rotation before extracting yaw, pitch and roll "
             "(inverse(reference) * recorded pose). Jumps at +/-180 degrees are removed before measuring the range. "
             "A tilted reference pose can mix changes between these angles; this is not a measure of tilt from gravity." + aggregate
@@ -1121,6 +1239,20 @@ def format_number(value) -> str:
     if value is None:
         return ""
     return f"{value:.1f}" if isinstance(value, (float, int)) and not isinstance(value, bool) else str(value)
+
+
+def format_field(key: str, value) -> str:
+    """Keep target totals integral, without rounding per-target averages."""
+    target_counts = {
+        "exclude_first_targets_per_file", "targets_recorded", "targets_excluded",
+        "targets_analysed", "hits", "misses", "path_trial_count",
+        "matching_targets_available", "matching_targets_selected", "matching_targets_omitted",
+        "condition_trials_recorded", "condition_trials_analysed",
+        "nodwell_trial_count", "nodwell_invalid_count", "nodwell_unknown_count",
+    }
+    if value is not None and (key in target_counts or key.startswith("dwell_") and key.endswith("_count")):
+        return str(int(value))
+    return format_number(value)
 
 
 def initial_pose_reference_diagram(mesh_path: Path | None = None) -> str:
@@ -1262,24 +1394,31 @@ def initial_pose_wireframes(
                         f'text-anchor="{anchor}">{name} {value:+.1f} deg</text>'
                     )
         caption = " / ".join(format_number(angle) for angle in angles)
-        cards.append(
-            f'<figure style="margin:8px;max-width:100%"><figcaption><b>{participant}</b><br>'
-            f'Calibration heading / initial-rest pitch / roll: {caption} deg'
-            + ("<br>Display-only zero: " + ", ".join(zero_axes) if zero_axes else "") + '</figcaption>'
+        svg = (
             f'<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{participant} initial head pose" '
             f'viewBox="-60 0 360 285" style="width:360px;max-width:100%">'
+            f'<title>{participant}: calibration heading / initial-rest pitch / roll: {caption} deg</title>'
             f'<g fill="none" stroke="#333" stroke-width="0.7">{lines}</g>{"".join(axes_markup)}'
             '<text x="5" y="220" font-size="10">Head axes: X forward, Y left, Z up</text>'
             '<text x="5" y="237" font-size="10">Yaw: + left / - right (about Z)</text>'
             '<text x="5" y="254" font-size="10">Pitch: + up / - down</text>'
             '<text x="5" y="271" font-size="10">Roll: + left ear down / - right ear down</text>'
-            '</svg></figure>'
+            '</svg>'
+        )
+        encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+        filename = re.sub(r"[^A-Za-z0-9_-]+", "_", row["participant"]).strip("_") or "participant"
+        cards.append(
+            f'<figure style="margin:8px;max-width:100%"><figcaption><b>{participant}</b> - '
+            f'(<a download="head_pose_{filename}.svg" href="data:image/svg+xml;base64,{encoded}">download svg</a>)<br>'
+            f'Calibration heading / initial-rest pitch / roll: {caption} deg'
+            + ("<br>Display-only zero: " + ", ".join(zero_axes) if zero_axes else "") + '</figcaption>'
+            + svg + '</figure>'
         )
     return '<div style="display:flex;flex-wrap:wrap">' + "".join(cards) + "</div>"
 
 
 def summary_csv(rows: list[dict]) -> str:
-    """Export ordered calculated fields using one-decimal format_number values.
+    """Export ordered fields, with unrounded fractions for error_rate.
 
     Preserve first-seen key order across rows; None becomes an empty cell.
     Prefix formula-like user text with an apostrophe for spreadsheet safety.
@@ -1291,7 +1430,8 @@ def summary_csv(rows: list[dict]) -> str:
     writer.writeheader()
     # Treat user labels as text when opened in spreadsheet software.
     for row in rows:
-        writer.writerow({k: "'" + v if isinstance(v, str) and v.startswith(("=", "+", "-", "@")) else format_number(v)
+        writer.writerow({k: "'" + v if isinstance(v, str) and v.startswith(("=", "+", "-", "@"))
+                         else v if k == "error_rate" and v is not None else format_field(k, v)
                          for k, v in row.items()})
     return output.getvalue()
 
@@ -1317,11 +1457,11 @@ def playback_payload(
     """
     retained_trials(session, exclude_first_targets)
     target_keep = _target_sample_mask(session, exclude_first_targets)
-    movement_keep = _head_movement_mask(session, head_opening_exclude_s) & target_keep
-    rest_ids = {id(s) for s in _initial_rest_after_opening(session, initial_rest_exclude_s)}
+    hold_keep = _hold_sample_mask(session, initial_rest_exclude_s)
+    movement_keep = _head_movement_mask(session, head_opening_exclude_s) & target_keep & hold_keep
     included = {
-        id(s): (bool(movement), id(s) in rest_ids and bool(target))
-        for s, movement, target in zip(session.samples, movement_keep, target_keep)
+        id(s): (bool(movement), bool(hold) and bool(target))
+        for s, movement, target, hold in zip(session.samples, movement_keep, target_keep, hold_keep)
     }
     samples = session.samples
     starts, ends, host, span = (session.fitts_times() if session.fitts_filename else
@@ -1375,6 +1515,7 @@ def playback_payload(
         item = asdict(trial)
         item["start"], item["end"] = float(start - origin), float(end - origin)
         item["excluded"] = trial_index < exclude_first_targets
+        item["planned_id_bits"] = planned_id(trial)
         trajectory = np.asarray(trial.trajectory, dtype=float).reshape(-1, 3)
         speeds = np.zeros(len(trajectory))
         if len(trajectory) > 1:
@@ -1404,19 +1545,7 @@ def playback_payload(
                               for p in record.get("cursor_trajectory", [])]
             _finite(item["points"], "Pre-test cursor trajectory")
             records.append(item)
-    width, height = session.metadata.get("screen_width_px"), session.metadata.get("screen_height_px")
-    if not width or not height:
-        xs, ys = [], []
-        for trial in session.trials:
-            for x, y in (trial.start_pos, trial.target_pos, trial.click_pos):
-                xs.append(x + trial.width_px / 2)
-                ys.append(y + trial.width_px / 2)
-            xs.extend(p[1] for p in trial.trajectory)
-            ys.extend(p[2] for p in trial.trajectory)
-        width, height = (max(max(xs) + 20, 100), max(max(ys) + 20, 100)) if xs else (1920, 1080)
-    _finite([width, height], "Screen dimensions")
-    if width <= 0 or height <= 0:
-        raise ValueError("Screen dimensions must be positive")
+    width, height, _ = fitts_screen_dimensions(session)
     geometry = {"vertices": [], "edges": []}
     if frames:
         vertices, _, edges = load_obj_wireframe(mesh_path or OBJ_PATH)
@@ -1440,8 +1569,11 @@ def playback_payload(
         "cursor_graphs": [{"label": "Cursor speed (px/s)", "points": speed_points},
                           {"label": "Distance to target (px)", "points": distance_points}] if trials else [],
         "pretest_html": (
-            "Grey chart backgrounds mark excluded time periods; coloured traces retain all data. Recording-opening exclusion applies to session "
-            "movement statistics; hold-opening exclusion applies to initial pose and offsets from rest. "
+            "Grey chart backgrounds mark excluded time periods; pink cursor-graph backgrounds mark missed targets "
+            "(including excluded misses). Missed playback targets are red; colours show recorded outcomes. "
+            "Coloured traces retain all data. Recording-opening exclusion applies to session "
+            "movement statistics; each-hold opening exclusion applies to initial/directional held poses, "
+            "offsets, exercise and recording movement statistics. "
             "Excluded target intervals are omitted from head statistics as well as pointing results. "
             "Saved calibration and the reference pose are unchanged.<br>" +
             "Initial-rest yaw is measured from the calibration heading (blank without saved calibration). "

@@ -232,7 +232,9 @@ def head_range_of_movement_stats(samples, rest: dict | None = None) -> dict | No
     """Measure directional held poses, not the preceding move phases.
 
     Compute _pose_stats for each labelled hold. Left/right use arithmetic yaw
-    mean; up/down use pitch mean. Offset = held mean - initial-rest mean.
+    mean; up/down use pitch mean. angle_std_deg is that same axis's population
+    SD within the hold (divisor n), not the uncertainty of the overall range.
+    Offset = held mean - initial-rest mean.
     Overall yaw/pitch range = abs(opposite held means' difference), not the
     max-min over every movement-exercise sample (a separate notebook measure).
     Without both opposite holds the corresponding range is None.
@@ -246,6 +248,7 @@ def head_range_of_movement_stats(samples, rest: dict | None = None) -> dict | No
         angle = "yaw" if direction in ("left", "right") else "pitch"
         stats["angle"] = angle
         stats["angle_mean_deg"] = stats[f"{angle}_mean_deg"]
+        stats["angle_std_deg"] = stats[f"{angle}_std_deg"]
         rest_mean = (rest or {}).get(f"{angle}_mean_deg")
         stats["offset_from_rest_deg"] = (
             None if rest_mean is None or stats["angle_mean_deg"] is None

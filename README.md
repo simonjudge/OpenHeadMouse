@@ -373,12 +373,14 @@ only the viewing angle.
 
 ### Colab session viewer
 
-The notebook's **Skip opening of initial-rest hold (s)** control defaults to
-**1 second**. Initial-position summaries use only the labelled rest hold,
-never the preceding move-to-rest phase. This exclusion updates rest summaries,
-their meshes and offsets from rest, not saved calibration or playback.
+The notebook's **Each hold opening (s)** control defaults to **1 second**,
+applied independently to initial rest and every left/right/up/down hold.
+Initial-position summaries use only the labelled rest hold, never the preceding
+move-to-rest phase. Excluded hold samples are omitted from held means/SDs,
+offsets, exercise ranges/SDs and recording movement statistics, and shaded grey
+on head charts. Move phases, saved calibration and raw playback are unchanged.
 The separate Head movement stats table covers all recording phases, apart from
-its selected recording-opening exclusion.
+its selected recording-opening, hold-opening and target-interval exclusions.
 Its **Skip opening of head recording (s)** control independently defaults to
 **1 second**, excluding startup samples from ranges, speed and acceleration
 without changing the original reference pose. **Exclusions** is at the top of

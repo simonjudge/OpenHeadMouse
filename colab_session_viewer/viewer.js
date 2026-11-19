@@ -99,8 +99,25 @@ const NotebookPlayback = (() => {
         const get = id => root.querySelector(`#${id}`);
         get("title").textContent = data.title + (data.synced ? " (synchronised)" : "");
         get("pretest").innerHTML = data.pretest_html;
-        get("session-summary").textContent = Object.entries(data.session_summary)
-            .map(([key, value]) => `${key}${["head_samples", "head_duration_s"].includes(key) ? " (recorded total, before exclusions)" : ""}: ${typeof value === "number" ? value.toFixed(1) : value ?? "n/a"}`).join("\n");
+        const targetCountFields = new Set([
+            "exclude_first_targets_per_file", "targets_recorded", "targets_excluded",
+            "targets_analysed", "hits", "misses", "path_trial_count",
+            "condition_trials_recorded", "condition_trials_analysed",
+            "nodwell_trial_count", "nodwell_invalid_count", "nodwell_unknown_count",
+        ]);
+        const sessionSummary = Object.entries(data.session_summary)
+            .map(([key, value]) => {
+                let text = value ?? "n/a";
+                if (typeof value === "number") {
+                    if (key === "error_rate") {
+                        const n = data.session_summary.targets_analysed;
+                        const misses = data.session_summary.misses ?? n - data.session_summary.hits;
+                        text = `${(100 * value).toFixed(1)}% (${misses}/${n})`;
+                    } else text = targetCountFields.has(key) || key.startsWith("dwell_") && key.endsWith("_count") ?
+                        String(value) : value.toFixed(1);
+                }
+                return `${key}${["head_samples", "head_duration_s"].includes(key) ? " (recorded total, before exclusions)" : ""}: ${text}`;
+            }).join("\n");
         let time = 0, playing = false, zoom = 1, timer = null;
         let cameraYaw = 0, cameraPitch = 0, cameraScale = 1;
         const slider = get("seek"), play = get("play"), speed = get("speed");
@@ -205,8 +222,9 @@ const NotebookPlayback = (() => {
                 ctx.setLineDash([]);
                 const [x, y] = point(trial.target_pos);
                 ctx.beginPath(); ctx.arc(x, y, trial.width_px / 2 * scale, 0, Math.PI * 2);
-                ctx.fillStyle = trial.excluded ? "#99999932" : "#1f77b432"; ctx.fill();
-                ctx.strokeStyle = trial.excluded ? "#999" : "#1f77b4"; ctx.lineWidth = 2; ctx.stroke();
+                const targetColor = trial.hit ? "#1f77b4" : "#d62728";
+                ctx.fillStyle = trial.excluded && trial.hit ? "#99999932" : `${targetColor}32`; ctx.fill();
+                ctx.strokeStyle = trial.excluded && trial.hit ? "#999" : targetColor; ctx.lineWidth = 2; ctx.stroke();
                 cross(ctx, point(trial.start_pos), 5, "#555", true);
             } else {
                 ctx.fillStyle = "#333"; ctx.font = "13px sans-serif"; ctx.textAlign = "center";
@@ -223,8 +241,9 @@ const NotebookPlayback = (() => {
             const lines = [state.phase, `Time: ${time.toFixed(1)} s`];
             if (trial) {
                 lines.push(`Trial: ${state.trialIndex + 1} / ${data.trials.length}`,
-                    trial.excluded ? "Excluded from statistics (shown in grey)" : "Included in statistics",
+                    trial.excluded ? "Excluded from statistics (path shown in grey)" : "Included in statistics",
                     `${trial.block_type}: ${trial.condition_label}`,
+                    `Target planned ID: ${trial.planned_id_bits.toFixed(1)} bits`,
                     `Outcome: ${state.clicked ? trial.hit ? "HIT" : "MISS" : "in progress"}`,
                     `Elapsed: ${state.elapsed.toFixed(1)} s; MT: ${trial.movement_time_s.toFixed(1)} s`,
                     `Cursor: ${state.cursor.map(v => v.toFixed(1)).join(", ")} px`,
@@ -234,6 +253,11 @@ const NotebookPlayback = (() => {
                 }
             } else lines.push(`Cursor points: ${state.points.length}`);
             get("cursor-live").textContent = lines.join("\n");
+            get("session-summary").textContent = (
+                trial ? `Current target: ${state.trialIndex + 1} / ${data.trials.length}\n` +
+                    `Current target planned ID: ${trial.planned_id_bits.toFixed(1)} bits\n\n` :
+                    "Current target planned ID: n/a\n\n"
+            ) + sessionSummary;
         }
         function drawGraphs(state) {
             for (const graph of graphs) {
@@ -255,7 +279,10 @@ const NotebookPlayback = (() => {
                     ctx.fillStyle = "#d9d9d9";
                     if (isCursor) {
                         for (const trial of data.trials) {
-                            if (trial.excluded) ctx.fillRect(x(trial.start), 20, x(trial.end) - x(trial.start), 68);
+                            ctx.fillStyle = trial.hit ? "#d9d9d9" : "#f8d7e3";
+                            if (!trial.hit || trial.excluded) {
+                                ctx.fillRect(x(trial.start), 20, x(trial.end) - x(trial.start), 68);
+                            }
                         }
                     } else {
                         let start = null;

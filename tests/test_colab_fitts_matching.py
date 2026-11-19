@@ -95,30 +95,25 @@ def test_matching_applies_global_exclusions_first_and_requires_shared_task_width
         ])
 
 
-def test_optional_table_updates_and_has_ordered_field_key_without_changing_original_table():
+def test_matched_section_is_removed_and_target_review_precedes_fitts_tables():
     viewer = NotebookViewer()
     viewer.sessions = recordings()
     viewer._refresh_table()
-    original = viewer.table.value
-    assert not viewer.match_planned_id.value
-    assert viewer.matched_fitts_table.value == ""
+    assert not hasattr(viewer, "match_planned_id")
+    assert not hasattr(viewer, "fitts_matching_method")
+    assert not hasattr(viewer, "matched_fitts_table")
     children = viewer.session_widget.children
-    assert children.index(viewer.match_planned_id) > children.index(viewer.table)
-    viewer.match_planned_id.value = True
-    assert viewer.table.value == original
-    markup = viewer.matched_fitts_table.value
-    assert "matched_planned_id_fitts_stats.csv" in markup
-    assert "0.1 bits" in markup
+    assert children.index(viewer.table) < children.index(viewer.target_review) < children.index(viewer.fitts_table)
+    markup = viewer.fitts_table.value
     assert "Effective ID (IDe, bits)" in markup
-    assert re.findall(r'<th title="([^"]+)"', markup) == re.findall(r"<code>([^<]+)</code>", markup)
+    for key in re.findall(r"<code[^>]*>([^<]+)</code>", markup):
+        assert re.search(r'title="' + re.escape(key) + r': [^"]{12,220}"', markup)
     for key in matched_fitts_rows(viewer.sessions)[0]:
         assert field_description(key)
     viewer.exclude_targets.value = 1
-    assert viewer.matched_fitts_table.value != markup
+    assert viewer.fitts_table.value != markup
     viewer.exclude_targets.value = 100
-    assert "Cannot calculate matched-target comparison" in viewer.matched_fitts_table.value
-    viewer.match_planned_id.value = False
-    assert viewer.matched_fitts_table.value == ""
+    assert "fitts_stats.csv" in viewer.fitts_table.value
 
 
 def test_original_fitts_table_has_planned_id_immediately_before_effective_id():
@@ -156,12 +151,9 @@ def test_main_fitts_measures_use_every_retained_target_independently_of_matching
                     assert row[key.removeprefix("overall_")] == value
             for key, value in FittsStats.accuracy_summary(trials).items():
                 assert row[f"path_{key}"] == value
-        viewer.match_planned_id.value = True
-        for method in ("strict_id", "target_conditions"):
-            viewer.fitts_matching_method.value = method
-            assert viewer.table.value == original_table
-            assert viewer.summary_rows() == original_rows
-        viewer.match_planned_id.value = False
+        viewer._refresh_table()
+        assert viewer.table.value == original_table
+        assert viewer.summary_rows() == original_rows
 
 
 def test_condition_inventory_uses_saved_fields_and_observed_counts_before_exclusions():
@@ -184,8 +176,9 @@ def test_condition_inventory_uses_saved_fields_and_observed_counts_before_exclus
     viewer = NotebookViewer()
     viewer.sessions = [session]
     viewer._refresh_table()
-    markup = viewer.table.value
-    assert '<h3>Fitts stats</h3><details class="fitts-conditions">' in markup
+    markup = viewer.fitts_table.value
+    assert '<details class="fitts-conditions">' in markup
+    assert markup.index("<summary><b>Table Notes</b></summary>", markup.index("<h3>Fitts stats</h3>")) < markup.index('<details class="fitts-conditions">')
     assert 'class="fitts-conditions" open' not in markup
     assert "&lt;run&gt;.json" in markup
     assert "fitts_test_conditions.csv" in markup
@@ -304,30 +297,13 @@ def test_closest_conditions_explicitly_rejects_missing_tests_or_conditions():
         matched_fitts_rows(sessions, method="target_conditions")
 
 
-def test_closest_option_in_collapsed_review_updates_comparison_only():
+def test_calculation_review_stays_collapsed_without_matching_controls():
     viewer = NotebookViewer()
     viewer.sessions = condition_recordings()
     viewer._refresh_table()
-    original = viewer.table.value
-    viewer.match_planned_id.value = True
-    strict = viewer.matched_fitts_table.value
     review = viewer.fitts_calculation_review
     assert review.get_title(0) == "Fitts calculation review"
     assert review.selected_index is None
-    assert viewer.fitts_matching_method in review.children[0].children
-    viewer.fitts_matching_method.value = "target_conditions"
-    markup = viewer.matched_fitts_table.value
-    assert viewer.table.value == original
-    assert markup != strict
-    assert "no planned-ID cutoff" in markup
-    assert "Test 1: 12; Test 2: 12" in markup
-    assert re.findall(r'<th title="([^"]+)"', markup) == re.findall(r"<code>([^<]+)</code>", markup)
-    for key in matched_fitts_rows(viewer.sessions, method="target_conditions")[0]:
-        assert field_description(key)
-    viewer.exclude_targets.value = 2
-    assert "Test 1: 10; Test 2: 10" in viewer.matched_fitts_table.value
-    viewer.exclude_targets.value = 100
-    assert "Cannot calculate matched-target comparison" in viewer.matched_fitts_table.value
-    viewer.exclude_targets.value = 0
-    viewer.fitts_matching_method.value = "strict_id"
-    assert viewer.matched_fitts_table.value == strict
+    assert viewer.include_dwell in review.children[0].children
+    assert not any("Matching" in getattr(control, "description", "")
+                   for control in review.children[0].children)

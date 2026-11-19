@@ -6,6 +6,7 @@ function trial(start, index = 0) {
     return {
         start, end: start + 1, start_pos: [0, 0], target_pos: [10, 0],
         click_pos: [11, 1], hit: true, width_px: 4, block_type: "circle", condition_label: "A",
+        planned_id_bits: Math.log2(10 / 4 + 1), movement_time_s: 1,
         trial_index: index, trajectory: [[0, 0, 0], [0.5, 9, 1], [0.8, 10, 0]],
         speeds: [0, 18, 4], full_path: [[0, 0], [9, 1], [10, 0], [11, 1]],
     };
@@ -147,6 +148,75 @@ test("seek uses the last head frame at or before time, including boundaries", ()
     assert.match(stateAt(data, -1).headNote, /Before/);
     assert.equal(stateAt(data, 5).frameIndex, 2);
     assert.match(stateAt(data, 5).headNote, /ended/);
+});
+
+test("missed targets are red with pink cursor graphs and live target ID follows seeking", t => {
+    const elements = {}, fills = [], targetStrokes = [];
+    const noop = () => {};
+    const context = () => ({
+        clearRect: noop, beginPath: noop, moveTo: noop, lineTo: noop,
+        arc: noop, fill: noop, stroke: noop, fillText: noop,
+        fillRect: noop, strokeRect: noop, setLineDash: noop,
+        save: noop, restore: noop, rect: noop, clip: noop,
+        getImageData: () => ({}), putImageData: noop,
+    });
+    const oldWindow = global.window, oldDocument = global.document;
+    global.window = {addEventListener: noop};
+    global.document = {createElement() {
+        const drawn = [];
+        fills.push(drawn);
+        const ctx = {...context(), fillRect(...rect) { drawn.push({color: this.fillStyle, rect}); }};
+        return {setAttribute: noop, getContext: () => ctx};
+    }};
+    t.after(() => { global.window = oldWindow; global.document = oldDocument; });
+    const root = {querySelector(selector) {
+        const id = selector.slice(1);
+        if (!elements[id]) {
+            const ctx = context();
+            if (id === "cursor") {
+                ctx.clearRect = () => { targetStrokes.length = 0; };
+                ctx.stroke = function () { targetStrokes.push(this.strokeStyle); };
+            }
+            elements[id] = {width: 660, height: 280, appendChild: noop, getContext: () => ctx};
+        }
+        return elements[id];
+    }};
+    const hit = trial(0), miss = {...trial(2), hit: false, excluded: true, planned_id_bits: 4.25};
+    const data = {
+        title: "Test", synced: false, pretest_html: "", reference_pose_source: "",
+        duration: 4, frames: [], head_graphs: [], head_task_end: null, pretests: [],
+        trials: [hit, {...trial(1), hit: false}, miss, {...trial(3), excluded: true}], screen: [100, 100],
+        session_summary: {targets_analysed: 2, hits: 1, misses: 1, error_rate: .5},
+        cursor_graphs: [
+            {label: "Cursor speed (px/s)", points: [[0, 0], [1, 10]]},
+            {label: "Distance to target (px)", points: [[0, 10], [1, 0]]},
+        ],
+    };
+    const original = JSON.stringify(data);
+    mount(data, root);
+    assert.ok(targetStrokes.includes("#1f77b4"));
+    for (const graph of fills) {
+        assert.deepEqual(graph, [
+            {color: "#f8d7e3", rect: [205.5, 20, 147.5, 68]},
+            {color: "#f8d7e3", rect: [353, 20, 147.5, 68]},
+            {color: "#d9d9d9", rect: [500.5, 20, 147.5, 68]},
+        ]);
+    }
+    assert.match(elements["session-summary"].textContent, /Current target planned ID: 1\.8 bits/);
+    assert.match(elements["session-summary"].textContent, /targets_analysed: 2\n/);
+    assert.match(elements["session-summary"].textContent, /error_rate: 50\.0% \(1\/2\)/);
+    elements.seek.value = "2.5";
+    elements.seek.oninput();
+    assert.ok(targetStrokes.includes("#d62728"));
+    assert.match(elements["session-summary"].textContent, /Current target: 3 \/ 4/);
+    assert.match(elements["session-summary"].textContent, /Current target planned ID: 4\.3 bits/);
+    assert.match(elements["cursor-live"].textContent, /Target planned ID: 4\.3 bits/);
+    elements.seek.value = "3.5";
+    elements.seek.oninput();
+    assert.ok(targetStrokes.includes("#999"));
+    elements.rewind.onclick();
+    assert.match(elements["session-summary"].textContent, /Current target: 1 \/ 4/);
+    assert.equal(JSON.stringify(data), original);
 });
 
 test("before a trial, cursor starts at start position and trail is empty", () => {

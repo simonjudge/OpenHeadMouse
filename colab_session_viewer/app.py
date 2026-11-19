@@ -7,22 +7,40 @@ import csv
 import html
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import ipywidgets as widgets
 from IPython.display import HTML, IFrame, clear_output, display
 
 from colab_session_viewer.data import (
-    Session, format_number, initial_pose_reference_diagram, initial_pose_wireframes, participant_rows, participant_tables,
-    payload_json, playback_payload, summary_csv, column_label, table_sources, head_range_diagnostics,
-    field_description, matched_fitts_rows, fitts_condition_rows,
+    Session, format_number, format_field, initial_pose_reference_diagram, initial_pose_wireframes, participant_rows, participant_tables,
+    payload_json, playback_payload, summary_csv, column_label, head_range_diagnostics,
+    field_description, fitts_condition_rows,
 )
 from colab_session_viewer.archive import ArchiveDataset, Assignment, load_archive, manifest_csv
+from colab_session_viewer.cursor_paths import (
+    cursor_path_plot, format_target_selection, numbered_targets, parse_target_selection,
+)
+from colab_session_viewer.selection_stats import alternative_selection_rows
+from colab_session_viewer.outliers import review_targets
 from colab_session_viewer.dwell import (
     DWELL_BEHAVIOUR_FIELDS, NODWELL_EQUIVALENTS, NODWELL_FITTS_FIELDS, SELECTION_METHODS,
 )
 
 _FOLDER = Path(__file__).parent
+
+
+@dataclass
+class CursorPathControl:
+    text: widgets.Text
+    up: widgets.Button
+    down: widgets.Button
+    show_all: widgets.Button
+    hint: widgets.HTML
+    output: widgets.HTML
+    maximum: int
+    suppress: bool = False
 
 
 def viewer_document(payload: dict) -> str:
@@ -78,23 +96,16 @@ class NotebookViewer:
         self._loaded_demo_archives: set[Path] = set()
         self.load_demo.observe(self._load_demo_changed, names="value")
         self.table = widgets.HTML()
-        self.match_planned_id = widgets.Checkbox(
-            value=False, description="Show matched-target comparison", indent=False,
-            layout=widgets.Layout(width="auto"),
-        )
-        self.match_planned_id.observe(self._pose_zero_changed, names="value")
-        self.fitts_matching_method = widgets.Dropdown(
-            options=[
-                ("Strict planned ID (within 0.1 bits)", "strict_id"),
-                ("Closest target conditions (retain every test)", "target_conditions"),
-            ],
-            value="strict_id", description="Matching method:",
-            style={"description_width": "initial"}, layout=widgets.Layout(width="auto"),
-        )
-        self.fitts_matching_method.observe(self._pose_zero_changed, names="value")
-        self.matched_fitts_table = widgets.HTML()
+        self.fitts_table = widgets.HTML()
+        self.target_review = widgets.VBox()
+        self._target_review_controls: dict[int, widgets.Checkbox] = {}
+        self._excluded_fitts_trials: set[int] = set()
+        self.cursor_paths = widgets.VBox()
+        self._cursor_path_controls: dict[str, CursorPathControl] = {}
+        self.nodwell_table = widgets.HTML()
+        self.first_entry_table = widgets.HTML()
         self.include_dwell = widgets.Checkbox(
-            value=False, description="Add MTnodwell, no-dwell throughput and dwell behaviour",
+            value=False, description="Show dwell behaviour estimates",
             indent=False, layout=widgets.Layout(width="auto"),
         )
         self.include_dwell.observe(self._pose_zero_changed, names="value")
@@ -107,7 +118,7 @@ class NotebookViewer:
             control.observe(self._pose_zero_changed, names="value")
         self.initial_rest_exclude = widgets.BoundedFloatText(
             value=1.0, min=0.0, max=1e6, step=0.1,
-            description="Skip opening of initial-rest hold (s):",
+            description="Skip opening of each hold (s):",
             style={"description_width": "initial"}, layout=widgets.Layout(width="400px"),
         )
         self.initial_rest_exclude.observe(self._initial_rest_exclusion_changed, names="value")
@@ -137,7 +148,7 @@ class NotebookViewer:
         self.exclusion_controls = labelled(self.exclude_targets, "First targets per Fitts file")
         self.time_exclusion_controls = widgets.HBox(
             [
-                labelled(self.initial_rest_exclude, "Initial-rest hold opening (s)"),
+                labelled(self.initial_rest_exclude, "Each hold opening (s)"),
                 labelled(self.head_opening_exclude, "Head recording opening (s)"),
             ],
             layout=widgets.Layout(flex_flow="row wrap"),
@@ -190,14 +201,11 @@ class NotebookViewer:
                 "Thus these existing pooled results should be treated as descriptive, not certified "
                 "ISO 9241-411 sequence throughput. Zero effective width currently yields zero IDe/TP "
                 "(an unavailable/degenerate estimate, not evidence of zero performance). "
-                "These legacy formulas are kept unchanged in both tables for comparability. "
+                "These legacy formulas are kept unchanged for comparability. "
                 '<a href="https://www.yorku.ca/mack/FittsLawSoftware/doc/Throughput.html" target="_blank">'
                 "Reference: MacKenzie, Throughput calculation and geometry</a>.</p>"
-                "<p>Choose strict ID matching, or balance shared block type/amplitude/width conditions "
-                "without an ID cutoff, keeping every test. Enable the comparison below to see results. "
-                "Discarding targets never changes the original movement distances or their ID.</p>"
+                "<p>Review exclusions never change original target distances or IDs.</p>"
             ),
-            self.fitts_matching_method,
             self.include_dwell,
             widgets.HTML(
                 "<p>Selection method and dwell duration come from each imported session's labels. "
@@ -229,7 +237,7 @@ class NotebookViewer:
             widgets.HBox([self.participant, self.session]), self.viewer,
             widgets.HTML("<h3>Participant summaries</h3><p>One row per participant in each table, pooling retained "
                          "trials across all imported sessions using the desktop FittsStats formulas. "
-                         "Times are seconds, angles degrees, distances pixels; error_rate is a fraction. "
+                         "Times are seconds, angles degrees, distances pixels; error rates display as percentages. "
                          "Blank values mean unavailable. Pre-test columns are averages across available sessions. "
                          "Expand Individual sessions below each main table to inspect each session's values.</p>"),
             widgets.HTML(
@@ -237,9 +245,10 @@ class NotebookViewer:
                 "(<code>initial_rest.hold</code>), never the preceding move-to-rest phase "
                 "(<code>initial_rest.move</code>). Skip the chosen opening duration from each hold's start; "
                 "0 includes the full hold. Without a saved hold-start time, use the first labelled hold sample. "
-                "This changes initial-rest summaries, their meshes and offsets from rest only. "
-                "Saved calibration, directional holds, whole-recording head-movement statistics "
-                "and pointing results are unchanged. A hold with no samples left has no rest-pose estimate.</p>"
+                "The same exclusion applies to left/right/up/down holds. Excluded hold samples are omitted "
+                "from head pose, exercise and recording movement calculations and marked by grey chart backgrounds. "
+                "Move phases are not trimmed by this control. Saved calibration/reference, raw playback and "
+                "pointing results are unchanged. A hold with no samples left has no held-pose estimate.</p>"
             ),
             self.rest_exclusion_note,
             widgets.HTML("<b>Initial head position plots only</b>: set selected angles to 0.0 deg for all "
@@ -247,15 +256,27 @@ class NotebookViewer:
             widgets.HBox(list(self.pose_zero_controls.values()),
                          layout=widgets.Layout(flex_flow="row wrap")),
             self.table,
-            widgets.HTML("<h3>Fitts stats: matched targets (optional)</h3>"),
-            widgets.HTML(
-                "<p><b>ID versus IDe:</b> planned ID = log2(D/W + 1), where D is the saved distance "
-                "between target centres. Effective ID (IDe) = log2(Ae/We + 1), where We = 4.133 times "
-                "the sample SD of task-axis endpoint errors. IDe therefore varies with click accuracy "
-                "even for the same planned test. Target count alone does not determine ID.</p>"
-            ),
+            widgets.HTML("<h2>Fitts results</h2>"),
+            self.target_review,
             self.fitts_calculation_review,
-            self.match_planned_id, self.matched_fitts_table,
+            self.fitts_table,
+            widgets.HTML("<h3>No-Dwell stats</h3>"),
+            self.nodwell_table,
+            widgets.HTML("<h3>First-entry selection stats</h3>"),
+            self.first_entry_table,
+            widgets.HTML(
+                "<h3>Cumulative cursor paths</h3><p>One plot per participant across all their Fitts files. "
+                "Targets are numbered 1&ndash;N continuously across the participant's files (files in recording "
+                "order, targets in original order), so a second 12-target test is targets 13&ndash;24. "
+                "Type ranges and/or lists such as <code>1-12</code> or <code>1,2,24</code>; "
+                "&#9650; Next and &#9660; Previous step through one target path at a time and All restores "
+                "every target. First-target exclusions apply to each file and keep the numbering unchanged. "
+                "Different screen sizes are shown separately; missing dimensions are estimated as in playback. "
+                "Lines show saved samples through the click; if no path was recorded, only the click appears. "
+                "Colours repeat after 10 targets. Circles are targets; dots are clicks. "
+                "Download an SVG image using the link below each plot.</p>"
+            ),
+            self.cursor_paths,
         ], layout=widgets.Layout(width="100%"))
         self.widget = widgets.VBox(
             [*self.loading_widget.children, *self.session_widget.children],
@@ -560,6 +581,7 @@ class NotebookViewer:
             self.sessions, self.exclusions, initial_rest_exclude_s=self.initial_rest_exclude.value,
             head_opening_exclude_s=self.head_opening_exclude.value,
             include_dwell=self.include_dwell.value,
+            excluded_trial_ids=self._excluded_fitts_trials,
         )
 
     def _pose_zero_changed(self, change):
@@ -578,31 +600,47 @@ class NotebookViewer:
 
     def _show_analysis_error(self, error):
         self.table.value = f"<p style='color:#b00020'>Cannot calculate summaries: {html.escape(str(error))}</p>"
+        self.fitts_table.value = ""
+        self.target_review.children = ()
+        self.nodwell_table.value = ""
+        self.first_entry_table.value = ""
+        self.cursor_paths.children = ()
         with self.viewer:
             clear_output(wait=True)
             display(widgets.HTML(self.table.value))
 
     def _refresh_table(self):
+        self._refresh_target_review()
         rows = self.summary_rows()
         if not rows:
             self.table.value = "No recordings imported."
-            self.matched_fitts_table.value = ""
+            self.fitts_table.value = ""
+            self.nodwell_table.value = ""
+            self.first_entry_table.value = ""
             self.rest_exclusion_note.value = ""
             self.head_exclusion_note.value = ""
+            self.cursor_paths.children = ()
             return
         per_session = []
         exhausted = []
+        exhausted_directions = []
         head_exhausted = []
         for session in self.sessions:
             row = participant_rows(
                 [session], self.exclusions, initial_rest_exclude_s=self.initial_rest_exclude.value,
                 head_opening_exclude_s=self.head_opening_exclude.value,
                 include_dwell=self.include_dwell.value,
+                excluded_trial_ids=self._excluded_fitts_trials,
             )[0]
             row["session"] = session.name
             per_session.append(row)
             if row.get("head_initial_rest_sample_count_session_mean") == 0:
                 exhausted.append(f"{session.participant} / {session.name}")
+            for direction in ("left", "right", "up", "down"):
+                phase = f"range_of_movement.{direction}.hold"
+                if (any(s.metadata.get("task_phase") == phase for s in session.samples)
+                        and row.get(f"head_range_of_movement_directions_{direction}_sample_count_session_mean") is None):
+                    exhausted_directions.append(f"{session.participant} / {session.name}: {direction}")
             if session.samples and row["head_movement_samples"] == 0:
                 head_exhausted.append(f"{session.participant} / {session.name}")
         self.head_exclusion_note.value = (
@@ -617,7 +655,14 @@ class NotebookViewer:
             "saved calibration heading is still shown.</p>"
             if exhausted else ""
         )
-        sections = []
+        if exhausted_directions:
+            self.rest_exclusion_note.value += (
+                "<p><b>No directional hold samples remain after exclusion:</b> " +
+                html.escape(", ".join(exhausted_directions)) +
+                ". Held-pose means, SDs and offsets are unavailable.</p>"
+            )
+        head_sections = []
+        fitts_sections = []
         descriptions = {
             "Session summary": "Recording counts and durations.",
             "Initial head positions": (
@@ -637,45 +682,45 @@ class NotebookViewer:
                 "Without saved calibration, recorded yaw remains available but yaw from calibration heading and the meshes are unavailable."
             ),
             "Range of movement stats": (
-                "Uses only the labelled movement exercise. Movement ranges use both moving and holding samples. "
-                "Directional positions use only the samples while holding left, right, up or down. "
-                "An offset is the change from the average initial-rest angle. Results average the available "
-                "session values; _session_mean in a CSV key means average across sessions."
+                "Uses only the labelled movement exercise, not the rest of the recording. "
+                f"The opening {self.initial_rest_exclude.value:g} seconds of each hold are excluded from "
+                "directional means/SDs, offsets and exercise-wide ranges/SDs. Move samples remain included "
+                "in exercise-wide results. A fully excluded directional hold has no held-pose estimate. "
+                "Participant results average available session values; individual sessions below are not "
+                "additional observations."
             ),
             "Fitts stats": (
                 "All measures in this main table, including ID and IDe, use all targets from all of the "
                 "participant's files after global first-target exclusions. Set First targets per Fitts file "
-                "to 0 to include every recorded target. Matching never changes this table; only the separate "
-                "matched-target comparison uses a matched subset. Path measures require usable recorded paths. "
-                "ID describes target geometry; IDe uses effective width calculated from click spread, so a "
-                "large spread can make IDe much lower than ID. A trial is one reach and click."
+                "to 0 and keep every review checkbox ticked to include every recorded target. "
+                "Unticked review targets are omitted from all Fitts tables, not head statistics or playback. "
+                "Results pool trials rather than averaging session statistics."
             ),
             "Fitts targets and hits": "Counts of completed targets and successful clicks, after leaving out any excluded targets. A miss is a click outside the target.",
             "Dwell behaviour stats": (
-                "Uses all analysed dwell targets after global first-target exclusions, never the matched subset. "
-                "Inside-target visits estimate dwell attempts, not software timer events. Movement averages "
-                "use available per-target estimates; contributing counts show coverage. Settling runs from "
-                "first entry to the start of final uninterrupted residence. Missing or inapplicable values "
-                "are shown as '-'; non-dwell sessions do not contribute zeros to dwell estimates. "
-                "Timing validity counts also explain the MTnodwell/throughput denominator in the Fitts table."
+                "Uses analysed dwell targets after first-target and review exclusions. "
+                "Inside-target visits estimate dwell attempts, not software timer events. "
+                "Non-dwell sessions do not contribute zeros. Coverage counts identify each estimate's "
+                "contributing targets."
             ),
             "Head movement stats": (
                 "Uses head recordings, including preparation and the movement exercise, not just pointing, "
                 f"after excluding the opening {self.head_opening_exclude.value:g} seconds of each recording. "
                 "Skipped targets' start-to-click intervals are also excluded. "
                 "Set the recording-opening exclusion to 0 for the full recording. "
-                "This is not a rest-hold-only table and is unaffected by the initial-rest opening exclusion. "
-                "Speed measures how fast the head turns in 3D; acceleration measures how quickly that speed changes. "
-                "Movement ranges use relative pose: movement measured from the reference pose, normally calibration "
+                "This is not a rest-hold-only table. The opening of every initial-rest/directional hold "
+                "is also excluded using the Each hold opening setting; derivatives never cross these gaps. "
+                "Movement is measured from the reference pose, normally calibration "
                 "but with saved recentering taking priority. Without either, initial rest or the first samples are used. "
-                "Each angle's range is its largest minus smallest value after removing jumps at +/-180 degrees. "
-                "The participant result is the largest single-recording range, not a range spanning different files. "
-                "A tilted reference can mix changes between yaw, pitch and roll. Near +/-90 degrees pitch, "
-                "yaw and roll become difficult to separate. The checks below flag relative pitch of 80 degrees or more "
+                "Near +/-90 degrees pitch, yaw and roll become difficult to separate. "
+                "The checks below flag relative pitch of 80 degrees or more "
                 "away from zero, and also show ranges during the pointing task only."
             ),
         }
         for label, table_rows in participant_tables(rows).items():
+            sections = fitts_sections if label in (
+                "Fitts stats", "Fitts targets and hits", "Dwell behaviour stats",
+            ) else head_sections
             filename = label.lower().replace(" ", "_") + ".csv"
             columns = list(table_rows[0])
             session_rows = [
@@ -687,7 +732,10 @@ class NotebookViewer:
             ]
             conditions = ""
             if label == "Fitts stats":
-                condition_rows = fitts_condition_rows(self.sessions, self.exclude_targets.value)
+                condition_rows = fitts_condition_rows(
+                    self.sessions, self.exclude_targets.value,
+                    excluded_trial_ids=self._excluded_fitts_trials,
+                )
                 conditions = (
                     '<details class="fitts-conditions"><summary><b>Fitts test conditions by file</b></summary>'
                     "<p>One row per participant/Fitts file, using only saved Fitts trials, not head data. "
@@ -697,141 +745,366 @@ class NotebookViewer:
                     "For circle tasks, saved amplitude is the configured radius; screen fitting and target "
                     "order determine actual movement distances. Targets per condition/repetition "
                     "are not the same as the number of repetitions per condition. "
-                    "Analysed counts apply global target exclusions, not optional ID matching.</p>" +
+                    "Analysed counts apply first-target and review exclusions.</p>" +
                     (self._table_html(condition_rows, "fitts_test_conditions.csv", "Download Fitts conditions CSV")
                      if condition_rows else "<p>No recorded Fitts trials.</p>") +
                     "</details>"
                 )
-            sections.append(
-                f"<h3>{label}</h3>" + conditions +
-                self._table_html(table_rows, filename, f"Download {label.lower()} CSV") +
-                '<details class="session-details"><summary><b>Individual sessions</b></summary>'
-                '<p>Same settings as the participant table. Each row uses only that session; '
-                'Fitts results are recalculated from its analysed targets. Session rows are inspection-only '
-                'and are not extra observations in the participant CSV. Blank means unavailable.</p>' +
-                self._table_html(session_rows, None, None) +
-                "</details>"
-            )
-            sources = table_sources(self.sessions, label)
-            sections.append(
-                '<details style="font-size:11px;margin:6px 0;overflow-wrap:anywhere"><summary><b>Source files</b></summary><ul>' +
-                "".join(f"<li>{html.escape(participant)}: " +
-                        (", ".join(html.escape(name) for name in names) if names else "No contributing files") +
-                        "</li>" for participant, names in sorted(sources.items())) +
-                "</ul></details>"
-            )
+            notes = ""
             if label == "Initial head positions":
-                sections.append(
-                    "<details><summary><b>Angle references and zero-position diagrams</b></summary>"
-                    f"<p>{descriptions[label]}</p>" + initial_pose_reference_diagram() + "</details>"
+                notes += (
+                    "<h4>Angle references and zero-position diagrams</h4>"
+                    f"<p>{descriptions[label]}</p>" + initial_pose_reference_diagram()
                 )
-                zero_axes = tuple(axis for axis, control in self.pose_zero_controls.items() if control.value)
-                sections.append(initial_pose_wireframes(table_rows, zero_axes=zero_axes))
             else:
-                sections.append(
-                    f"<details><summary><b>Calculation notes</b></summary><p>{descriptions[label]}</p></details>"
-                )
+                notes += self._notes_details(descriptions[label])
+            notes += self._session_details(session_rows) + conditions
             if label == "Head movement stats":
                 diagnostics = [row for session in self.sessions
                                if (row := head_range_diagnostics(
                                    session, head_opening_exclude_s=self.head_opening_exclude.value,
                                    exclude_first_targets=self.exclude_targets.value,
+                                   initial_rest_exclude_s=self.initial_rest_exclude.value,
                                )) is not None]
                 if diagnostics:
-                    sections.append(
+                    notes += (
                         "<details><summary>Movement range checks by recording (analysed recording versus pointing task)</summary>" +
                         self._table_html(diagnostics, "head_range_diagnostics.csv", "Download range diagnostics CSV") +
-                        "<p>Both checks respect head-recording opening and target-interval exclusions and retain the original reference pose. "
+                        "<p>Both checks respect head-recording opening, each-hold opening and target-interval exclusions and retain the original reference pose. "
                         "Pointing-task results use samples labelled task_phase = fitts_test; recordings "
                         "without those labels have no pointing-only estimate. A large heading change may also change "
                         "relative pitch/roll when the reference pose is tilted. Drift and unusually large values "
                         "are not automatically removed.</p></details>"
                     )
+            sections.append(
+                f"<h3>{label}</h3>" +
+                self._table_html(table_rows, filename, f"Download {label.lower()} CSV", extra_notes=notes)
+            )
+            if label == "Initial head positions":
+                zero_axes = tuple(axis for axis, control in self.pose_zero_controls.items() if control.value)
+                sections.append(initial_pose_wireframes(table_rows, zero_axes=zero_axes))
         encoded = base64.b64encode(summary_csv(rows).encode("utf-8-sig")).decode("ascii")
         self.table.value = (
             f'<a download="participant_summary.csv" href="data:text/csv;base64,{encoded}">Download summary CSV (all metrics)</a>'
-            + "".join(sections)
+            + "".join(head_sections)
         )
-        if self.match_planned_id.value:
-            try:
-                matched = matched_fitts_rows(
-                    self.sessions, self.exclude_targets.value, method=self.fitts_matching_method.value,
-                    include_dwell=self.include_dwell.value,
-                )
-            except ValueError as error:
-                self.matched_fitts_table.value = (
-                    "<p style='color:#b00020'>Cannot calculate matched-target comparison: " +
-                    html.escape(str(error)) + "</p>"
-                )
-            else:
-                matched_fitts = [
-                    {
-                        column: row[column]
-                        for key in row if key not in DWELL_BEHAVIOUR_FIELDS and key not in NODWELL_FITTS_FIELDS
-                        for column in (
-                            (key, NODWELL_EQUIVALENTS[key])
-                            if key in NODWELL_EQUIVALENTS and NODWELL_EQUIVALENTS[key] in row else (key,)
-                        )
-                    }
-                    for row in matched
-                ]
-                matched_dwell = ""
-                if self.include_dwell.value:
-                    matched_dwell = (
-                        "<h4>Dwell behaviour stats: matched targets</h4>"
-                        "<p>Uses only the matched targets, unlike the main dwell behaviour table. "
-                        "'-' means unavailable or not applicable, including dwell-only fields for "
-                        "non-dwell selection.</p>" +
-                        self._table_html(
-                            participant_tables(matched)["Dwell behaviour stats"],
-                            "matched_dwell_behaviour_stats.csv", "Download matched dwell behaviour CSV",
-                        )
-                    )
-                method_note = (
-                    "Balances the maximum equal target count within each shared block type, saved amplitude "
-                    "and width, with no planned-ID cutoff. Every test must contribute; test quotas within a "
-                    "condition are shared as evenly as availability allows. The smallest participant pool "
-                    "per condition supplies reference IDs; nearest unused IDs are chosen within test quotas. "
-                    "This deterministic greedy rule prioritises target counts and test retention, not a global "
-                    "minimum ID difference. Tests with no remaining/shared targets produce an explicit notice. "
-                    "The table reports per-test contributions and the largest ID difference from reference "
-                    "targets. Original target distances and IDs are never changed. "
-                    if self.fitts_matching_method.value == "target_conditions" else
-                    "Same task type and target width; each matched set differs by at most 0.1 bits. "
-                    "Matching starts with the participant having the fewest available targets (label breaks ties), "
-                    "then takes nearest unused IDs in stable session/trial order. It is not an optimal matching "
-                    "or a guarantee of matching movement directions/session composition. "
-                )
-                self.matched_fitts_table.value = (
-                    "<p>Compares targets using planned ID = log2(D/W + 1), from saved start-to-target distance D. " +
-                    method_note +
-                    "Equal numbers of targets are selected per participant, after global target exclusions. "
-                    "Selection uses geometry only, not clicks, success or movement time. "
-                    "IDe may still differ because endpoint accuracy differs. "
-                    "Results use the same pooled descriptive formulas as the original Fitts table; "
-                    "this is not a sequence-level ISO throughput estimate. "
-                    "Only this table is subsetted; other tables and playback remain unchanged.</p>" +
-                    self._table_html(matched_fitts, "matched_planned_id_fitts_stats.csv", "Download matched-target CSV") +
-                    matched_dwell
-                )
-        else:
-            self.matched_fitts_table.value = ""
+        self.fitts_table.value = "".join(fitts_sections)
+        self._refresh_cursor_paths()
+        self._refresh_selection_tables()
 
     @staticmethod
-    def _table_html(rows, filename, download_label):
-        columns = list(dict.fromkeys(key for row in rows for key in row))
-        header = "".join(
-            f'<th title="{html.escape(c, quote=True)}" style="padding:4px;overflow-wrap:anywhere;'
-            f'font-weight:bold">{html.escape(column_label(c))}</th>' for c in columns
+    def _session_row(row, session):
+        return {"participant": row["participant"], "session": session.name,
+                **{key: value for key, value in row.items() if key != "participant"}}
+
+    def _session_details(self, session_rows):
+        sessions = {(row["participant"], row["session"]) for row in session_rows}
+        files = "".join(
+            f"<li>{html.escape(s.participant)} / {html.escape(s.name)}: " +
+            html.escape(", ".join(name for name in (s.head_filename, s.fitts_filename) if name)
+                        or "No source filenames") + "</li>"
+            for s in self.sessions if (s.participant, s.name) in sessions
         )
+        return (
+            '<div class="session-details"><h4>Individual sessions</h4>'
+            '<p>Same fields and settings as above, recalculated for each session. '
+            'These inspection rows do not add observations to participant exports.</p>' +
+            f"<ul>{files}</ul>" +
+            self._table_html(session_rows, None, None, show_field_key=False) +
+            "</div>"
+        )
+
+    @staticmethod
+    def _notes_details(notes):
+        return f"<p class=\"analysis-scope\"><b>Analysis scope.</b> {notes}</p>"
+
+    def _fitts_sessions(self):
+        return [s for s in self.sessions if s.fitts_filename or s.trials]
+
+    def _refresh_target_review(self):
+        candidates = review_targets(self.sessions, self.exclude_targets.value)
+        current_ids = {id(t) for s in self.sessions for t in s.trials}
+        self._excluded_fitts_trials.intersection_update(current_ids)
+        self._target_review_controls = {
+            key: control for key, control in self._target_review_controls.items() if key in current_ids
+        }
+        children = [widgets.HTML(
+            "<h3>Target review: more than 3 SD from the average</h3>"
+            "<p>Checked = include in every Fitts table; uncheck to remove. "
+            "Candidates exceed 3 sample SD in movement time, start-to-click distance, or signed "
+            "task-axis endpoint error, pooling each participant's files after first-target exclusions. "
+            "Endpoint error additionally checks accuracy across different target distances. "
+            "This is a review aid, not proof of error: ordinary misses should remain included. "
+            "Means/SDs are fixed before review removals (no iterative rejection); "
+            "fewer than two trials or zero SD cannot flag a measure. "
+            "Target numbers match the cursor plots. Playback, plots and head statistics remain unchanged. "
+            '<a href="https://www.yorku.ca/mack/ijhcs2004.html">Soukoreff &amp; MacKenzie '
+            "(2004), footnote 8</a>, recommends investigating unusual movement times/distances; "
+            "the endpoint-error check is an additional review criterion.</p>"
+        )]
+        for candidate in candidates:
+            trial_id = id(candidate.trial)
+            if trial_id not in self._target_review_controls:
+                checkbox = widgets.Checkbox(
+                    value=trial_id not in self._excluded_fitts_trials,
+                    description="Include", indent=False, layout=widgets.Layout(width="90px"),
+                )
+                checkbox.observe(
+                    lambda change, key=trial_id: self._target_review_changed(key, change["new"]),
+                    names="value",
+                )
+                self._target_review_controls[trial_id] = checkbox
+            checkbox = self._target_review_controls[trial_id]
+            label = (f"{candidate.participant} / target {candidate.number} / {candidate.session.name} "
+                     f"(file target {candidate.file_number}; {candidate.session.fitts_filename})")
+            children.append(widgets.HBox([
+                checkbox, widgets.HTML(
+                    f"<b>{html.escape(label)}</b><br>" +
+                    "<br>".join(html.escape(reason) for reason in candidate.reasons)
+                ),
+            ], layout=widgets.Layout(align_items="center")))
+        if not candidates:
+            children.append(widgets.HTML("<p>No targets exceed 3 SD.</p>"))
+        removed = sum(id(t) in self._excluded_fitts_trials for s in self.sessions
+                      for t in s.trials[self.exclude_targets.value:])
+        children.append(widgets.HTML(f"<p><b>Review targets removed: {removed}</b>. "
+                                     "Choices persist when first-target exclusions change.</p>"))
+        restore = widgets.Button(description="Include all reviewed targets",
+                                 layout=widgets.Layout(width="220px"))
+        restore.on_click(self._restore_review_targets)
+        children.append(restore)
+        self.target_review.children = tuple(children)
+
+    def _restore_review_targets(self, _button):
+        self._excluded_fitts_trials.clear()
+        self._target_review_controls.clear()
+        self._pose_zero_changed(None)
+
+    def _target_review_changed(self, trial_id, included):
+        if included:
+            self._excluded_fitts_trials.discard(trial_id)
+        else:
+            self._excluded_fitts_trials.add(trial_id)
+        self._pose_zero_changed(None)
+
+    def _refresh_selection_tables(self):
+        labels = {"available": "available after exclusions", "used": "contributing",
+                  "unknown": "unknown selection method", "invalid_time": "MT shorter than dwell",
+                  "missing_path": "missing cursor path", "no_entry": "no target contact",
+                  "unsupported": "unsupported typing geometry"}
+        for first_entry, output, filename, download in (
+            (False, self.nodwell_table, "no_dwell_stats.csv", "Download No-Dwell stats CSV"),
+            (True, self.first_entry_table, "first_entry_stats.csv", "Download first-entry stats CSV"),
+        ):
+            if not self.sessions:
+                output.value = ""
+                continue
+            try:
+                rows, coverage = alternative_selection_rows(
+                    self.sessions, self.exclude_targets.value, first_entry=first_entry,
+                    excluded_trial_ids=self._excluded_fitts_trials,
+                )
+                session_rows = []
+                for session in self._fitts_sessions():
+                    session_result, _ = alternative_selection_rows(
+                        [session], self.exclude_targets.value, first_entry=first_entry,
+                        excluded_trial_ids=self._excluded_fitts_trials,
+                    )
+                    session_rows.append(self._session_row(session_result[0], session))
+                notes = {
+                    "targets_analysed": (
+                        "Targets remaining after first-target and review exclusions with estimable first "
+                        "contact. Typing geometry, missing paths and no-contact trials are omitted. "
+                        "See the coverage table for counts."
+                        if first_entry else
+                        "Targets remaining after first-target and review exclusions with a known selection "
+                        "method and non-negative adjusted movement time. All measures use this same subset; "
+                        "see the coverage table for counts."
+                    ),
+                    "mean_movement_time_s": (
+                        "Mean interpolated time from original trial start to first target contact, in seconds. "
+                        "Contact uses linear interpolation of cursor samples against the circular target, "
+                        "treating the cursor as a point. Sparse samples can miss brief visits. The saved "
+                        "start is planned, not necessarily the actual cursor position; using it at time "
+                        "zero can affect the first segment. Each trial retains its original start, "
+                        "not the preceding trial's estimated first-entry endpoint."
+                        if first_entry else
+                        "Mean MT after subtracting configured dwell duration for each dwell trial; known "
+                        "non-dwell MT is unchanged. Unknown methods and negative adjusted times are omitted. "
+                        "This removes configured dwell time, not settling or time spent revisiting a target."
+                    ),
+                    "throughput_bits_per_s": (
+                        "Mean first-entry nominal-width ID divided by mean first-entry MT. Unavailable for zero mean MT. Not click-spread effective-width throughput."
+                        if first_entry else "Pooled IDe recalculated on the same valid adjusted-time targets divided by their mean adjusted MT; unavailable for zero mean MT."
+                    ),
+                }
+                if first_entry:
+                    notes["nominal_width_px"] = (
+                        field_description("nominal_width_px") +
+                        " Nominal width replaces effective width because first-entry endpoints generally "
+                        "lie on the target perimeter, making click-spread width misleading."
+                    )
+                    notes["error_rate"] = (
+                        "Misses divided by contributing first-entry selections; displayed as a percentage "
+                        "(CSV: unrounded fraction). Always zero: only "
+                        "trials with an estimated target contact contribute; no-contact trials are listed "
+                        "under omissions, not counted as successful selections."
+                    )
+                    notes["effective_amplitude_px"] = (
+                        "Average straight-line distance from the saved planned start position to "
+                        "the estimated first target contact, in pixels. The planned start is "
+                        "not necessarily the actual cursor position."
+                    )
+                    for key in rows[0]:
+                        if key.startswith("path_"):
+                            notes[key] = field_description(key) + " Uses the path only up to first contact."
+                scope = (
+                    "All measures use the same contributing subset after first-target and review exclusions; "
+                    "omissions are counted below. Results pool trials across files, not session averages. "
+                ) + (
+                    "First-entry reconstruction follows Ching, MacKenzie and Allison (2025), "
+                    "doi:10.1145/3694907.3765916; it is not an exact reproduction of their live VR "
+                    "sequence-level experiment."
+                    if first_entry else "Geometry, endpoint accuracy and path measures use recorded clicks."
+                )
+                coverage_rows = [
+                    {"participant": row["participant"], **{labels[key]: str(value) for key, value in row.items()
+                                                          if key != "participant" and (key in ("available", "used")
+                                                              or any(r[key] for r in coverage))}}
+                    for row in coverage
+                ]
+                extra_notes = (
+                    self._notes_details(html.escape(scope)) +
+                    self._session_details(session_rows) +
+                    "<h4>Contributing targets and omissions</h4>" +
+                    "<p>Counts after first-target and review exclusions. Omission columns with zero "
+                    "targets for every participant are hidden.</p>" +
+                    self._table_html(coverage_rows, None, None, show_field_key=False)
+                )
+                output.value = self._table_html(
+                    rows, filename, download, field_notes=notes, extra_notes=extra_notes,
+                )
+            except (ValueError, TypeError) as error:
+                output.value = f'<p style="color:#b00020">Cannot calculate selection statistics: {html.escape(str(error))}</p>'
+
+    def _refresh_cursor_paths(self):
+        participants = sorted({s.participant for s in self.sessions if s.fitts_filename and s.trials})
+        children = []
+        for participant in participants:
+            maximum = len(numbered_targets(self._participant_sessions(participant), 0))
+            if participant not in self._cursor_path_controls:
+                text = widgets.Text(
+                    value=f"1-{maximum}", description="Targets:", continuous_update=False,
+                    placeholder="e.g. 1-12 or 1,2,24",
+                    layout=widgets.Layout(width="min(95%, 320px)"),
+                )
+                up = widgets.Button(description="▲ Next", tooltip="Show only the next target path",
+                                    layout=widgets.Layout(width="90px"))
+                down = widgets.Button(description="▼ Previous", tooltip="Show only the previous target path",
+                                      layout=widgets.Layout(width="100px"))
+                show_all = widgets.Button(description="All", tooltip="Show every target path",
+                                          layout=widgets.Layout(width="60px"))
+                control = CursorPathControl(text, up, down, show_all, widgets.HTML(), widgets.HTML(), maximum)
+                self._cursor_path_controls[participant] = control
+                text.observe(lambda change, p=participant: self._render_cursor_paths(p), names="value")
+                up.on_click(lambda _button, p=participant: self._step_cursor_path(p, 1))
+                down.on_click(lambda _button, p=participant: self._step_cursor_path(p, -1))
+                show_all.on_click(lambda _button, p=participant: self._set_cursor_path_text(p, None))
+            control = self._cursor_path_controls[participant]
+            if maximum != control.maximum:
+                old_full = f"1-{control.maximum}"
+                control.maximum = maximum
+                if control.text.value.replace(" ", "") in ("", old_full, "all"):
+                    self._set_cursor_path_text(participant, None, render=False)
+            control.hint.value = (f'<span style="color:#555">{maximum} targets in total; '
+                                  "type ranges and/or lists, e.g. 1-12 or 1,2,24</span>")
+            self._render_cursor_paths(participant)
+            children.append(widgets.VBox([
+                widgets.HTML(f"<h4>{html.escape(participant)}</h4>"),
+                widgets.HBox([control.text, control.up, control.down, control.show_all],
+                             layout=widgets.Layout(flex_flow="row wrap", align_items="center")),
+                control.hint, control.output,
+            ]))
+        self.cursor_paths.children = tuple(children) if children else (
+            widgets.HTML("<p>No Fitts targets imported.</p>"),
+        )
+
+    def _participant_sessions(self, participant):
+        return [s for s in self.sessions if s.participant == participant]
+
+    def _set_cursor_path_text(self, participant, numbers, *, render=True):
+        control = self._cursor_path_controls[participant]
+        value = format_target_selection(numbers) if numbers else f"1-{control.maximum}"
+        if control.text.value == value:
+            if render:
+                self._render_cursor_paths(participant)
+        else:
+            # The text observer re-renders when render is wanted; otherwise suppress it.
+            control.suppress = not render
+            try:
+                control.text.value = value
+            finally:
+                control.suppress = False
+
+    def _step_cursor_path(self, participant, direction):
+        """Show one retained target: the next/previous after a single selection,
+        otherwise the first/last retained target in the current selection."""
+        control = self._cursor_path_controls[participant]
+        available = [number for number, *_rest, retained in numbered_targets(
+            self._participant_sessions(participant), self.exclude_targets.value) if retained]
+        if not available:
+            return
+        try:
+            selected = parse_target_selection(control.text.value, control.maximum)
+        except ValueError:
+            selected = []
+        if len(selected) == 1:
+            later = [n for n in available if (n - selected[0]) * direction > 0]
+            target = (min(later) if direction > 0 else max(later)) if later else selected[0]
+            if target not in available:
+                target = available[0] if direction > 0 else available[-1]
+        else:
+            within = [n for n in available if n in set(selected)] or available
+            target = within[0] if direction > 0 else within[-1]
+        self._set_cursor_path_text(participant, [target])
+
+    def _render_cursor_paths(self, participant):
+        control = self._cursor_path_controls[participant]
+        if control.suppress:
+            return
+        sessions = self._participant_sessions(participant)
+        try:
+            selection = parse_target_selection(control.text.value, control.maximum)
+            control.output.value = cursor_path_plot(sessions, selection, self.exclude_targets.value)
+        except (ValueError, TypeError) as error:
+            control.output.value = f'<p style="color:#b00020">Cannot draw cursor paths: {html.escape(str(error))}</p>'
+
+    @staticmethod
+    def _table_html(rows, filename, download_label, *, field_notes=None, extra_notes="", show_field_key=True):
+        columns = list(dict.fromkeys(key for row in rows for key in row))
+        header_cells = []
+        for column in columns:
+            description = (field_notes.get(column) if field_notes else None) or field_description(column)
+            compact_description = " ".join(description.split())
+            if len(compact_description) > 180:
+                compact_description = compact_description[:177].rsplit(" ", 1)[0] + "..."
+            title = f"{column}: {compact_description}"
+            header_cells.append(
+                f'<th title="{html.escape(title, quote=True)}" style="padding:4px;overflow-wrap:anywhere;'
+                f'font-weight:bold">{html.escape(column_label(column))}</th>'
+            )
+        header = "".join(header_cells)
         body = []
         for row in rows:
             cells = []
             for column in columns:
                 value = row.get(column)
+                misses = row.get("misses", row.get("targets_analysed", 0) - row.get("hits", 0))
                 text = (
                     "-" if value is None and column in (*DWELL_BEHAVIOUR_FIELDS, *NODWELL_FITTS_FIELDS)
-                    else format_number(value)
+                    else f"{100 * value:.1f}% ({misses}/{row['targets_analysed']})"
+                    if column == "error_rate" and value is not None
+                    else format_field(column, value)
                 )
                 cells.append(f"<td>{html.escape(text)}</td>")
             body.append("<tr>" + "".join(cells) + "</tr>")
@@ -841,7 +1114,7 @@ class NotebookViewer:
         )
         table = (
             '<div style="width:100%;max-width:100%;overflow-x:auto">'
-            '<table border="1" cellpadding="3" style="border-collapse:collapse;table-layout:auto;'
+            '<table class="report-data" border="1" cellpadding="3" style="border-collapse:collapse;table-layout:auto;'
             f'{sizing};font-size:11px;line-height:1.25">'
             f"<thead><tr>{header}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
         )
@@ -849,15 +1122,35 @@ class NotebookViewer:
         if filename is not None:
             encoded = base64.b64encode(summary_csv(rows).encode("utf-8-sig")).decode("ascii")
             download = f'<a download="{filename}" href="data:text/csv;base64,{encoded}">{download_label}</a>'
+        if not show_field_key:
+            return download + table
+        note_cell = "padding:8px 10px;vertical-align:top;text-align:left;border:1px solid #ccc;"
+        field_key = (
+            '<h4>Field key</h4>'
+            '<p>Definitions apply to both participant and individual-session rows. '
+            'Blank or &ldquo;-&rdquo; means unavailable, not zero. Measurements use 1 decimal place; '
+            'target counts are integers. Calculations retain precision. '
+            'Error rates display as % (misses/targets); CSVs retain unrounded fractions.</p>'
+            '<div style="max-width:100%;overflow-x:auto">'
+            '<table class="field-key" style="width:100%;border-collapse:collapse;table-layout:auto;'
+            'font-size:13px;line-height:1.5">'
+            f'<thead><tr><th scope="col" style="{note_cell}font-weight:bold;background:#eee">Field / CSV key</th>'
+            f'<th scope="col" style="{note_cell}font-weight:bold;background:#eee">Meaning and calculation</th></tr></thead><tbody>' +
+            "".join(
+                f'<tr style="background:{"#fafafa" if i % 2 else "#fff"}">'
+                f'<th scope="row" style="{note_cell}font-weight:normal;width:30%">'
+                f'<b>{html.escape(column_label(c))}</b><br>'
+                f'<code style="font-size:11px;overflow-wrap:anywhere;white-space:normal">{html.escape(c)}</code></th>'
+                f'<td style="{note_cell}overflow-wrap:break-word">'
+                f'{html.escape(field_notes[c] if field_notes and c in field_notes else field_description(c))}</td></tr>'
+                for i, c in enumerate(columns)
+            ) + '</tbody></table></div>'
+        )
+        if filename is None:
+            return table + field_key
         return (
             download + table +
-            '<details style="overflow-wrap:anywhere"><summary><b>Field key</b></summary>'
-            '<p>Blank means unavailable. Values are displayed/exported to 1 decimal place; calculations retain precision. '
-            "'-' in dwell behaviour or no-dwell fields means unavailable or not applicable, not zero. "
-            'Fitts measures pool retained trials across files, including misses. Path measures average only usable '
-            'trials, using sampled paths with the click point appended when needed.</p><dl>' +
-            "".join(
-                f'<dt><b>{html.escape(column_label(c))}</b> <code>{html.escape(c)}</code></dt>'
-                f'<dd>{html.escape(field_description(c))}</dd>' for c in columns
-            ) + '</dl></details>'
+            '<details class="table-notes" style="overflow-wrap:anywhere">'
+            '<summary><b>Table Notes</b></summary>' +
+            field_key + extra_notes + '</details>'
         )
