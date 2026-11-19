@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import ipywidgets as widgets
-from IPython.display import HTML, IFrame, clear_output, display
+from IPython.display import display
 
 from colab_session_viewer.data import (
     Session, format_number, format_field, initial_pose_reference_diagram, initial_pose_wireframes, participant_rows, participant_tables,
@@ -29,6 +29,21 @@ from colab_session_viewer.dwell import (
 )
 
 _FOLDER = Path(__file__).parent
+_TABLE_NUMBERS = {
+    "Session summary": 1,
+    "Initial head positions": 2,
+    "Range of movement stats": 3,
+    "Head movement stats": 4,
+    "Fitts targets and hits": 5,
+    "Fitts stats": 6,
+    "Dwell behaviour stats": 7,
+    "No-Dwell stats": 8,
+    "First-entry selection stats": 9,
+}
+
+
+def _table_heading(title: str) -> str:
+    return f"<h3>Table {_TABLE_NUMBERS[title]}: {html.escape(title)}</h3>"
 
 
 @dataclass
@@ -86,7 +101,7 @@ class NotebookViewer:
         self._changing = False
         self.participant = widgets.Dropdown(description="Participant:")
         self.session = widgets.Dropdown(description="Session:")
-        self.viewer = widgets.Output(layout=widgets.Layout(width="100%"))
+        self.viewer = widgets.HTML(layout=widgets.Layout(width="100%"))
         self.message = widgets.HTML()
         self.load_demo = widgets.Checkbox(value=False, description="Load Demo Data", indent=False)
         self.demo_directory = widgets.Text(
@@ -179,6 +194,8 @@ class NotebookViewer:
         self.archive_upload = widgets.FileUpload(accept=".zip", multiple=False, description="Dataset ZIP")
         self.archive_review = widgets.VBox()
         self.manifest_downloads = widgets.VBox()
+        self.individual_manifest_download = widgets.HTML()
+        self._individual_assignments: list[Assignment] = []
         self._pending_dataset: ArchiveDataset | None = None
         self._review_rows: list[dict] = []
         add = widgets.Button(description="Add session", button_style="primary")
@@ -197,6 +214,7 @@ class NotebookViewer:
             widgets.HBox([self.import_participant, self.import_session]),
             widgets.HBox([self.import_selection, self.import_dwell_time]),
             widgets.HBox([self.head_upload, self.fitts_upload, add]),
+            self.individual_manifest_download,
             widgets.HTML("<p>Upload a ZIP with or without a <code>manifest.csv</code>. Without a manifest, "
                          "recordings are detected and paired by shared timestamps. Review the suggestions, "
                          "label participants/sessions, then import and download your manifest.</p>"),
@@ -246,9 +264,9 @@ class NotebookViewer:
             self.target_review,
             self.fitts_calculation_review,
             self.fitts_table,
-            widgets.HTML("<h3>No-Dwell stats</h3>"),
+            widgets.HTML(_table_heading("No-Dwell stats")),
             self.nodwell_table,
-            widgets.HTML("<h3>First-entry selection stats</h3>"),
+            widgets.HTML(_table_heading("First-entry selection stats")),
             self.first_entry_table,
             widgets.HTML(
                 "<h3>Cumulative cursor paths</h3><p>One plot per participant across all their Fitts files. "
@@ -333,9 +351,7 @@ class NotebookViewer:
             self.load_demo.disabled = self.demo_directory.disabled = False
 
     def _show_empty(self):
-        with self.viewer:
-            clear_output(wait=True)
-            display(HTML("<p>Import recordings above, then choose a participant and session here.</p>"))
+        self.viewer.value = "<p>Import recordings above, then choose a participant and session here.</p>"
 
     def _notify(self, text, error=False):
         color = "#b00020" if error else "#256329"
@@ -348,6 +364,7 @@ class NotebookViewer:
             selection_method=selection_method, dwell_time_s=dwell_time_s,
         )
         self._add_sessions([session])
+        self._save_individual_manifest_link(session)
         return session
 
     def _add_sessions(self, sessions: list[Session]):
@@ -393,6 +410,7 @@ class NotebookViewer:
                 session.head_filename = head[0][0] if head else ""
                 session.fitts_filename = fitts[0][0] if fitts else ""
                 self._add_sessions([session])
+                self._save_individual_manifest_link(session)
             for upload in (self.head_upload, self.fitts_upload):
                 upload.value = {} if isinstance(upload.value, dict) else ()
         except (ValueError, TypeError, KeyError, OSError, csv.Error) as error:
@@ -501,8 +519,24 @@ class NotebookViewer:
         if notify:
             self._notify("ZIP review cancelled. Previously imported sessions are unchanged.")
 
-    def _save_manifest_link(self, assignments: list[Assignment]):
+    def _save_individual_manifest_link(self, session: Session):
+        self._individual_assignments.append(Assignment(
+            participant=session.participant, session=session.name,
+            head_file=session.head_filename, fitts_file=session.fitts_filename,
+            selection_method=session.selection_method, dwell_time_s=session.dwell_time_s,
+        ))
+        self._save_manifest_link(self._individual_assignments, individual=True)
+
+    def _save_manifest_link(self, assignments: list[Assignment], *, individual=False):
         encoded = base64.b64encode(manifest_csv(assignments).encode("utf-8-sig")).decode("ascii")
+        if individual:
+            self.individual_manifest_download.value = (
+                f'<p><a download="manifest.csv" href="data:text/csv;base64,{encoded}">'
+                'Download manifest.csv for individual recordings</a> '
+                '(includes all individually added sessions; put this at the root of a ZIP '
+                'alongside the original recordings, using unique filenames).</p>'
+            )
+            return
         number = len(self.manifest_downloads.children) + 1
         link = widgets.HTML(
             f'<p><a download="manifest.csv" href="data:text/csv;base64,{encoded}">'
@@ -540,18 +574,12 @@ class NotebookViewer:
         except ValueError as error:
             self._show_analysis_error(error)
             return
-        iframe = IFrame(
-            src="about:blank", width="100%", height=900,
-            extras=[
-                'title="Head and cursor session playback"',
-                'sandbox="allow-scripts"',
-                'style="width:100%;height:900px;border:0"',
-                f'srcdoc="{html.escape(document, quote=True)}"',
-            ],
+        self.viewer.value = (
+            '<iframe src="about:blank" width="100%" height="900" '
+            'title="Head and cursor session playback" sandbox="allow-scripts" '
+            'style="display:block;width:100%;height:900px;border:0" '
+            f'srcdoc="{html.escape(document, quote=True)}"></iframe>'
         )
-        with self.viewer:
-            clear_output(wait=True)
-            display(iframe)
 
     @property
     def exclusions(self):
@@ -591,9 +619,7 @@ class NotebookViewer:
         self.nodwell_table.value = ""
         self.first_entry_table.value = ""
         self.cursor_paths.children = ()
-        with self.viewer:
-            clear_output(wait=True)
-            display(widgets.HTML(self.table.value))
+        self.viewer.value = self.table.value
 
     def _refresh_table(self):
         self._refresh_target_review()
@@ -705,6 +731,7 @@ class NotebookViewer:
             ),
         }
         for label, table_rows in participant_tables(rows).items():
+            number = str(_TABLE_NUMBERS[label])
             sections = fitts_sections if label in (
                 "Fitts stats", "Fitts targets and hits", "Dwell behaviour stats",
             ) else head_sections
@@ -724,7 +751,7 @@ class NotebookViewer:
                     excluded_trial_ids=self._excluded_fitts_trials,
                 )
                 conditions = (
-                    '<details class="fitts-conditions"><summary><b>Fitts test conditions by file</b></summary>'
+                    f'<details class="fitts-conditions"><summary><b>Table {number}c: Fitts test conditions by file</b></summary>'
                     "<p>One row per participant/Fitts file, using only saved Fitts trials, not head data. "
                     "Lists amplitude settings, widths, block types and observed counts. "
                     "The files do not save the complete settings panel: observed repetitions and distinct "
@@ -733,7 +760,8 @@ class NotebookViewer:
                     "order determine actual movement distances. Targets per condition/repetition "
                     "are not the same as the number of repetitions per condition. "
                     "Analysed counts apply first-target and review exclusions.</p>" +
-                    (self._table_html(condition_rows, "fitts_test_conditions.csv", "Download Fitts conditions CSV")
+                    (self._table_html(condition_rows, "fitts_test_conditions.csv", "Download Fitts conditions CSV",
+                                      field_key_title=f"Table {number}c.1: Field key")
                      if condition_rows else "<p>No recorded Fitts trials.</p>") +
                     "</details>"
                 )
@@ -751,7 +779,7 @@ class NotebookViewer:
                 )
             else:
                 notes += self._notes_details(descriptions[label])
-            notes += self._session_details(session_rows) + conditions
+            notes += self._session_details(session_rows, number) + conditions
             if label == "Head movement stats":
                 diagnostics = [row for session in self.sessions
                                if (row := head_range_diagnostics(
@@ -761,19 +789,22 @@ class NotebookViewer:
                                )) is not None]
                 if diagnostics:
                     notes += (
-                        "<details><summary>Movement range checks by recording (analysed recording versus pointing task)</summary>" +
-                        self._table_html(diagnostics, "head_range_diagnostics.csv", "Download range diagnostics CSV") +
+                        f"<details><summary>Table {number}c: Movement range checks by recording "
+                        "(analysed recording versus pointing task)</summary>" +
+                        self._table_html(diagnostics, "head_range_diagnostics.csv", "Download range diagnostics CSV",
+                                         field_key_title=f"Table {number}c.1: Field key") +
                         "<p>Both checks respect head-recording opening, each-hold opening and target-interval exclusions and retain the original reference pose. "
                         "Pointing-task results use samples labelled task_phase = fitts_test; recordings "
                         "without those labels have no pointing-only estimate. A large heading change may also change "
                         "relative pitch/roll when the reference pose is tilted. Drift and unusually large values "
                         "are not automatically removed.</p></details>"
                     )
-            section = f"<h3>{label}</h3>"
+            section = _table_heading(label)
             if label == "Initial head positions":
                 section += initial_pose_reference_diagram()
             sections.append(section + self._table_html(
                 table_rows, filename, f"Download {label.lower()} CSV", extra_notes=notes,
+                field_key_title=f"Table {number}a: Field key",
             ))
             if label == "Initial head positions":
                 sections.append(initial_pose_wireframes(table_rows))
@@ -792,7 +823,7 @@ class NotebookViewer:
         return {"participant": row["participant"], "session": session.name,
                 **{key: value for key, value in row.items() if key != "participant"}}
 
-    def _session_details(self, session_rows):
+    def _session_details(self, session_rows, number: str):
         sessions = {(row["participant"], row["session"]) for row in session_rows}
         files = "".join(
             f"<li>{html.escape(s.participant)} / {html.escape(s.name)}: " +
@@ -801,7 +832,7 @@ class NotebookViewer:
             for s in self.sessions if (s.participant, s.name) in sessions
         )
         return (
-            '<div class="session-details"><h4>Individual sessions</h4>'
+            f'<div class="session-details"><h4>Table {number}b: Individual sessions</h4>'
             '<p>Same fields and settings as above, recalculated for each session. '
             'These inspection rows do not add observations to participant exports.</p>' +
             f"<ul>{files}</ul>" +
@@ -887,14 +918,16 @@ class NotebookViewer:
                   "unknown": "unknown selection method", "invalid_time": "MT shorter than dwell",
                   "missing_path": "missing cursor path", "no_entry": "no target contact",
                   "unsupported": "unsupported typing geometry"}
-        for first_entry, output, filename, download in (
-            (False, self.nodwell_table, "no_dwell_stats.csv", "Download No-Dwell stats CSV"),
-            (True, self.first_entry_table, "first_entry_stats.csv", "Download first-entry stats CSV"),
+        for first_entry, title, output, filename, download in (
+            (False, "No-Dwell stats", self.nodwell_table, "no_dwell_stats.csv", "Download No-Dwell stats CSV"),
+            (True, "First-entry selection stats", self.first_entry_table, "first_entry_stats.csv",
+             "Download first-entry stats CSV"),
         ):
             if not self.sessions:
                 output.value = ""
                 continue
             try:
+                number = str(_TABLE_NUMBERS[title])
                 rows, coverage = alternative_selection_rows(
                     self.sessions, self.exclude_targets.value, first_entry=first_entry,
                     excluded_trial_ids=self._excluded_fitts_trials,
@@ -970,14 +1003,15 @@ class NotebookViewer:
                 ]
                 extra_notes = (
                     self._notes_details(html.escape(scope)) +
-                    self._session_details(session_rows) +
-                    "<h4>Contributing targets and omissions</h4>" +
+                    self._session_details(session_rows, number) +
+                    f"<h4>Table {number}c: Contributing targets and omissions</h4>" +
                     "<p>Counts after first-target and review exclusions. Omission columns with zero "
                     "targets for every participant are hidden.</p>" +
                     self._table_html(coverage_rows, None, None, show_field_key=False)
                 )
                 output.value = self._table_html(
                     rows, filename, download, field_notes=notes, extra_notes=extra_notes,
+                    field_key_title=f"Table {number}a: Field key",
                 )
             except (ValueError, TypeError) as error:
                 output.value = f'<p style="color:#b00020">Cannot calculate selection statistics: {html.escape(str(error))}</p>'
@@ -1075,7 +1109,8 @@ class NotebookViewer:
             control.output.value = f'<p style="color:#b00020">Cannot draw cursor paths: {html.escape(str(error))}</p>'
 
     @staticmethod
-    def _table_html(rows, filename, download_label, *, field_notes=None, extra_notes="", show_field_key=True):
+    def _table_html(rows, filename, download_label, *, field_notes=None, extra_notes="", show_field_key=True,
+                    field_key_title="Field key"):
         columns = list(dict.fromkeys(key for row in rows for key in row))
         header_cells = []
         for column in columns:
@@ -1121,7 +1156,7 @@ class NotebookViewer:
             return download + table
         note_cell = "padding:8px 10px;vertical-align:top;text-align:left;border:1px solid #ccc;"
         field_key = (
-            '<h4>Field key</h4>'
+            f'<h4>{html.escape(field_key_title)}</h4>'
             '<p>Definitions apply to both participant and individual-session rows. '
             'Blank or &ldquo;-&rdquo; means unavailable, not zero. Measurements use 1 decimal place; '
             'target counts are integers. Calculations retain precision. '

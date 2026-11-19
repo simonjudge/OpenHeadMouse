@@ -70,37 +70,40 @@ def archive_bytes(manifest, files):
     return output.getvalue()
 
 
-def test_playback_uses_iframe_without_html_warning(tmp_path, monkeypatch):
-    import warnings
+def test_playback_replaces_iframe_on_each_session_change(tmp_path, monkeypatch):
     from html.parser import HTMLParser
-    from IPython.display import IFrame
     from colab_session_viewer.app import NotebookViewer, viewer_document
 
     viewer = NotebookViewer()
-    shown = []
-    monkeypatch.setattr("colab_session_viewer.app.display", shown.append)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        session = viewer.add_session("P", "Test", fitts_path=make_fitts(tmp_path))
-        viewer._render()
-    assert len(shown) == 2
-    assert all(isinstance(item, IFrame) for item in shown)
+    monkeypatch.setattr("colab_session_viewer.app.display", lambda *_: pytest.fail(
+        "Playback must update its existing widget, not display another output"
+    ))
 
     class FrameParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.frames = []
+
         def handle_starttag(self, tag, attrs):
             if tag == "iframe":
-                self.frame = dict(attrs)
+                self.frames.append(dict(attrs))
 
-    parser = FrameParser()
-    parser.feed(shown[-1]._repr_html_())
-    assert parser.frame["srcdoc"] == viewer_document(playback_payload(
-        session, initial_rest_exclude_s=1.0, head_opening_exclude_s=1.0,
-    ))
-    assert parser.frame["sandbox"] == "allow-scripts"
-    assert parser.frame["src"] == "about:blank"
-    assert parser.frame["width"] == "100%"
-    assert parser.frame["height"] == "900"
-    assert parser.frame["title"] == "Head and cursor session playback"
+    recording = make_fitts(tmp_path)
+    first = viewer.add_session("P", "First", fitts_path=recording)
+    second = viewer.add_session("P", "Second", fitts_path=recording)
+    for session in (first, second, first):
+        viewer.session.value = session.name
+        parser = FrameParser()
+        parser.feed(viewer.viewer.value)
+        frame, = parser.frames
+        assert frame["srcdoc"] == viewer_document(playback_payload(
+            session, initial_rest_exclude_s=1.0, head_opening_exclude_s=1.0,
+        ))
+        assert frame["sandbox"] == "allow-scripts"
+        assert frame["src"] == "about:blank"
+        assert frame["width"] == "100%"
+        assert frame["height"] == "900"
+        assert frame["title"] == "Head and cursor session playback"
 
 
 def test_exclusion_controls_explain_scopes_in_tooltips_and_keep_summaries_compact(tmp_path):
@@ -306,6 +309,8 @@ def test_notebook_has_separate_loading_and_session_cells():
     assert "NotebookViewer(" not in cells["viewer"]
     assert by_id["viewer"]["metadata"]["scrolled"] is False
     assert "View output fullscreen" in cells["session-viewer-heading"]
+    assert "## Display options" in cells["session-viewer-heading"]
+    assert "## Session Viewer" not in cells["session-viewer-heading"]
 
 
 def test_notebook_loading_and_viewing_cells_execute_and_keep_imports(tmp_path, monkeypatch):
@@ -914,21 +919,25 @@ def test_split_tables_keep_one_row_per_participant_and_rom_task_only(tmp_path):
     viewer._add_sessions([head, mouse])
     head_markup = viewer.table.value
     fitts_markup = viewer.fitts_table.value
-    assert "<h3>Initial head positions</h3>" in head_markup
-    assert "<h3>Fitts stats</h3>" not in head_markup
-    assert "<h3>Fitts stats</h3>" in fitts_markup
-    assert "<h3>Initial head positions</h3>" not in fitts_markup
+    assert "<h3>Table 2: Initial head positions</h3>" in head_markup
+    assert "<h3>Table 6: Fitts stats</h3>" not in head_markup
+    assert "<h3>Table 6: Fitts stats</h3>" in fitts_markup
+    assert "<h3>Table 2: Initial head positions</h3>" not in fitts_markup
     markup = head_markup + fitts_markup
     assert markup.count('class="report-data"') == 14
     assert markup.count('class="field-key"') == 8
     assert markup.count('class="session-details"') == 6
-    assert markup.count("<svg ") == 4  # Three reference views plus the participant pose.
-    assert markup.index("<svg ") > markup.index("<h3>Initial head positions</h3>")
-    assert markup.index("<svg ") < markup.index("<h3>Range of movement stats</h3>")
+    assert markup.count("<svg ") == 5  # Four reference views plus the participant pose.
+    assert markup.index("<svg ") > markup.index("<h3>Table 2: Initial head positions</h3>")
+    assert markup.index("<svg ") < markup.index("<h3>Table 3: Range of movement stats</h3>")
     assert "Neutral/Reference Head Pose" in markup
     assert "Webcam pitch/roll are relative to the camera, not gravity" in markup
-    for title in tables:
-        assert f"<h3>{title}</h3>" in markup
+    for number, title in enumerate(tables, start=1):
+        assert f"<h3>Table {number}: {title}</h3>" in markup
+        assert f"<h4>Table {number}a: Field key</h4>" in markup
+        assert f"<h4>Table {number}b: Individual sessions</h4>" in markup
+    assert "Table 4c: Movement range checks by recording" in head_markup
+    assert "Table 6c: Fitts test conditions by file" in fitts_markup
     for filename in ("session_summary.csv", "initial_head_positions.csv",
                      "range_of_movement_stats.csv", "fitts_stats.csv"):
         assert f'download="{filename}"' in markup
@@ -943,14 +952,15 @@ def test_split_tables_keep_one_row_per_participant_and_rom_task_only(tmp_path):
 
 
 def test_initial_pose_reference_diagram_uses_mesh_and_distinguishes_references():
+    import base64
     import xml.etree.ElementTree as ET
     from colab_session_viewer.data import initial_pose_reference_diagram
 
     markup = initial_pose_reference_diagram()
     root = ET.fromstring("<section>" + markup.replace("<br>", "<br/>") + "</section>")
     svgs = root.findall(".//{http://www.w3.org/2000/svg}svg")
-    assert len(svgs) == 3
-    for svg in svgs:
+    assert len(svgs) == 4
+    for svg in svgs[:3]:
         assert svg.attrib["role"] == "img"
         assert len(svg.findall(".//{http://www.w3.org/2000/svg}line")) == 3
         assert "0.0 deg" in svg.attrib["aria-label"]
@@ -965,10 +975,9 @@ def test_initial_pose_reference_diagram_uses_mesh_and_distinguishes_references()
     expected_stems = (
         ("M42 100 L42.0 70.0", "M178 100 L178.0 137.0"),
         ("M42 94 L42.0 66.0", "M178 106 L178.0 137.0"),
-        ("M78 160 L36.0 160.0", "M142 160 L184.0 160.0"),
     )
     ns = {"svg": "http://www.w3.org/2000/svg"}
-    for svg, angle, expected in zip(svgs, ("pitch", "roll", "yaw"), expected_stems):
+    for svg, angle, expected in zip(svgs[:2], ("pitch", "roll"), expected_stems):
         assert ANGLE_COLORS[angle] in ET.tostring(svg, encoding="unicode")
         paths = svg.findall(".//svg:path", ns)
         stems = [path for path in paths if path.attrib.get("fill") == "none"
@@ -977,6 +986,40 @@ def test_initial_pose_reference_diagram_uses_mesh_and_distinguishes_references()
         assert tuple(path.attrib["d"] for path in stems) == expected
         assert len(arrowheads) == 2
         assert all(path.attrib["d"].endswith(" Z") for path in arrowheads)
+        assert "min-height:3.2em" in markup and "min-height:2.4em" in markup
+    yaw_svg = svgs[2]
+    yaw_paths = yaw_svg.findall(".//svg:path", ns)
+    yaw_arcs = [path for path in yaw_paths if "marker-end" in path.attrib]
+    assert [path.attrib["d"] for path in yaw_arcs] == [
+        "M79.4 8.3 A40 40 0 0 0 70 34",
+        "M140.6 8.3 A40 40 0 0 1 150 34",
+    ]
+    assert all(path.attrib["stroke"] == ANGLE_COLORS["yaw"] for path in yaw_arcs)
+    assert all(path.attrib.get("marker-end") == "url(#neutral-pose-yaw-arrow)" for path in yaw_arcs)
+    assert "Yaw zero follows neutral/reference pose." in markup
+    axes_svg = svgs[3]
+    assert "View rotated to reveal the forward X arrow." in markup
+    axes_labels = {label.text: label for label in axes_svg.findall(".//svg:text", ns)}
+    for axis, angle in (("X", "roll"), ("Y", "pitch"), ("Z", "yaw")):
+        color = ANGLE_COLORS[angle]
+        assert axes_labels[f"+{axis}"].attrib["fill"] == color
+        assert axes_labels[f"-{axis}"].attrib["fill"] == color
+        assert any(path.get("fill") == color and path.get("d", "").endswith(" Z")
+                   for path in axes_svg.findall(".//svg:path", ns))
+    assert abs(float(axes_labels["+X"].attrib["x"]) - 120) > 20
+    link = root.find(".//a[@download='reference_head_pose.svg']")
+    assert link is not None
+    prefix = "data:image/svg+xml;base64,"
+    assert link.attrib["href"].startswith(prefix)
+    exported = ET.fromstring(base64.b64decode(link.attrib["href"][len(prefix):], validate=True))
+    views = exported.findall("svg:g", ns)
+    assert [view.findtext("svg:text", namespaces=ns) for view in views] == [
+        "Pitch = 0.0 deg", "Roll = 0.0 deg", "Yaw = 0.0 deg", "Reference axes (X/Y/Z)",
+    ]
+    for view, inline_svg in zip(views, svgs):
+        assert [ET.tostring(child) for child in view.find("svg:g", ns)] == [
+            ET.tostring(child) for child in inline_svg
+        ]
 
 
 def test_rom_table_does_not_fall_back_to_unlabelled_head_ranges(tmp_path):
@@ -1146,7 +1189,7 @@ def test_collapsed_reference_sources_and_complete_field_keys(tmp_path):
     assert parser.details
     assert all("open" not in attrs for attrs in parser.details)
     assert all("font-weight:bold" in attrs["style"] for attrs in parser.headers)
-    assert markup.count("<h4>Field key</h4>") == 8
+    assert markup.count(": Field key</h4>") == 8
     assert all(fields in parser.table_columns for fields in parser.field_keys)
     assert all(len(fields) == len(set(fields)) for fields in parser.field_keys)
     for table in participant_tables(viewer.summary_rows()).values():
@@ -1356,9 +1399,9 @@ def test_any_root_csv_manifest_imports_only_listed_recordings(tmp_path):
     viewer._add_sessions(sessions)
     markup = viewer.table.value + viewer.fitts_table.value
     assert markup.count("<h3>") == 6
-    for label in ("Session summary", "Initial head positions", "Range of movement stats",
-                  "Head movement stats", "Fitts targets and hits", "Fitts stats"):
-        assert f"<h3>{label}</h3>" in markup
+    for number, label in enumerate(("Session summary", "Initial head positions", "Range of movement stats",
+                                    "Head movement stats", "Fitts targets and hits", "Fitts stats"), start=1):
+        assert f"<h3>Table {number}: {label}</h3>" in markup
 
 
 def test_root_csv_without_manifest_columns_does_not_override_discovery(tmp_path):

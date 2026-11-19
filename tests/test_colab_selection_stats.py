@@ -89,19 +89,19 @@ def test_nodwell_and_first_entry_tables_share_main_fitts_layout():
     viewer = NotebookViewer()
     viewer.sessions = two_participants()
     viewer._refresh_table()
-    main = viewer.fitts_table.value.split("<h3>Fitts stats</h3>")[1]
+    main = viewer.fitts_table.value.split("<h3>Table 6: Fitts stats</h3>")[1]
     columns = list(csv_rows(main, "fitts_stats.csv")[0])
     renamed = [{"effective_width_px": "nominal_width_px",
                 "index_of_difficulty_bits": "first_entry_id_bits"}.get(c, c) for c in columns]
-    for markup, filename, expected in (
-        (viewer.nodwell_table.value, "no_dwell_stats.csv", columns),
-        (viewer.first_entry_table.value, "first_entry_stats.csv", renamed),
+    for number, markup, filename, expected in (
+        (8, viewer.nodwell_table.value, "no_dwell_stats.csv", columns),
+        (9, viewer.first_entry_table.value, "first_entry_stats.csv", renamed),
     ):
         assert list(csv_rows(markup, filename)[0]) == expected
         assert markup.count("<summary><b>Table Notes</b></summary>") == 1
         assert "Source files</" not in markup
-        for section in ("Field key", "Individual sessions", "Contributing targets and omissions"):
-            assert f"<h4>{section}</h4>" in markup
+        for suffix, section in zip("abc", ("Field key", "Individual sessions", "Contributing targets and omissions")):
+            assert f"<h4>Table {number}{suffix}: {section}</h4>" in markup
         assert "Calculation notes</h4>" not in markup
         assert "A.json" in markup and "B.json" in markup
         titles = re.findall(r'<th title="([^"]+)"', markup)

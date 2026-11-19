@@ -655,7 +655,10 @@ button with a start-mode dropdown to its right:
   the calibration overlay runs first and the trials only begin once the neutral pose has been
   captured and tracking is live. If the tracker is already running, the test starts straight away.
   It respects the main GUI's dwell-click enabled setting, sets **Access method** to OpenHeadMouse,
-  and is disabled when the Fitts window is run
+  and re-enables head-driven cursor control when the head exercises finish and the mouse task
+  begins, including resuming a tracker paused during the exercises. Dwell clicking remains
+  suppressed until that transition and then follows the main GUI's enabled setting.
+  This start mode is disabled when the Fitts window is run
   standalone (`python fitts_law/fitts_test.py`), where there is no OpenHeadMouse app to drive.
 
 Either way the head recording covers the whole run, so its samples can be labelled by phase (see

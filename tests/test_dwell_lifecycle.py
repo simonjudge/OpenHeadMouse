@@ -5,6 +5,8 @@ import queue
 import threading
 from types import SimpleNamespace
 
+import pytest
+
 
 class FakeMouseController:
     def __init__(self):
@@ -268,6 +270,78 @@ def test_escape_pause_and_resume_from_listener_thread_restarts_dwell(qt_app):
         qt_app.processEvents()
         assert app._dwell_click.is_running is True
     finally:
+        app.shutdown()
+
+
+@pytest.mark.parametrize("dwell_enabled", [False, True])
+def test_combined_headmouse_run_resumes_cursor_at_mouse_task(
+    qt_app, tmp_path, monkeypatch, dwell_enabled,
+):
+    from PySide6.QtCore import QRect
+    from core.headmouse import TrackingState
+    from fitts_law.fitts_test import FittsTestWindow, START_HEADMOUSE, TASK_COMBINED
+    from providers.base_provider import ProviderState
+
+    app = make_app(qt_app, dwell_enabled=dwell_enabled)
+    window = FittsTestWindow()
+    app._fitts_test_window = window
+    test_screen = SimpleNamespace(geometry=lambda: QRect(0, 0, 1600, 900))
+    monkeypatch.setattr(
+        window, "windowHandle", lambda: SimpleNamespace(screen=lambda: test_screen),
+    )
+    geometry_calls = []
+
+    def screen_geometry(screen, window_id=None):
+        geometry_calls.append(screen)
+        if screen is test_screen:
+            return 1600, 900, 0, 0
+        return 1920, 1080, 1920, 0
+
+    monkeypatch.setattr("main._screen_geometry", screen_geometry)
+    app._use_window_screen()
+    app._provider = SimpleNamespace(
+        state=ProviderState.RUNNING, output_queue=queue.Queue(), stop=lambda: None,
+    )
+    app.headmouse.set_tracking_state(True)
+    drive_cursor(app)
+    window.set_head_start_provider(app.start_head_tracking)
+    window.set_head_phase_provider(app.set_fitts_recording_phase)
+    window.set_dwell_provider(app.set_fitts_dwell_active)
+    window.set_mouse_task_provider(app.set_fitts_mouse_task_active)
+    window.set_recordings_dir_provider(lambda prompt: tmp_path)
+    monkeypatch.setattr(app.dsp, "process", lambda *args, **kwargs: (300.0, 200.0))
+    try:
+        window._task_combo.setCurrentText(TASK_COMBINED)
+        window._start_mode_combo.setCurrentText(START_HEADMOUSE)
+        window._on_start_clicked()
+        overlay = window._pretest_overlay
+        overlay.stop()
+        while overlay.current_stage["task"] == "initial_rest":
+            drive_cursor(app)
+            overlay._phase_start -= overlay.current_stage["duration_s"]
+            overlay._tick()
+
+        # A pause during the exercises must not carry into the mouse task.
+        app.headmouse.set_tracking_state(False)
+        app.window.controls.set_mouse_control_enabled(False)
+        while window._pretest_overlay is not None:
+            assert not app._dwell_click.is_running
+            overlay._phase_start -= overlay.current_stage["duration_s"]
+            overlay._tick()
+
+        assert window._canvas is not None
+        assert app.headmouse.state == TrackingState.ACTIVE
+        assert app.window.controls.mouse_control_enabled
+        assert geometry_calls[-1] is test_screen
+        assert (app.dsp.screen_width, app.dsp.screen_height) == (1600, 900)
+        assert (app.dsp.origin_x, app.dsp.origin_y) == (0, 0)
+        assert app.headmouse.cursor_position == (800.0, 450.0)
+        drive_cursor(app, 1.0)
+        assert app.headmouse._mouse.position == (300.0, 200.0)
+        assert app._dwell_click.is_running is dwell_enabled
+        assert app._dwell_armed is dwell_enabled
+    finally:
+        window.close()
         app.shutdown()
 
 

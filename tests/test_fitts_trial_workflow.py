@@ -283,6 +283,52 @@ def test_closing_during_startup_does_not_reopen_when_tracker_becomes_ready(qt_ap
     assert not window._waiting_for_headmouse
 
 
+@pytest.mark.parametrize("outcome", ["ready", "failed", "closed"])
+def test_headmouse_handoff_waits_for_tracking_before_starting_mouse_task(
+    qt_app, monkeypatch, outcome,
+):
+    window = FittsTestWindow()
+    pending = []
+    gates = []
+    warnings = []
+    monkeypatch.setattr(
+        "fitts_law.fitts_test.QMessageBox.warning",
+        lambda *args: warnings.append(args),
+    )
+
+    def start(ready, mouse_control):
+        assert mouse_control
+        pending.append(ready)
+        if len(pending) == 1:
+            ready(True)
+        return True
+
+    window.set_head_start_provider(start)
+    window.set_mouse_task_provider(gates.append)
+    try:
+        window._start_mode_combo.setCurrentText(START_HEADMOUSE)
+        window._task_combo.setCurrentText(TASK_COMBINED)
+        window._on_start_clicked()
+        _finish_head_tasks(window)
+
+        assert len(pending) == 2
+        assert window._waiting_for_headmouse
+        assert window._canvas is None
+        assert True not in gates
+        if outcome == "closed":
+            window.close()
+        pending[-1](outcome != "failed")
+
+        assert not window._waiting_for_headmouse
+        assert (window._canvas is not None) is (outcome == "ready")
+        assert (True in gates) is (outcome == "ready")
+        assert bool(warnings) is (outcome == "failed")
+        if outcome == "closed":
+            assert not window.isVisible()
+    finally:
+        window.close()
+
+
 def test_head_only_hides_all_mouse_task_controls(qt_app):
     window = FittsTestWindow()
     try:

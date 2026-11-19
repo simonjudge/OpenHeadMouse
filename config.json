@@ -7,14 +7,14 @@
   "hotkeys": {
     "toggle_tracking": "<esc>"
   },
-  "active_provider": "sony",
+  "active_provider": "ximu3",
   "ui": {
     "recording_enabled": false,
-    "mouse_control_enabled": true,
-    "calibration_enabled": true,
+    "mouse_control_enabled": false,
+    "calibration_enabled": false,
     "dwell_click": {
-      "enabled": true,
-      "dwell_time_s": 1.8,
+      "enabled": false,
+      "dwell_time_s": 1.6,
       "movement_tolerance_px": 32.0,
       "resume_time_s": 0.3,
       "ring_color": "#0055ff",
@@ -74,7 +74,23 @@
     "xiao_ble": {
       "service_uuid": "b28a0001-7f2d-4c9a-9b23-1d43c6e8a501",
       "characteristic_uuid": "b28a0002-7f2d-4c9a-9b23-1d43c6e8a501",
-      "device_to_head": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+      "device_to_head": [
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ]
+      ],
       "sample_timeout_s": 1.0,
       "scan_timeout_s": 2.0
     },
@@ -158,7 +174,7 @@
         "deadband_deg_s": 0.0
       },
       "one_euro_filter": {
-        "enabled": true,
+        "enabled": false,
         "min_cutoff": 2.0,
         "beta": 0.5,
         "d_cutoff": 1.0
@@ -259,7 +275,7 @@
     }
   },
   "recorder": {
-    "base_dir": null,
+    "base_dir": "C:\\Users\\judges.BDGH\\Documents\\sessions\\SJ",
     "output_dir": "sessions/",
     "format": "json"
   }

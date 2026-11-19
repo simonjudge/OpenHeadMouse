@@ -178,7 +178,7 @@ def test_condition_inventory_uses_saved_fields_and_observed_counts_before_exclus
     viewer._refresh_table()
     markup = viewer.fitts_table.value
     assert '<details class="fitts-conditions">' in markup
-    assert markup.index("<summary><b>Table Notes</b></summary>", markup.index("<h3>Fitts stats</h3>")) < markup.index('<details class="fitts-conditions">')
+    assert markup.index("<summary><b>Table Notes</b></summary>", markup.index("<h3>Table 6: Fitts stats</h3>")) < markup.index('<details class="fitts-conditions">')
     assert 'class="fitts-conditions" open' not in markup
     assert "&lt;run&gt;.json" in markup
     assert "fitts_test_conditions.csv" in markup

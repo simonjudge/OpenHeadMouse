@@ -194,6 +194,7 @@ def _make_tracking_app(*, recording: bool, mouse_control: bool) -> App:
     )
     app._tracking_ready_callbacks = []
     app._calibrating = False
+    app._fitts_rest_calibrating = False
     app._ximu_waiting_to_start = False
     app._sony_waiting_to_start = False
     app._last_sample = SimpleNamespace(timestamp=1.0)
@@ -234,6 +235,30 @@ def test_start_head_tracking_enables_mouse_control_for_a_headmouse_run(qt_app):
     assert ready == [True]
     assert app.window.controls.recording_enabled is True
     assert app.window.controls.mouse_control_enabled is True
+
+
+@pytest.mark.parametrize(
+    ("calibrating", "rest_calibrating"), [(False, False), (True, False), (False, True)],
+)
+def test_start_head_tracking_resumes_paused_tracker_unless_calibrating(
+    qt_app, calibrating, rest_calibrating,
+):
+    app = _make_tracking_app(recording=True, mouse_control=True)
+    app._calibrating = calibrating
+    app._fitts_rest_calibrating = rest_calibrating
+    app.headmouse.state = TrackingState.PAUSED
+    app.headmouse.set_tracking_state = lambda enabled: setattr(
+        app.headmouse, "state", TrackingState.ACTIVE if enabled else TrackingState.PAUSED
+    )
+    ready = []
+
+    assert app.start_head_tracking(ready.append) is True
+
+    waiting_for_calibration = calibrating or rest_calibrating
+    assert app.headmouse.state == (
+        TrackingState.PAUSED if waiting_for_calibration else TrackingState.ACTIVE
+    )
+    assert ready == ([] if waiting_for_calibration else [True])
 
 
 def test_start_head_tracking_waits_for_a_live_provider_sample(qt_app):

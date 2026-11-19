@@ -585,6 +585,13 @@ class App:
 
                 scan_results = queue.Queue()
                 scanning = False
+                user_selected_device = False
+
+                def remember_device_selection():
+                    nonlocal user_selected_device
+                    user_selected_device = True
+
+                combo.activated.connect(remember_device_selection)
 
                 def refresh():
                     nonlocal scanning
@@ -623,7 +630,9 @@ class App:
                     ):
                         combo.addItem(direct_device.name, userData=direct_device)
                     ok_button.setEnabled(combo.count() > 0)
-                    if selected is not None:
+                    if selected is not None and (
+                        selected != direct_device or user_selected_device
+                    ):
                         for i in range(combo.count()):
                             if combo.itemData(i) == selected:
                                 combo.setCurrentIndex(i)
@@ -710,20 +719,21 @@ class App:
                 f"Failed to connect to provider:\n\n{str(e)}"
             )
 
-    def _use_window_screen(self) -> None:
-        """Use and center on the display that currently contains the app window."""
+    def _use_window_screen(self, window=None) -> None:
+        """Use and center on the display containing the given window or main app."""
         from PySide6.QtGui import QGuiApplication
         from core.headmouse import ScreenBounds
 
-        window_handle = self.window.windowHandle()
+        window = self.window if window is None else window
+        window_handle = window.windowHandle()
         screen = window_handle.screen() if window_handle is not None else None
         if screen is None:
-            screen = QGuiApplication.screenAt(self.window.frameGeometry().center())
+            screen = QGuiApplication.screenAt(window.frameGeometry().center())
         screen = screen or QGuiApplication.primaryScreen()
         if screen is None:
-            raise RuntimeError("Could not determine the display containing the OpenHeadMouse window")
+            raise RuntimeError("Could not determine the display containing the tracking window")
 
-        window_id = int(self.window.winId()) if sys.platform == "win32" else None
+        window_id = int(window.winId()) if sys.platform == "win32" else None
         width, height, origin_x, origin_y = _screen_geometry(screen, window_id)
         self._tracking_screen_geometry = screen.geometry()
         print(f"[Screen] Tracking display: {width}x{height} at ({origin_x}, {origin_y})")
@@ -830,6 +840,9 @@ class App:
 
         Returns False if the provider could not be started at all.
         """
+        from core.headmouse import TrackingState
+        from providers.base_provider import ProviderState
+
         if on_ready is not None:
             self._tracking_ready_callbacks.append(on_ready)
 
@@ -864,6 +877,13 @@ class App:
                     cb for cb in self._tracking_ready_callbacks if cb is not on_ready
                 ]
                 return False
+        elif (
+            self.headmouse.state == TrackingState.PAUSED
+            and self._provider.state in (ProviderState.RUNNING, ProviderState.TRACKING_LOST)
+            and not self._calibrating
+            and not self._fitts_rest_calibrating
+        ):
+            self.headmouse.set_tracking_state(True)
 
         self._flush_tracking_ready()
         if self.window.controls.recording_enabled:
@@ -1527,6 +1547,15 @@ class App:
 
         None returns dwell control to the normal OpenHeadMouse lifecycle.
         """
+        if (
+            active is True
+            and self._provider is not None
+            and self.window.controls.mouse_control_enabled
+            and self._fitts_test_window is not None
+        ):
+            self._use_window_screen(self._fitts_test_window)
+            self.dsp.reset(position=self.headmouse.cursor_position)
+            self._set_cursor_driven(False)
         self._fitts_mouse_task_active = active
         self._sync_dwell_click()
 

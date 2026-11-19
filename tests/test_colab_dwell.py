@@ -286,8 +286,8 @@ def test_dwell_tables_are_separate_in_main_session_results_and_exports():
     assert list(tables["Dwell behaviour stats"][0]) == ["participant", *DWELL_BEHAVIOUR_FIELDS]
     assert tables["Dwell behaviour stats"][0]["dwell_head_trial_count"] is None
     assert tables["Dwell behaviour stats"][1]["dwell_head_trial_count"] == 0
-    main_fitts, main_dwell = viewer.fitts_table.value.split("<h3>Fitts stats</h3>")[1].split(
-        "<h3>Dwell behaviour stats</h3>",
+    main_fitts, main_dwell = viewer.fitts_table.value.split("<h3>Table 6: Fitts stats</h3>")[1].split(
+        "<h3>Table 7: Dwell behaviour stats</h3>",
     )
     assert 'title="dwell_head_trial_count:' not in main_fitts
     assert 'title="mtnodwell_s:' not in main_fitts

@@ -1260,6 +1260,7 @@ def initial_pose_reference_diagram(mesh_path: Path | None = None) -> str:
     vertices, _, edges = load_obj_wireframe(mesh_path or OBJ_PATH)
     vertices = centre_and_scale(vertices)
     cards = []
+    export_views = []
     definitions = (
         ("Pitch = 0.0 deg", "Side view: forward axis is horizontal.",
          "IMU: gravity-level. Camera: level relative to the camera.",
@@ -1268,7 +1269,7 @@ def initial_pose_reference_diagram(mesh_path: Path | None = None) -> str:
          "IMU: no sideways tilt from gravity. Camera: level in the image.",
          (0, 1), "roll"),
         ("Yaw = 0.0 deg", "Top view: facing the neutral/reference pose.",
-         "Yaw zero follows the selected neutral/reference pose.",
+         "Yaw zero follows neutral/reference pose.",
          (0, 2), "yaw"),
     )
 
@@ -1288,6 +1289,21 @@ def initial_pose_reference_diagram(mesh_path: Path | None = None) -> str:
             f'L{base_x - side_x:.1f} {base_y - side_y:.1f} Z" fill="{color}" stroke="{color}"/>'
             f'<text x="{label_x}" y="{label_y}" fill="{color}" font-size="14" '
             f'font-weight="bold">{sign}</text>'
+        )
+
+    def add_view(title, description, note, diagram):
+        export_views.append(
+            f'<g transform="translate({16 + 232 * len(cards)} 48)">'
+            f'<text x="110" y="0" text-anchor="middle" font-size="15" font-weight="bold">{title}</text>'
+            f'<g transform="translate(0 10)">{diagram}</g></g>'
+        )
+        cards.append(
+            '<figure style="margin:8px;flex:0 1 240px;max-width:100%">'
+            f'<figcaption style="min-height:3.2em;line-height:1.35"><b>{title}</b><br>{description}</figcaption>'
+            f'<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{title} reference diagram" '
+            'viewBox="0 0 220 230" style="display:block;width:220px;height:230px;max-width:100%">'
+            f'{diagram}</svg>'
+            f'<p style="min-height:2.4em;font-size:11px">{note}</p></figure>'
         )
 
     for title, description, note, axes, angle in definitions:
@@ -1317,21 +1333,41 @@ def initial_pose_reference_diagram(mesh_path: Path | None = None) -> str:
                 + direction_arrow((178, 106), (178, 145), "-", (172, 160))
             )
         else:
+            # The arcs run from 50 to 90 degrees on either side of the zero line.
             guides = (
                 '<path d="M110 185 V15" stroke="#777" stroke-dasharray="4 3"/>'
                 '<text x="116" y="24" font-size="12" font-weight="bold">0</text>'
-                + direction_arrow((78, 160), (28, 160), "+", (22, 153))
-                + direction_arrow((142, 160), (192, 160), "-", (195, 153))
+                '<defs><marker id="neutral-pose-yaw-arrow" viewBox="0 0 10 10" '
+                'refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">'
+                f'<path d="M0 0 L10 5 L0 10 Z" fill="{color}"/></marker></defs>'
+                f'<path d="M79.4 8.3 A40 40 0 0 0 70 34" fill="none" stroke="{color}" '
+                'stroke-width="2" marker-end="url(#neutral-pose-yaw-arrow)"/>'
+                f'<text x="54" y="35" fill="{color}" font-size="14" font-weight="bold">+</text>'
+                f'<path d="M140.6 8.3 A40 40 0 0 1 150 34" fill="none" stroke="{color}" '
+                'stroke-width="2" marker-end="url(#neutral-pose-yaw-arrow)"/>'
+                f'<text x="158" y="35" fill="{color}" font-size="14" font-weight="bold">-</text>'
             )
-        cards.append(
-            '<figure style="margin:8px;flex:0 1 240px;max-width:100%">'
-            f'<figcaption><b>{title}</b><br>{description}</figcaption>'
-            f'<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{title} reference diagram" '
-            'viewBox="0 0 220 230" style="width:100%;max-width:220px">'
-            f'<g fill="none" stroke="#555" stroke-width="0.6">{lines}</g>'
-            f'{guides}</svg>'
-            f'<p style="font-size:11px">{note}</p></figure>'
-        )
+        add_view(title, description, note, f'<g fill="none" stroke="#555" stroke-width="0.6">{lines}</g>{guides}')
+    view_rotation = head_rotation_to_mesh_frame(rotation_from_quaternion(
+        *qm.from_euler_zyx(*np.radians([28, 16, 0]))
+    ))
+    wireframe = _pose_wireframe_markup(vertices, edges, view_rotation)
+    axes_note = "View rotated to reveal the forward X arrow."
+    add_view("Reference axes (X/Y/Z)", "Neutral pose; only the view is rotated.", axes_note,
+             f'<g transform="translate(-10 0)">{wireframe}</g>')
+    width = 20 + 232 * len(cards)
+    export_svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="296" viewBox="0 0 {width} 296" '
+        'font-family="sans-serif" role="img" aria-labelledby="reference-pose-title">'
+        '<title id="reference-pose-title">Neutral/Reference Head Pose</title>'
+        '<rect width="100%" height="100%" fill="white"/>'
+        f'<text x="{width // 2}" y="25" text-anchor="middle" font-size="19" font-weight="bold">'
+        'Neutral/Reference Head Pose</text>'
+        + "".join(export_views)
+        + f'<text x="{126 + 232 * (len(cards) - 1)}" y="280" text-anchor="middle" font-size="11">'
+        f'{axes_note}</text></svg>'
+    )
+    encoded = base64.b64encode(export_svg.encode("utf-8")).decode("ascii")
     return (
         '<h4>Neutral/Reference Head Pose</h4>'
         '<p>Dashed lines marked 0 show the neutral/reference direction; colored arrows mark positive and negative rotation. '
@@ -1339,8 +1375,57 @@ def initial_pose_reference_diagram(mesh_path: Path | None = None) -> str:
         'Camera axes follow the camera, so a tilted camera does not define gravity-level. '
         'xIMU3 yaw may be magnetic when enabled and reliable; AirPods yaw has an arbitrary heading reference. '
         'Participant wireframes show the neutral/reference pose facing straight out of the screen.</p>'
+        f'<a download="reference_head_pose.svg" href="data:image/svg+xml;base64,{encoded}">'
+        'Download reference head pose (SVG)</a>'
         '<div style="display:flex;flex-wrap:wrap">' + "".join(cards) + '</div>'
     )
+
+
+def _pose_wireframe_markup(vertices: np.ndarray, edges, rotation: np.ndarray,
+                           angles: list[float] | None = None) -> str:
+    """Draw signed axes with measured angles, or arrowheads for the reference view."""
+    rotated = vertices @ rotation.T
+    scale = 240 / np.maximum(0.2, 4 - rotated[:, 2])
+    projected = np.column_stack((120 + rotated[:, 0] * scale, 110 - rotated[:, 1] * scale))
+    lines = "".join(
+        f'<line x1="{projected[a, 0]:.1f}" y1="{projected[a, 1]:.1f}" '
+        f'x2="{projected[b, 0]:.1f}" y2="{projected[b, 1]:.1f}"/>'
+        for a, b in edges
+    )
+    axes_markup = []
+    for axis, direction, color in (
+        ("X", [0, 0, 1], ANGLE_COLORS["roll"]),
+        ("Y", [1, 0, 0], ANGLE_COLORS["pitch"]),
+        ("Z", [0, 1, 0], ANGLE_COLORS["yaw"]),
+    ):
+        endpoints = np.array([direction, -np.array(direction)]) * 1.3 @ rotation.T
+        axis_scale = 240 / np.maximum(0.2, 4 - endpoints[:, 2])
+        points = np.column_stack((120 + endpoints[:, 0] * axis_scale, 110 - endpoints[:, 1] * axis_scale))
+        for sign, (x, y) in zip(("+", "-"), points):
+            dash = ' stroke-dasharray="3 2"' if sign == "-" else ""
+            axes_markup.append(
+                f'<path d="M120 110 L{x:.1f} {y:.1f}" fill="none" stroke="{color}" '
+                f'stroke-width="1.8"{dash}/>'
+            )
+            if angles is None and sign == "+":
+                heading = math.degrees(math.atan2(y - 110, x - 120))
+                axes_markup.append(
+                    f'<path d="M0 0 L-7 -3 L-7 3 Z" fill="{color}" '
+                    f'transform="translate({x:.1f} {y:.1f}) rotate({heading:.1f})"/>'
+                )
+            axes_markup.append(
+                f'<text x="{x:.1f}" y="{y - 4:.1f}" fill="{color}" font-size="11" '
+                f'font-weight="bold" text-anchor="middle">{sign}{axis}</text>'
+            )
+            if angles is not None and sign == "+" and axis in ("Y", "Z"):
+                name, value = ("Pitch", angles[1]) if axis == "Y" else ("Yaw", angles[0])
+                anchor = "start" if x >= 120 else "end"
+                label_x = x + 4 if x >= 120 else x - 4
+                axes_markup.append(
+                    f'<text x="{label_x:.1f}" y="{y + 12:.1f}" fill="{color}" font-size="11" '
+                    f'text-anchor="{anchor}">{name} {value:+.1f} deg</text>'
+                )
+    return f'<g fill="none" stroke="#333" stroke-width="0.7">{lines}</g>' + "".join(axes_markup)
 
 
 def initial_pose_wireframes(rows: list[dict], mesh_path: Path | None = None) -> str:
@@ -1378,45 +1463,12 @@ def initial_pose_wireframes(rows: list[dict], mesh_path: Path | None = None) -> 
         rotation = head_rotation_to_mesh_frame(rotation_from_quaternion(
             *qm.from_euler_zyx(*np.radians(angles))
         ))
-        rotated = vertices @ rotation.T
-        scale = 240 / np.maximum(0.2, 4 - rotated[:, 2])
-        projected = np.column_stack((120 + rotated[:, 0] * scale, 110 - rotated[:, 1] * scale))
-        lines = "".join(
-            f'<line x1="{projected[a, 0]:.1f}" y1="{projected[a, 1]:.1f}" '
-            f'x2="{projected[b, 0]:.1f}" y2="{projected[b, 1]:.1f}"/>'
-            for a, b in edges
-        )
-        axes_markup = []
-        for axis, direction, color in (
-            ("X", [0, 0, 1], ANGLE_COLORS["roll"]),
-            ("Y", [1, 0, 0], ANGLE_COLORS["pitch"]),
-            ("Z", [0, 1, 0], ANGLE_COLORS["yaw"]),
-        ):
-            endpoints = np.array([direction, -np.array(direction)]) * 1.3 @ rotation.T
-            axis_scale = 240 / np.maximum(0.2, 4 - endpoints[:, 2])
-            points = np.column_stack((120 + endpoints[:, 0] * axis_scale, 110 - endpoints[:, 1] * axis_scale))
-            for sign, (x, y) in zip(("+", "-"), points):
-                dash = ' stroke-dasharray="3 2"' if sign == "-" else ""
-                axes_markup.append(
-                    f'<path d="M120 110 L{x:.1f} {y:.1f}" fill="none" stroke="{color}" '
-                    f'stroke-width="1.8"{dash}/>'
-                    f'<text x="{x:.1f}" y="{y - 4:.1f}" fill="{color}" font-size="11" '
-                    f'font-weight="bold" text-anchor="middle">{sign}{axis}</text>'
-                )
-                if sign == "+" and axis in ("Y", "Z"):
-                    name, value = ("Pitch", angles[1]) if axis == "Y" else ("Yaw", angles[0])
-                    anchor = "start" if x >= 120 else "end"
-                    label_x = x + 4 if x >= 120 else x - 4
-                    axes_markup.append(
-                        f'<text x="{label_x:.1f}" y="{y + 12:.1f}" fill="{color}" font-size="11" '
-                        f'text-anchor="{anchor}">{name} {value:+.1f} deg</text>'
-                    )
         caption = " / ".join(format_number(angle) for angle in angles)
         svg = (
             f'<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{participant} initial head pose" '
             f'viewBox="-60 0 360 225" style="width:360px;max-width:100%">'
             f'<title>{participant}: Yaw / pitch / roll: {caption} deg</title>'
-            f'<g fill="none" stroke="#333" stroke-width="0.7">{lines}</g>{"".join(axes_markup)}'
+            f'{_pose_wireframe_markup(vertices, edges, rotation, angles)}'
             '</svg>'
         )
         encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")

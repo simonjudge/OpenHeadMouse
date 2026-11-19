@@ -98,6 +98,8 @@ The loading cell displays only import controls, ZIP review and manifest download
 The separate session-viewer cell displays the single head/cursor viewer and summary
 tables. Both share the same `viewer` instance; loading more data updates the viewer
 without rerunning its cell, and rerunning either display cell keeps the collection.
+Table numbers stay fixed when settings change. Table 7 is reserved for optional
+dwell behaviour results; tables inside **Table Notes** use suffixes such as **Table 6a**.
 The viewer cell disables nested output scrolling where the notebook frontend
 honours that setting. For full-screen output in Colab, run and select the viewer
 cell, then choose **View output fullscreen** in the **Command palette**. In
@@ -105,6 +107,8 @@ JupyterLab, right-click the output and choose **Create New View for Output** to
 open it in a separate tab. The notebook cannot reliably enter browser full screen
 automatically.
 Restart the kernel to pick up code changes to an existing viewer instance.
+If an older run left duplicate playback frames, clear the notebook outputs,
+then restart the kernel and rerun the setup, loading and session-viewer cells.
 For Python use, `viewer.show_loading()` and `viewer.show_session()` display those
 blocks independently; `viewer.show()` still displays the combined interface.
 Import
@@ -123,6 +127,9 @@ the reference pose is shown above the mesh. Saved recentering takes priority
 over calibration, followed by labelled initial rest, then up to the first 30
 samples within one second. Pitch is red, yaw green and roll blue throughout
 the viewer's meshes, reference diagrams and angle graphs.
+The neutral/reference pose diagrams include an angled X/Y/Z wireframe so the
+forward X arrow is visible. The rotation is for display only, and the reference
+SVG download includes all four views.
 
 Terms used in headings and field descriptions:
 
@@ -182,6 +189,12 @@ for public sharing and follow the notebook runtime's privacy policy.
 For each session, enter participant/session names, upload a head JSON/CSV, a
 Fitts JSON or a matching pair, then click **Add session**. Repeat for any number
 of participants/tests. Head and Fitts files from the same test form one session.
+After the first successful import, **Download manifest.csv for individual recordings**
+appears below these controls and updates with every individually added session
+(including `viewer.add_session(...)`). It preserves participant/session labels,
+original filenames, selection methods and dwell durations. To reuse it, put it at
+the root of a ZIP alongside the original recordings, with unique filenames.
+ZIP imports keep their own separate manifest downloads.
 Pairs require shared host timestamps and at least two head samples inside the
 test's time range, just like desktop synchronized playback. Legacy files can
 be viewed separately, not artificially synchronized. Head-only exercises

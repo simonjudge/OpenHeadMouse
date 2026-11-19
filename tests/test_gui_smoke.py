@@ -145,6 +145,68 @@ def test_xiao_ble_start_waits_for_first_sample_before_calibration(qt_app, tmp_pa
         app.shutdown()
 
 
+@pytest.mark.parametrize("connection_type", ["usb", "wifi_ap", None])
+def test_ximu3_picker_prefers_discovered_devices_and_preserves_user_selection(
+    qt_app, monkeypatch, connection_type,
+):
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QComboBox, QDialog, QPushButton
+    from main import App, load_config
+    from providers import ximu3_provider
+
+    devices = [] if connection_type is None else [
+        ximu3_provider.DiscoveredDevice(
+            name="Detected IMU", connection_type=connection_type,
+            port_name="COM7", ip_address="192.168.1.2",
+        )
+    ]
+    monkeypatch.setattr(ximu3_provider, "discover_ximu3_devices", lambda **kwargs: devices)
+    app = App(
+        copy.deepcopy(load_config()), auto_start_listeners=False,
+        mouse_controller=FakeMouseController(),
+    )
+    checked = []
+
+    def inspect_picker(dialog):
+        combo = dialog.findChild(QComboBox)
+        refresh = next(
+            button for button in dialog.findChildren(QPushButton)
+            if button.text() == "Refresh devices"
+        )
+
+        def wait_for_scan():
+            deadline = time.monotonic() + 2.0
+            while not refresh.isEnabled() and time.monotonic() < deadline:
+                QTest.qWait(20)
+            assert refresh.isEnabled()
+
+        wait_for_scan()
+        if devices:
+            assert combo.itemData(0) == devices[0]
+            assert combo.currentData() == devices[0]
+            assert combo.itemText(combo.count() - 1).startswith("Configured Wi-Fi:")
+            combo.setCurrentIndex(combo.count() - 1)
+            combo.activated.emit(combo.currentIndex())
+            selected = combo.currentData()
+            refresh.click()
+            wait_for_scan()
+            assert combo.currentData() == selected
+            assert combo.itemData(0) == devices[0]
+        else:
+            assert combo.count() == 1
+            assert combo.currentText().startswith("Configured Wi-Fi:")
+        checked.append(True)
+        return QDialog.Rejected
+
+    monkeypatch.setattr(QDialog, "exec", inspect_picker)
+    try:
+        app._on_start_requested("ximu3")
+        assert checked == [True]
+        assert app._provider is None
+    finally:
+        app.shutdown()
+
+
 def test_ximu3_ignore_magnetometer_button_visibility_and_signal(qt_app):
     from gui.setup_gui import SetupPanel
 

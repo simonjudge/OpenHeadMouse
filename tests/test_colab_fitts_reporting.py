@@ -144,7 +144,7 @@ def test_every_report_table_header_has_a_short_field_name_and_description():
     viewer = NotebookViewer()
     viewer.sessions = [recording()]
     viewer._refresh_table()
-    assert "<h3>No-Dwell stats</h3>" in "".join(
+    assert "<h3>Table 8: No-Dwell stats</h3>" in "".join(
         getattr(child, "value", "") for child in viewer.session_widget.children
     )
     markup = (

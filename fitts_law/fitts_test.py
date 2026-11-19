@@ -332,6 +332,7 @@ class FittsTestWindow(QMainWindow):
         # recordings folder (and it can be asked for when first needed).
         self._recordings_dir_provider = None
         self._waiting_for_headmouse = False
+        self._start_mouse_task_when_ready = False
         self._head_tracking_started = False
         self._dwell_provider = None
         self._dwell_service = None
@@ -833,7 +834,9 @@ class FittsTestWindow(QMainWindow):
             self._head_tracking_started = False
             self._stop_run_input()
 
-    def _request_head_tracking(self, *, mouse_control: bool) -> bool:
+    def _request_head_tracking(
+        self, *, mouse_control: bool, start_mouse_task: bool = False,
+    ) -> bool:
         """Ask the host app to bring head tracking up; True while we wait for it.
 
         `mouse_control` decides whether head movement also drives the cursor:
@@ -841,6 +844,7 @@ class FittsTestWindow(QMainWindow):
         actually being measured.
         """
         self._waiting_for_headmouse = True
+        self._start_mouse_task_when_ready = start_mouse_task
         if not mouse_control:
             self._start_button.setText("Starting head recording...")
         self._update_headmouse_button_state()
@@ -876,6 +880,9 @@ class FittsTestWindow(QMainWindow):
                 "OpenHeadMouse not started",
                 "Head tracking was cancelled or stopped, so the test has not been started.",
             )
+            return
+        if self._start_mouse_task_when_ready:
+            self._start_trial_canvas()
             return
         self.showNormal()
         self.raise_()
@@ -1030,6 +1037,9 @@ class FittsTestWindow(QMainWindow):
         if self._pending_test is not None and not self._pending_test[1]:
             self._pending_test = None
             self._on_all_trials_completed()
+        elif self._start_mode_combo.currentText() == START_HEADMOUSE:
+            if not self._request_head_tracking(mouse_control=True, start_mouse_task=True):
+                self._stop_run_input()
         else:
             self._start_trial_canvas()
 
