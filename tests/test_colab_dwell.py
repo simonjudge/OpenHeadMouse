@@ -289,6 +289,7 @@ def test_dwell_tables_are_separate_in_main_session_results_and_exports():
     main_fitts, main_dwell = viewer.fitts_table.value.split("<h3>Table 6: Fitts stats</h3>")[1].split(
         "<h3>Table 7: Dwell behaviour stats</h3>",
     )
+    main_dwell = main_dwell.split("<h3>Table 10: Clutch stats</h3>")[0]
     assert 'title="dwell_head_trial_count:' not in main_fitts
     assert 'title="mtnodwell_s:' not in main_fitts
     assert '<div class="session-details">' in main_dwell

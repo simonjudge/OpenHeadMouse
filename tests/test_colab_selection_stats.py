@@ -28,8 +28,9 @@ def csv_rows(markup, filename):
 
 
 def test_first_entry_interpolates_boundary_contact_and_truncates_path():
-    original = trial()
+    original = replace(trial(), boundary_hits=2)
     entry = first_entry_trial(original)
+    assert entry.boundary_hits is None
     assert entry.movement_time_s == pytest.approx(1.8)
     assert entry.click_pos == pytest.approx((90, 0))
     assert entry.hit

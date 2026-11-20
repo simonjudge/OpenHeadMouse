@@ -24,7 +24,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QKeySequence, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QCursor, QFont, QGuiApplication, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -90,7 +90,32 @@ def _parse_number_list(text: str) -> list[float]:
     return values
 
 
-class FittsTrialCanvas(QWidget):
+class _BoundaryCounter:
+    def _on_boundary(self, position) -> bool:
+        geometry = self.screen().geometry()
+        x, y = position.x(), position.y()
+        return (
+            geometry.left() <= x < geometry.left() + geometry.width()
+            and geometry.top() <= y < geometry.top() + geometry.height()
+            and (x < geometry.left() + 1 or x >= geometry.right()
+                 or y < geometry.top() + 1 or y >= geometry.bottom())
+        )
+
+    def _reset_boundary_counter(self) -> None:
+        self._boundary_hits = 0
+        self._boundary_start_pos = QCursor.pos()
+        self._at_boundary = None
+
+    def _record_boundary_position(self, position) -> None:
+        if self._at_boundary is None:
+            self._at_boundary = self._on_boundary(self._boundary_start_pos)
+        at_boundary = self._on_boundary(position)
+        if at_boundary and not self._at_boundary:
+            self._boundary_hits += 1
+        self._at_boundary = at_boundary
+
+
+class FittsTrialCanvas(_BoundaryCounter, QWidget):
     """Paints the current target and turns mouse clicks into TrialResults."""
 
     trial_completed = Signal(object)  # TrialResult
@@ -118,6 +143,7 @@ class FittsTrialCanvas(QWidget):
         self._trial_start_host_time = host_time()
         self._trajectory = []
         self._last_trajectory_sample_time = None
+        self._reset_boundary_counter()
         self.update()
 
     def paintEvent(self, event) -> None:
@@ -134,6 +160,7 @@ class FittsTrialCanvas(QWidget):
     def mouseMoveEvent(self, event) -> None:
         if self._trial_start_time is None or self._index >= len(self._specs):
             return
+        self._record_boundary_position(event.globalPosition())
         now = time.monotonic()
         if (
             self._last_trajectory_sample_time is not None
@@ -147,6 +174,7 @@ class FittsTrialCanvas(QWidget):
     def mousePressEvent(self, event) -> None:
         if self._index >= len(self._specs) or self._trial_start_time is None:
             return
+        self._record_boundary_position(event.globalPosition())
         spec = self._specs[self._index]
         pos = event.position()
         click_pos = (pos.x(), pos.y())
@@ -172,13 +200,14 @@ class FittsTrialCanvas(QWidget):
             trajectory=self._trajectory,
             start_host_time=self._trial_start_host_time,
             end_host_time=end_host_time,
+            boundary_hits=self._boundary_hits,
         )
         self._index += 1
         self.trial_completed.emit(result)
         self._start_current_trial()
 
 
-class TypingTrialCanvas(QWidget):
+class TypingTrialCanvas(_BoundaryCounter, QWidget):
     """Paints a full-screen on-screen keyboard and a typing prompt; each
     keystroke becomes a TrialResult (previous key center -> next key center).
     Hit-testing is rectangular (real key shapes), unlike FittsTrialCanvas's
@@ -210,6 +239,7 @@ class TypingTrialCanvas(QWidget):
         self._trial_start_host_time = host_time()
         self._trajectory = []
         self._last_trajectory_sample_time = None
+        self._reset_boundary_counter()
         self.update()
 
     def paintEvent(self, event) -> None:
@@ -250,6 +280,7 @@ class TypingTrialCanvas(QWidget):
     def mouseMoveEvent(self, event) -> None:
         if self._trial_start_time is None or self._index >= len(self._specs):
             return
+        self._record_boundary_position(event.globalPosition())
         now = time.monotonic()
         if (
             self._last_trajectory_sample_time is not None
@@ -263,6 +294,7 @@ class TypingTrialCanvas(QWidget):
     def mousePressEvent(self, event) -> None:
         if self._index >= len(self._specs) or self._trial_start_time is None:
             return
+        self._record_boundary_position(event.globalPosition())
         spec = self._specs[self._index]
         pos = event.position()
         click_pos = (pos.x(), pos.y())
@@ -288,6 +320,7 @@ class TypingTrialCanvas(QWidget):
             trajectory=self._trajectory,
             start_host_time=self._trial_start_host_time,
             end_host_time=end_host_time,
+            boundary_hits=self._boundary_hits,
         )
         self._index += 1
         self.trial_completed.emit(result)
@@ -1346,10 +1379,16 @@ class FittsTestWindow(QMainWindow):
         exclude_repetitions = self._exclude_repetitions_spin.value()
         stats = FittsStats(self._logger.trials)
         summary = stats.summary(exclude_repetitions=exclude_repetitions)
+        boundary = FittsStats.boundary_summary([
+            t for t in self._logger.trials if t.repetition_index >= exclude_repetitions
+        ], self._logger.metadata)
+        boundary_mean = boundary["boundary_hits"]
+        boundary_text = f"{boundary_mean:.2f}" if boundary_mean is not None else "n/a"
 
         self._score_label.setText(
             f"Overall throughput: {summary['overall_throughput_bits_per_s']:.2f} bits/s   "
             f"Overall error rate: {summary['overall_error_rate']:.1%}   "
+            f"Screen boundary contacts/trial: {boundary_text} ({boundary['boundary_trial_count']} trials)   "
             f"({summary['trial_count']} of {len(self._logger.trials)} trials, after exclusions)"
         )
 

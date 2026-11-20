@@ -56,7 +56,7 @@ def first_entry_trial(trial: TrialResult) -> TrialResult | None:
     return replace(
         trial, movement_time_s=time, end_time=trial.start_time + time,
         end_host_time=trial.start_host_time + time if trial.start_host_time is not None else None,
-        click_pos=tuple(entry[1:]), hit=True, trajectory=path,
+        click_pos=tuple(entry[1:]), hit=True, trajectory=path, boundary_hits=None,
     )
 
 

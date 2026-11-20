@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QSpinBox, QToolBar, QVBoxLayout, QWidget,
 )
 
+from fitts_law.clutch import clutch_summary
 from fitts_law.results import FittsResultsLogger, FittsStats, TrialResult
 from gui.window_actions import add_close_action
 from session_viewer.measure_help import MeasureLabel
@@ -427,6 +428,7 @@ class FittsPlaybackWindow(QMainWindow):
         """
         self._head_samples = list(samples or [])
         self._refresh_pretest_summary()
+        self._refresh_summary()
 
     def load_fitts_session(self, trials: list[TrialResult], metadata: dict | None = None, name: str = "Fitts") -> None:
         """Load (or replace) the Fitts session being replayed (standalone playback)."""
@@ -588,6 +590,8 @@ class FittsPlaybackWindow(QMainWindow):
             return
         iso = FittsStats(trials).summary()
         acc = FittsStats.accuracy_summary(trials)
+        boundary = FittsStats.boundary_summary(trials, self.metadata)
+        clutch = clutch_summary(trials, self._head_samples, self.metadata)
         hits = sum(1 for t in trials if t.hit)
         duration = float(self._ends.max() - self._starts.min())
         access = self.metadata.get("access_method") or "—"
@@ -603,6 +607,10 @@ class FittsPlaybackWindow(QMainWindow):
             f"<b>We:</b> {iso['overall_effective_width_px']:.1f} px<br>"
             f"<b>IDe:</b> {iso['overall_index_of_difficulty_bits']:.2f} bits<br>"
             f"<b>Throughput:</b> {iso['overall_throughput_bits_per_s']:.2f} bits/s<br>"
+            f"<b>Estimated clutches:</b> {_fmt(clutch['clutch_mean'], '.2f')} /trial "
+            f"({_fmt(clutch['clutch_count'], 'd')} total; {clutch['clutch_trial_count']} trials)<br>"
+            f"<b>Screen boundary contacts:</b> {_fmt(boundary['boundary_hits'], '.2f')} /trial "
+            f"({_fmt(boundary['boundary_count'], 'd')} total; {boundary['boundary_trial_count']} trials)<br>"
             f"<br><b>Path accuracy</b> (MacKenzie et al. 2001, "
             f"{acc['trial_count']} paths)<br>"
             f"<b>TRE:</b> {_fmt(acc['tre'], '.2f')} /trial<br>"

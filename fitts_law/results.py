@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from core.clock import HOST_CLOCK_NAME
+from fitts_law.clutch import boundary_counts
 
 _DEFAULT_OUTPUT_DIR = Path(__file__).parent.parent / "fitts_sessions"
 
@@ -37,6 +38,8 @@ class TrialResult:
     `start_host_time`/`end_host_time` are the same instants on the shared
     host clock (core.clock.host_time), used to synchronise playback with a
     head-movement recording. They are None in files saved before 1.1.
+    `boundary_hits` is the count of observed screen-edge contact episodes;
+    None means it was not recorded, including in older files.
     """
 
     condition_label: str
@@ -55,6 +58,7 @@ class TrialResult:
     trajectory: list[list[float]] = None
     start_host_time: float | None = None
     end_host_time: float | None = None
+    boundary_hits: int | None = None
 
     def __post_init__(self):
         if self.trajectory is None:
@@ -356,6 +360,16 @@ class FittsStats:
         summary = {k: (float(np.mean([m[k] for m in measures])) if measures else None) for k in keys}
         summary["trial_count"] = len(measures)
         return summary
+
+    @staticmethod
+    def boundary_summary(trials: list[TrialResult], metadata: dict | None = None) -> dict:
+        """Recorded contacts, or path estimates when saved geometry is available."""
+        counts = [count for count in boundary_counts(trials, metadata or {}) if count is not None]
+        return {
+            "boundary_hits": float(np.mean(counts)) if counts else None,
+            "boundary_count": sum(counts) if counts else None,
+            "boundary_trial_count": len(counts),
+        }
 
     def summary(self, exclude_repetitions: int = 0) -> dict:
         """Per-condition breakdown plus an overall pooled throughput.

@@ -953,7 +953,7 @@ def test_split_tables_keep_one_row_per_participant_and_rom_task_only(tmp_path):
     tables = participant_tables(rows)
     assert list(tables) == [
         "Session summary", "Initial head positions", "Range of movement stats",
-        "Head movement stats", "Fitts targets and hits", "Fitts stats",
+        "Head movement stats", "Fitts targets and hits", "Fitts stats", "Clutch stats",
     ]
     for table in tables.values():
         assert [r["participant"] for r in table] == ["P01", "P02"]
@@ -978,15 +978,17 @@ def test_split_tables_keep_one_row_per_participant_and_rom_task_only(tmp_path):
     assert "<h3>Table 6: Fitts stats</h3>" in fitts_markup
     assert "<h3>Table 2: Initial head positions</h3>" not in fitts_markup
     markup = head_markup + fitts_markup
-    assert markup.count('class="report-data"') == 14
-    assert markup.count('class="field-key"') == 8
-    assert markup.count('class="session-details"') == 6
+    assert markup.count('class="report-data"') == 16
+    assert markup.count('class="field-key"') == 9
+    assert markup.count('class="session-details"') == 7
     assert markup.count("<svg ") == 5  # Four reference views plus the participant pose.
     assert markup.index("<svg ") > markup.index("<h3>Table 2: Initial head positions</h3>")
     assert markup.index("<svg ") < markup.index("<h3>Table 3: Range of movement stats</h3>")
     assert "Neutral/Reference Head Pose" in markup
     assert "Webcam pitch/roll are relative to the camera, not gravity" in markup
     for number, title in enumerate(tables, start=1):
+        if title == "Clutch stats":
+            number = 10
         assert f"<h3>Table {number}: {title}</h3>" in markup
         assert f"<h4>Table {number}a: Field key</h4>" in markup
         assert f"<h4>Table {number}b: Individual sessions</h4>" in markup
@@ -1187,7 +1189,7 @@ def test_table_order_compact_headers_and_sources(tmp_path):
     viewer._add_sessions([session])
     markup = viewer.table.value + viewer.fitts_table.value
     assert "<summary><b>Source files</b></summary>" not in markup
-    assert markup.count('<div class="session-details">') == 6
+    assert markup.count('<div class="session-details">') == 7
     assert "table-layout:auto" in markup
     assert "table-layout:fixed" not in markup
     assert "overflow-wrap:anywhere" in markup
@@ -1243,7 +1245,7 @@ def test_collapsed_reference_sources_and_complete_field_keys(tmp_path):
     assert parser.details
     assert all("open" not in attrs for attrs in parser.details)
     assert all("font-weight:bold" in attrs["style"] for attrs in parser.headers)
-    assert markup.count(": Field key</h4>") == 8
+    assert markup.count(": Field key</h4>") == 9
     assert all(fields in parser.table_columns for fields in parser.field_keys)
     assert all(len(fields) == len(set(fields)) for fields in parser.field_keys)
     for table in participant_tables(viewer.summary_rows()).values():
@@ -1452,7 +1454,8 @@ def test_any_root_csv_manifest_imports_only_listed_recordings(tmp_path):
     viewer = NotebookViewer()
     viewer._add_sessions(sessions)
     markup = viewer.table.value + viewer.fitts_table.value
-    assert markup.count("<h3>") == 6
+    assert markup.count("<h3>") == 7
+    assert "<h3>Table 10: Clutch stats</h3>" in markup
     for number, label in enumerate(("Session summary", "Initial head positions", "Range of movement stats",
                                     "Head movement stats", "Fitts targets and hits", "Fitts stats"), start=1):
         assert f"<h3>Table {number}: {label}</h3>" in markup

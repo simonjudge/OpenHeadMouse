@@ -20,6 +20,8 @@ MEASURE_HELP = {
     "We": "Effective width: 4.133 times the sample standard deviation of click errors projected along the start-to-target axis, in pixels.",
     "IDe": "Effective index of difficulty: log2(Ae / We + 1), in bits. Reported as zero when We is zero.",
     "Throughput": "Effective index of difficulty divided by mean movement time in seconds, in bits/s. Combines speed and endpoint accuracy; higher is better.",
+    "Screen boundary contacts": "Mean contacts per eligible trial, plus raw total. Uses saved edge-event counts, or estimates entries into a 30-pixel edge zone from older cursor paths. Consecutive edge points count once. A contact is only a proxy for clutching, not proof of it.",
+    "Estimated clutches": "Mean detected near-edge headmouse clutch episodes per eligible trial. Requires a nearly stationary cursor axis near an edge, outward head rotation, and a return of both head and cursor. This is an estimate, not proof of intent; see the documentation for thresholds and limitations.",
     "TRE": "Target re-entries: number of times the cursor re-enters the target after the first entry. Summary shows mean re-entries per usable trial.",
     "TAC": "Task-axis crossings: number of times the cursor crosses the straight line from start to target. Summary shows the mean count per usable trial.",
     "MDC": "Movement direction changes: reversals of motion perpendicular to the start-to-target axis (side-to-side corrections). Summary shows the mean count per usable trial.",

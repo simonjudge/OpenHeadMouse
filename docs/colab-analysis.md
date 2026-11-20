@@ -200,6 +200,74 @@ of initial target entries or a percentage. The first entry is not counted;
 paths with no re-entry contribute zero, so an average below 1 is expected.
 The path-trial-count column is its denominator.
 
+**Table 10: Clutch stats** reports boundary contacts and estimated clutches
+separately from the main Fitts table. It includes **raw totals**
+(`boundary_count`, `clutch_count`), eligible target counts
+(`boundary_trial_count`, `clutch_trial_count`) and per-target averages
+(`boundary_hits`, `clutch_mean`). Individual-session rows and a dedicated
+clutch-stats CSV use the same fields. First-target and review exclusions apply;
+neither no-dwell nor first-entry tables include these measures.
+
+Boundary counts use the saved event count when available: entering an edge
+counts once, staying on it (including around a corner) does not add another,
+and starting a trial on an edge is not a new event.
+
+**Older recordings, including ABC, are calculated from cursor trajectories**
+when screen dimensions are saved. An entry into the 30-logical-pixel edge zone
+counts as one estimated episode, combining all four sides. The first recorded
+point in that zone starts an episode; the planned start position is not
+prepended because it need not be the actual cursor position. The click is
+included, and consecutive near-edge points count once. This fallback counts
+near-edge visits, not proven exact boundary hits: older paths are canvas-local,
+with an unknown offset from the screen. Missing paths or dimensions remain
+unavailable, not zero; eligible paths with no contacts contribute zero.
+
+Events outside the canvas or missed by the OS can be missed. Edge targets may
+cause contacts without clutching, and a multi-monitor screen edge need not be
+a desktop boundary. This is a proxy, not a validated clutch measure.
+
+### Estimated headmouse clutches
+
+A detected clutch is an inferred **boundary saturation and return**, not merely
+an edge hit: the cursor stays nearly stationary on the edge-normal axis while
+the head continues turning outward, and then both head and cursor return inward.
+The count is summed and averaged over eligible targets (including misses),
+pooled across recordings; `clutch_trial_count` is the denominator. The separate
+Clutch stats table and desktop Fitts playback show this estimate.
+
+The detector uses the saved trajectory and yaw/pitch head samples aligned by
+their shared host clock. For each of the four sides it:
+
+1. Finds cursor samples within 30 logical pixels of that side using the saved
+   screen dimensions. On that side's axis, a run must remain within 4 pixels
+   of its first sample for at least 0.06 seconds, with no cursor-sample gap
+   over 0.5 seconds.
+2. During that run, the head must turn at least 2 degrees outward: positive
+   yaw at the left, negative yaw at the right, positive pitch at the top or
+   negative pitch at the bottom. Angles are unwrapped and interpolated to
+   cursor times.
+3. Within 0.6 seconds after the run, the cursor must move at least 20 pixels
+   inward and the head must reverse at least 1 degree from its outward peak.
+   Overlapping detections at a corner count as one episode.
+
+These are pragmatic thresholds, **not a validated published clutch detector**.
+The definition assumes normal positive-gain headmouse directions and recorded
+yaw/pitch correspond to the device controlling the cursor; inverted axes,
+different mappings, sensor mounting, latency, or independent head and cursor
+devices can invalidate it. It is calculated only for files labelled
+`HeadMouse` or `OpenHeadMouse`, with screen dimensions, at least two trajectory
+samples, and head samples covering the entire trial on the shared host clock,
+with no head-sample gap over 0.2 seconds. Missing or partial data is excluded,
+not counted as zero.
+
+Cursor samples are event-driven and can be missing while the cursor is outside
+the canvas. A short gap between near-edge samples is therefore an inference,
+not proof that the cursor stayed still. Older files do not record the canvas
+origin relative to the screen; the 30-pixel zone is an approximation, especially
+at the top and bottom. Sampling, missed events, edge targets and noise can cause
+both missed detections and false positives. A zero is not proof of no clutching,
+and head rotation alone cannot establish the user's intent.
+
 ### Target review
 
 The matched-target section has been removed. At the top of **Fitts results**,

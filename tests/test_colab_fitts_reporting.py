@@ -50,6 +50,36 @@ def test_planned_id_range_uses_only_remaining_targets_and_empty_is_unavailable()
     assert empty_table["target_amplitudes_px"] is None
 
 
+def test_boundary_contacts_pool_available_trials_and_follow_exclusions():
+    session = recording()
+    session.trials = [replace(session.trials[0], boundary_hits=2),
+                      replace(session.trials[1], boundary_hits=0), session.trials[2]]
+    row = participant_tables(participant_rows([session]))["Clutch stats"][0]
+    assert row["boundary_hits"] == 1
+    assert row["boundary_count"] == 2
+    assert row["boundary_trial_count"] == 2
+    row = participant_rows([session], {"P": 1})[0]
+    assert row["boundary_hits"] == 0
+    assert row["boundary_trial_count"] == 1
+    row = participant_rows([session], {"P": 2})[0]
+    assert row["boundary_hits"] is None
+    assert row["boundary_trial_count"] == 0
+    viewer = NotebookViewer()
+    viewer.sessions = [session]
+    viewer._refresh_table()
+    assert "<h3>Table 10: Clutch stats</h3>" in viewer.fitts_table.value
+    exported = csv_rows(viewer.fitts_table.value, "clutch_stats.csv")[0]
+    assert float(exported["boundary_hits"]) == 1
+    assert exported["boundary_count"] == "2"
+    assert exported["boundary_trial_count"] == "2"
+    for markup, filename in (
+        (viewer.fitts_table.value, "fitts_stats.csv"),
+        (viewer.nodwell_table.value, "no_dwell_stats.csv"),
+        (viewer.first_entry_table.value, "first_entry_stats.csv"),
+    ):
+        assert not any(key.startswith(("clutch_", "boundary_")) for key in csv_rows(markup, filename)[0])
+
+
 def test_target_table_displays_widths_and_amplitudes_before_planned_id_range():
     viewer = NotebookViewer()
     viewer.sessions = [recording()]
@@ -79,6 +109,8 @@ def test_error_percentages_show_actual_subset_numerator_denominator_and_counts_a
         row = csv_rows(markup, filename)[0]
         assert "." not in row["targets_analysed"] and "." not in row["misses"]
         assert float(row["error_rate"]) == int(row["misses"]) / int(row["targets_analysed"])
+        if filename == "fitts_stats.csv":
+            markup = markup.split("<h3>Table 10: Clutch stats</h3>")[0]
         session_table = markup.split('<div class="session-details">')[-1]
         assert re.search(r"\d+\.\d% \(\d+/\d+\)", session_table)
     viewer.exclude_targets.value = 1
@@ -92,6 +124,7 @@ def test_error_percentages_show_actual_subset_numerator_denominator_and_counts_a
     "targets_recorded", "targets_excluded", "targets_analysed", "exclude_first_targets_per_file",
     "hits", "misses", "path_trial_count", "dwell_head_trial_count", "nodwell_trial_count",
     "nodwell_unknown_count", "condition_trials_recorded", "matching_targets_selected",
+    "boundary_trial_count", "boundary_count", "clutch_trial_count", "clutch_count",
 ])
 def test_target_counts_are_integer_in_html_formatter_and_csv(key):
     assert format_field(key, 12) == "12"

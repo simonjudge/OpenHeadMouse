@@ -742,6 +742,10 @@ identifies an inferred reference when no explicit calibration was recorded.
 The right side of the Fitts window uses the same layout as the head viewer. The **summary** shows:
 
 - ISO 9241-411 results: error rate, mean MT, Ae, We, IDe and throughput.
+- Estimated headmouse boundary clutches: the mean count per eligible trial, using paired,
+  synchronised head and cursor recordings. See the [clutch definition](docs/colab-analysis.md#estimated-headmouse-clutches).
+- Screen boundary contacts: the mean number of observed screen-edge contact episodes per
+  recorded trial, with the number of contributing trials shown separately.
 - The path-accuracy measures from MacKenzie, Kauppinen & Silfverberg, *Accuracy measures for
   evaluating computer pointing devices* (CHI 2001):
   - target re-entry (TRE), task axis crossing (TAC), movement direction change (MDC) and
@@ -751,6 +755,30 @@ The right side of the Fitts window uses the same layout as the head viewer. The 
   They are computed from each saved trajectory in task-axis coordinates, with the click point
   as the last path point.
 
+Boundary contacts are a **proxy for clutching**, not confirmed clutches: an edge may be
+reached for another reason, particularly for edge targets. Each move or click delivered to
+the test canvas is checked against its screen's outermost logical pixel before trajectory
+sampling is throttled. Consecutive edge positions (including around a corner) form one
+episode; the cursor must leave the edge before another contact counts. Starting a trial
+already on an edge does not count as a new contact. Events outside the canvas or missed by
+the operating system can cause undercounting, and an edge between monitors is not necessarily
+an impassable desktop boundary. For earlier recordings with cursor paths and saved screen
+dimensions, contacts are estimated from entries into a 30-logical-pixel edge zone.
+Consecutive near-edge points count once; an initial near-edge sample starts an episode.
+This is approximate because older coordinates are canvas-local; it does not prove an
+exact screen hit. Missing paths or dimensions remain unavailable, not zero.
+
+The notebook reports **Clutch stats** in a separate table with raw boundary/clutch totals,
+eligible target counts and per-target averages, including individual-session results
+and a dedicated CSV. These fields are omitted from the main Fitts, no-dwell and
+first-entry tables.
+
+Published work has reported actual **clutches per trial**, for example Nancel, Vogel and
+Lank, [*Clutching Is Not (Necessarily) the Enemy*](https://hal.science/hal-01523428)
+(CHI 2015), using trackpad finger lifts rather than screen-edge contacts. Their study also
+reported the proportion of trials with a clutch and timing measures. The head-and-cursor
+measure above is an operational estimate, not the same as their measured trackpad lifts.
+
 The summary can exclude the first N repetitions of each condition. **Live Data** shows the current
 task in words, for example "Range of movement - holding head at furthest LEFT position" or
 "Fitts mouse task". During the mouse task it also shows the current trial and its measures, up to
@@ -758,7 +786,7 @@ the playhead. The head viewer's **Live Data** shows the same task description, f
 sample's `task_phase` label.
 Hover over any measure name in **Summary**, **Live Data**, or **Initial Pose & Range of Movement**
 for its definition, units, and (where relevant) formula or interpretation. This includes Ae,
-We, IDe, throughput, TRE, TAC, MDC, ODC, MV, ME and MO. Path-accuracy summaries average the
+We, IDe, throughput, screen boundary contacts, TRE, TAC, MDC, ODC, MV, ME and MO. Path-accuracy summaries average the
 measure over trials with usable recorded paths; live measures use only the path up to the playhead.
 
 #### Initial pose and range of movement summary

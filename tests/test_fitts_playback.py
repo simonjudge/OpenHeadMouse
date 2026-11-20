@@ -162,6 +162,24 @@ def test_accuracy_summary_skips_trials_without_paths():
     assert FittsStats.accuracy_summary([empty])["tre"] is None
 
 
+def test_boundary_summary_and_round_trip_exclude_legacy_trials(tmp_path):
+    from dataclasses import replace
+
+    first = replace(_trial([]), boundary_hits=2)
+    second = replace(_trial([]), boundary_hits=0)
+    legacy = _trial([])
+    logger = FittsResultsLogger(tmp_path)
+    logger.trials = [first, second, legacy]
+    loaded = FittsResultsLogger().load(logger.save("boundary.json"))
+    assert [t.boundary_hits for t in loaded] == [2, 0, None]
+    assert FittsStats.boundary_summary(loaded) == {
+        "boundary_hits": 1.0, "boundary_count": 2, "boundary_trial_count": 2,
+    }
+    assert FittsStats.boundary_summary([legacy]) == {
+        "boundary_hits": None, "boundary_count": None, "boundary_trial_count": 0,
+    }
+
+
 # -- sync check ----------------------------------------------------------------
 
 def _head_samples(host_times):

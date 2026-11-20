@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QMouseEvent
+import pytest
 
 from fitts_law.fitts_test import (
     MODE_ISO_STANDARD,
@@ -128,6 +129,50 @@ def test_trajectory_is_recorded_during_a_trial(qt_app):
     assert len(trial.trajectory) == 2
     assert trial.trajectory[0][1:] == [target[0] - 50, target[1]]
     assert trial.trajectory[-1][0] <= trial.movement_time_s
+
+
+@pytest.mark.parametrize("mode", [MODE_ISO_STANDARD, MODE_TYPING])
+def test_boundary_contacts_are_counted_before_trajectory_throttling(qt_app, mode):
+    window = FittsTestWindow()
+    try:
+        window._mode_combo.setCurrentText(mode)
+        window._on_start_clicked()
+        canvas = window._canvas
+        geometry = canvas.screen().geometry()
+        inside = QPointF(geometry.center())
+        left = QPointF(geometry.left(), geometry.center().y())
+        corner = QPointF(geometry.left(), geometry.bottom())
+        right = QPointF(geometry.right(), geometry.center().y())
+        canvas._at_boundary = False
+        canvas._last_trajectory_sample_time = float("inf")
+
+        for point in (left, corner, inside, right, right):
+            canvas.mouseMoveEvent(QMouseEvent(
+                QEvent.MouseMove, QPointF(20, 20), point,
+                Qt.NoButton, Qt.NoButton, Qt.NoModifier,
+            ))
+        assert canvas._trajectory == []
+        assert canvas._boundary_hits == 2
+        _click_at(canvas, *canvas._specs[0]["target_pos"])
+        assert window._logger.trials[0].boundary_hits == 2
+    finally:
+        window.close()
+
+
+def test_boundary_counter_does_not_count_starting_on_edge(qt_app, monkeypatch):
+    from fitts_law.fitts_test import FittsTrialCanvas
+    from fitts_law.stimuli import CircleStimulus
+
+    canvas = FittsTrialCanvas([], CircleStimulus())
+    geometry = canvas.screen().geometry()
+    edge = QPointF(geometry.left(), geometry.center().y())
+    inside = QPointF(geometry.center())
+    monkeypatch.setattr("fitts_law.fitts_test.QCursor", type("Cursor", (), {"pos": staticmethod(lambda: edge)}))
+    canvas._reset_boundary_counter()
+    for point in (edge, inside, edge):
+        canvas._record_boundary_position(point)
+    assert canvas._boundary_hits == 1
+    assert not canvas._on_boundary(QPointF(geometry.right() + 10, geometry.center().y()))
 
 
 def test_completed_run_autosaves_raw_trials_to_disk(qt_app, tmp_path):

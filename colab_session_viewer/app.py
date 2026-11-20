@@ -39,6 +39,7 @@ _TABLE_NUMBERS = {
     "Dwell behaviour stats": 7,
     "No-Dwell stats": 8,
     "First-entry selection stats": 9,
+    "Clutch stats": 10,
 }
 
 
@@ -716,6 +717,17 @@ class NotebookViewer:
                 "Non-dwell sessions do not contribute zeros. Coverage counts identify each estimate's "
                 "contributing targets."
             ),
+            "Clutch stats": (
+                "Raw boundary-contact and estimated clutch totals, with eligible-target counts and averages. "
+                "Uses the same first-target and review exclusions as the main Fitts results. "
+                "For older files without saved boundary counts, contacts are estimated from entries into a "
+                "30-pixel screen-edge zone in the recorded cursor path. Consecutive edge samples count once; "
+                "the first recorded sample in the zone counts as an observed episode. This is approximate "
+                "because older cursor coordinates are canvas-local. Clutches additionally require synchronised "
+                "head movement: a near-edge cursor plateau, outward head rotation and an inward return. "
+                "Missing data is unavailable, not zero. Totals pool eligible targets, not session averages. "
+                "These measures are not included in no-dwell or first-entry tables."
+            ),
             "Head movement stats": (
                 "Uses head recordings, including preparation and the movement exercise, not just pointing, "
                 f"after excluding the opening {self.head_opening_exclude.value:g} seconds of each recording. "
@@ -733,7 +745,7 @@ class NotebookViewer:
         for label, table_rows in participant_tables(rows).items():
             number = str(_TABLE_NUMBERS[label])
             sections = fitts_sections if label in (
-                "Fitts stats", "Fitts targets and hits", "Dwell behaviour stats",
+                "Fitts stats", "Fitts targets and hits", "Dwell behaviour stats", "Clutch stats",
             ) else head_sections
             filename = label.lower().replace(" ", "_") + ".csv"
             columns = list(table_rows[0])
