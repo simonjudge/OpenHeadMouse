@@ -61,7 +61,7 @@ Asset redistribution approval is a release gate until this is recorded.
 
 ## OpenSeeFace code and models
 
-`providers/openSeeFace.py` contains a port of OpenSeeFace's face detection,
+`providers/openseeface_provider.py` contains a port of OpenSeeFace's face detection,
 landmark decoding and 3D face-model PnP fitting, plus its UDP packet layout. It
 uses OpenSeeFace's ONNX models from commit
 `50c09741897010faad721a218b2bbe14ecad6251` of

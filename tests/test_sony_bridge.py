@@ -5,7 +5,7 @@ import zipfile
 
 import pytest
 
-from providers import sony_bridge
+from providers.sony import bridge as sony_bridge
 
 
 @pytest.fixture
@@ -40,6 +40,19 @@ def test_dependency_install_and_offline_verification(native_asset, monkeypatch):
     assert sony_bridge.ensure_bridge() == executable
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     assert sony_bridge.ensure_bridge() == executable
+
+
+def test_dependency_source_root_after_bridge_relocation(native_asset, monkeypatch):
+    root, content = native_asset
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    monkeypatch.setattr(
+        sony_bridge, "__file__", str(root / "providers" / "sony" / "bridge.py")
+    )
+
+    executable = sony_bridge.ensure_bridge()
+
+    assert executable == root / sony_bridge.RELATIVE_DIRECTORY / "sony-head-tracker.exe"
+    assert executable.read_bytes() == content[executable.name]
 
 
 def test_frozen_dependency_missing_fails_without_download(native_asset, monkeypatch):

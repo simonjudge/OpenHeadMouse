@@ -14,10 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from core.model_assets import FACE_SHA256, FACE_URL, MESH_SHA256, MESH_URL, download_verified
-from providers.openSeeFace import (
+from providers.openseeface_provider import (
     BUNDLED_MODEL as OPENSEEFACE_MODEL, MODEL_SHA256 as OPENSEEFACE_SHA256, ensure_models,
 )
-from providers.sony_bridge import ASSETS as SONY_ASSETS, VERSION as SONY_VERSION, ensure_bridge
+from providers.sony.bridge import ASSETS as SONY_ASSETS, VERSION as SONY_VERSION, ensure_bridge
 
 OPENSEEFACE_ASSETS = ("mnv3_detection_opt.onnx", f"lm_model{OPENSEEFACE_MODEL}_opt.onnx")
 

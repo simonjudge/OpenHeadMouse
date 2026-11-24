@@ -31,11 +31,11 @@ import pyqtgraph as pg
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QAction, QBrush, QColor, QKeySequence, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QDoubleSpinBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QMainWindow,
+    QCheckBox, QDoubleSpinBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QMainWindow,
     QMessageBox, QPushButton, QSpinBox, QToolBar, QVBoxLayout, QWidget,
 )
 
-from fitts_law.clutch import clutch_summary
+from fitts_law.clutch import clutch_episodes, clutch_summary, onscreen_counts, onscreen_episodes
 from fitts_law.results import FittsResultsLogger, FittsStats, TrialResult
 from gui.window_actions import add_close_action
 from session_viewer.measure_help import MeasureLabel
@@ -221,17 +221,21 @@ class FittsPlaybackWindow(QMainWindow):
         self._traj_speed: list[np.ndarray] = []
         self._time_origin = 0.0
         self._trial_marker_items: list = []
+        self._clutch_marker_items: list = []
         self._graph_zoom = 1.0
         self.speed_range = [0.0, 1.0]
         self.dist_range = [0.0, 1.0]
         self.synced = False
         self._head_samples: list = []
+        self._offscreen_clutches = []
+        self._onscreen_clutches = []
         self.pretest_summary: dict = {}
         self._head_task_range: tuple[float, float] | None = None
         self._play_range: tuple[float, float] = (0.0, 0.0)
         self._own_clock = PlaybackClock(self)
         self.clock = self._own_clock
         self.clock.time_changed.connect(self._on_clock_time)
+        self.clock.playing_changed.connect(self._on_playing_changed)
         self.transport = PlaybackTransport(self)
         self._head_window = None
 
@@ -264,8 +268,33 @@ class FittsPlaybackWindow(QMainWindow):
         main_layout = QHBoxLayout(central)
 
         left_layout = QVBoxLayout()
+        trial_controls = QHBoxLayout()
+        trial_controls.addWidget(QLabel("Trial:"))
+        self.trial_spin = QSpinBox()
+        self.trial_spin.setRange(1, 1)
+        self.trial_spin.setEnabled(False)
+        self.trial_spin.valueChanged.connect(self._select_trial)
+        trial_controls.addWidget(self.trial_spin)
+        self.zoom_to_trial = QCheckBox("Zoom to trial")
+        self.zoom_to_trial.toggled.connect(self._select_trial)
+        trial_controls.addWidget(self.zoom_to_trial)
+        trial_controls.addStretch(1)
+        left_layout.addLayout(trial_controls)
         self.canvas = FittsScreenCanvas()
-        left_layout.addWidget(self.canvas, 2)
+        scene_layout = QHBoxLayout()
+        scene_layout.addWidget(self.canvas, 1)
+        self.clutch_indicator = QLabel("Estimated clutch<br>Off-screen: inactive<br>On-screen: inactive")
+        self.clutch_indicator.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.clutch_indicator.setToolTip(
+            "Retrospective estimate using default thresholds, shown for all trials including excluded trials. "
+            "Active spans the entire detected episode; unavailable means insufficient data."
+        )
+        scene_layout.addWidget(self.clutch_indicator)
+        left_layout.addLayout(scene_layout, 2)
+        self.show_clutch = QCheckBox("Show clutch estimates")
+        self.show_clutch.setChecked(True)
+        self.show_clutch.toggled.connect(self.clutch_indicator.setVisible)
+        left_layout.addWidget(self.show_clutch)
 
         self.graphs_widget = pg.GraphicsLayoutWidget()
         self.graphs_widget.ci.layout.setSpacing(2)
@@ -283,6 +312,13 @@ class FittsPlaybackWindow(QMainWindow):
         self.dist_plot.getViewBox().setDefaultPadding(0)
         self.dist_line = self.dist_plot.addLine(x=0, pen=pg.mkPen("#007bff", width=2, style=Qt.DashLine))
         self.dist_plot.setXLink(self.speed_plot)
+        self.clutch_plot = self.graphs_widget.addPlot(row=2, col=0)
+        self.clutch_plot.setMaximumHeight(65)
+        self.clutch_plot.hideAxis("left")
+        self.clutch_plot.setLabel("bottom", "Time (s); O: on-screen, E: off-screen (edge)")
+        self.clutch_plot.setYRange(0, 1, padding=0)
+        self.clutch_plot.setMouseEnabled(x=True, y=False)
+        self.clutch_plot.setXLink(self.speed_plot)
         left_layout.addWidget(self.graphs_widget, 1)
         self._trial_marker_legend = QLabel(
             "Vertical lines: <span style='color:#2e7d32'><b>┆ trial start</b></span> &nbsp; "
@@ -427,8 +463,10 @@ class FittsPlaybackWindow(QMainWindow):
         pre-test summary; the Fitts file alone only yields cursor statistics.
         """
         self._head_samples = list(samples or [])
+        self._prepare_clutch_episodes()
         self._refresh_pretest_summary()
         self._refresh_summary()
+        self._update_clutch_indicator(self.clock.time)
 
     def load_fitts_session(self, trials: list[TrialResult], metadata: dict | None = None, name: str = "Fitts") -> None:
         """Load (or replace) the Fitts session being replayed (standalone playback)."""
@@ -457,7 +495,15 @@ class FittsPlaybackWindow(QMainWindow):
             spans.append((float(self._starts[0]), float(self._ends.max())))
         self._play_range = (min(s for s, _ in spans), max(e for _, e in spans))
         self._time_origin = self._play_range[0]
+        self._prepare_clutch_episodes()
         self._prepare_series()
+        self.trial_spin.blockSignals(True)
+        self.trial_spin.setRange(1, max(1, len(self.trials)))
+        self.trial_spin.setValue(1)
+        self.trial_spin.setEnabled(bool(self.trials))
+        self.trial_spin.blockSignals(False)
+        self.zoom_to_trial.setEnabled(bool(self.trials))
+        self._apply_trial_range()
         self._draw_trial_markers()
         self.canvas.set_session(self.trials, self._screen_size())
         self.graphs_widget.setVisible(bool(self.trials))
@@ -478,8 +524,10 @@ class FittsPlaybackWindow(QMainWindow):
         if self.clock is not clock:
             self.clock.pause()
             self.clock.time_changed.disconnect(self._on_clock_time)
+            self.clock.playing_changed.disconnect(self._on_playing_changed)
             self.clock = clock
             clock.time_changed.connect(self._on_clock_time)
+            clock.playing_changed.connect(self._on_playing_changed)
         self.synced = synced
         self.transport.set_clock(clock)
 
@@ -557,6 +605,23 @@ class FittsPlaybackWindow(QMainWindow):
                     line = plot.addLine(x=float(t), pen=pg.mkPen(color, width=1, style=style))
                     self._trial_marker_items.append((plot, line))
 
+    def _select_trial(self, _value=None) -> None:
+        if self.trials:
+            self.clock.pause()
+            self._apply_trial_range()
+            self.clock.seek(float(self._starts[self.trial_spin.value() - 1]))
+
+    def _apply_trial_range(self) -> None:
+        if self.zoom_to_trial.isChecked() and self.trials:
+            idx = self.trial_spin.value() - 1
+            start, end = self._starts[idx], self._ends[idx]
+        else:
+            start, end = self._play_range
+        self.speed_plot.setXRange(
+            float(start - self._time_origin), max(float(end - self._time_origin),
+                                                 float(start - self._time_origin) + .001), padding=0,
+        )
+
     # ------------------------------------------------------------------
     # Statistics
     # ------------------------------------------------------------------
@@ -592,6 +657,9 @@ class FittsPlaybackWindow(QMainWindow):
         acc = FittsStats.accuracy_summary(trials)
         boundary = FittsStats.boundary_summary(trials, self.metadata)
         clutch = clutch_summary(trials, self._head_samples, self.metadata)
+        offscreen = clutch_episodes(trials, self._head_samples, self.metadata)
+        onscreen = [count for count in onscreen_counts(trials, self.metadata, offscreen=offscreen)
+                    if count is not None]
         hits = sum(1 for t in trials if t.hit)
         duration = float(self._ends.max() - self._starts.min())
         access = self.metadata.get("access_method") or "—"
@@ -607,8 +675,10 @@ class FittsPlaybackWindow(QMainWindow):
             f"<b>We:</b> {iso['overall_effective_width_px']:.1f} px<br>"
             f"<b>IDe:</b> {iso['overall_index_of_difficulty_bits']:.2f} bits<br>"
             f"<b>Throughput:</b> {iso['overall_throughput_bits_per_s']:.2f} bits/s<br>"
-            f"<b>Estimated clutches:</b> {_fmt(clutch['clutch_mean'], '.2f')} /trial "
+            f"<b>Off-screen clutches:</b> {_fmt(clutch['clutch_mean'], '.2f')} /trial "
             f"({_fmt(clutch['clutch_count'], 'd')} total; {clutch['clutch_trial_count']} trials)<br>"
+            f"<b>On-screen clutches:</b> {_fmt(float(np.mean(onscreen)) if onscreen else None, '.2f')} /trial "
+            f"({_fmt(sum(onscreen) if onscreen else None, 'd')} total; {len(onscreen)} trials)<br>"
             f"<b>Screen boundary contacts:</b> {_fmt(boundary['boundary_hits'], '.2f')} /trial "
             f"({_fmt(boundary['boundary_count'], 'd')} total; {boundary['boundary_trial_count']} trials)<br>"
             f"<br><b>Path accuracy</b> (MacKenzie et al. 2001, "
@@ -636,6 +706,52 @@ class FittsPlaybackWindow(QMainWindow):
     # Playback
     # ------------------------------------------------------------------
 
+    def _prepare_clutch_episodes(self) -> None:
+        self._offscreen_clutches = clutch_episodes(self.trials, self._head_samples, self.metadata)
+        self._onscreen_clutches = onscreen_episodes(
+            self.trials, self.metadata, offscreen=self._offscreen_clutches,
+        )
+        for item in self._clutch_marker_items:
+            self.clutch_plot.removeItem(item)
+        self._clutch_marker_items = []
+        for per_trial, mark, color, row in (
+            (self._onscreen_clutches, "O", "#00695c", .75),
+            (self._offscreen_clutches, "E", "#9c3d10", .25),
+        ):
+            for start, episodes in zip(self._starts, per_trial):
+                for a, b in episodes or []:
+                    left, right = start - self._time_origin + a, start - self._time_origin + b
+                    bar = self.clutch_plot.plot([left, right], [row, row], pen=pg.mkPen(color, width=2))
+                    text = pg.TextItem(mark, color=color, anchor=(.5, .5))
+                    text.setPos(float((left + right) / 2), row)
+                    self.clutch_plot.addItem(text)
+                    self._clutch_marker_items.extend([bar, text])
+
+    def _update_clutch_indicator(self, t: float) -> None:
+        idx = int(np.searchsorted(self._starts, t, side="right")) - 1
+        inside = 0 <= idx < len(self.trials) and t <= self._ends[idx]
+        lines = ["<b>Estimated clutch</b>"]
+        for label, per_trial in (("Off-screen", self._offscreen_clutches),
+                                 ("On-screen", self._onscreen_clutches)):
+            if not inside:
+                status = "inactive"
+            elif per_trial[idx] is None:
+                status = "unavailable"
+            else:
+                elapsed = t - self._starts[idx]
+                status = ("active" if any(a <= elapsed <= b for a, b in per_trial[idx])
+                          else "inactive")
+            text = f"{label}: {status}"
+            lines.append(f"<span style='color:#a00000'><b>{text}</b></span>" if status == "active" else text)
+        self.clutch_indicator.setText("<br>".join(lines))
+
+    def _on_playing_changed(self, playing: bool) -> None:
+        if playing and self.trials and self.zoom_to_trial.isChecked():
+            idx = self.trial_spin.value() - 1
+            start, end = float(self._starts[idx]), float(self._ends[idx])
+            if not start <= self.clock.time < end:
+                self.clock.seek(start)
+
     def _on_clock_time(self, t: float) -> None:
         """Recalculate live cursor/path measures at the last sample at/before t.
 
@@ -646,6 +762,13 @@ class FittsPlaybackWindow(QMainWindow):
         (or first start position); cursor speed uses the precomputed series.
         This seek-time subset is not the participant/condition summary pool.
         """
+        if self.trials and self.zoom_to_trial.isChecked() and self.clock.is_playing:
+            end = float(self._ends[self.trial_spin.value() - 1])
+            if t > end:
+                self.clock.pause()
+                self.clock.seek(end)
+                return
+        self._update_clutch_indicator(t)
         if not self.trials or (self._head_task_range is not None and t < self._starts[0]):
             if self._head_task_range is not None:
                 self._show_head_task(t)

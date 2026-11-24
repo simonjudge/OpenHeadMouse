@@ -1,7 +1,7 @@
 """Mock UDP sender for debugging/testing provider streams.
 
 Emits the same JSON schema the AirPods Swift helper will use (see
-providers/airpods/airpods_provider.py, built in a later milestone), so the
+providers/airpods_provider.py, built in a later milestone), so the
 UDP receive/parse path can be developed and tested without the native
 helper or real hardware.
 

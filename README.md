@@ -72,6 +72,7 @@ See [coordinate frames](docs/coordinate-frames.md) for mounting and movement con
 
 ## Documentation
 
+- [Provider setup](docs/providers/README.md) — requirements, setup, configuration, validation, and troubleshooting for every input.
 - [Recording formats](docs/recording-formats.md) — head and Fitts file fields, clocks and the ZIP assignment manifest.
 - [Dwell click](docs/dwell-click.md) — settings, standalone operation, context menu, snap, zoom and platform limits.
 - [Colab analysis](docs/colab-analysis.md) — calculations, dwell estimates, exclusions, aggregation and result interpretation.
@@ -81,7 +82,7 @@ See [coordinate frames](docs/coordinate-frames.md) for mounting and movement con
 ## Layout
 
 - `core/` — quaternion math, absolute/velocity DSP engine and filters, recorder, OS cursor control
-- `providers/` — input drivers (UniFace/MediaPipe, OpenSeeFace, xIMU3, AirPods, Sony)
+- `providers/` — `<name>_provider.py` input drivers (UniFace, OpenSeeFace, xIMU3, AirPods, Sony, XIAO); supporting code and firmware in `<name>/`
 - `gui/` — PySide6 setup and DSP tuning UI
 - `session_viewer/` — standalone pyqtgraph session viewer (mesh + line-graph playback), opened from the main window's File menu; also replays Fitts sessions, optionally synchronised with a head recording (see below)
 - `colab_session_viewer/` — [Colab notebook viewer](colab_session_viewer/README.md) with one head/cursor playback panel, multiple participants/sessions, pooled summaries and per-participant first-target exclusions
@@ -89,162 +90,17 @@ See [coordinate frames](docs/coordinate-frames.md) for mounting and movement con
 - `dwell_click/` — standalone dwell-click engine, translucent progress overlay, and command-line launcher
 - `tests/` — unit tests
 
-### OpenSeeFace webcam provider
+## Provider setup
 
-The self-contained adapter in [providers/openSeeFace.py](providers/openSeeFace.py)
-receives pose data from an
-[OpenSeeFace tracker](https://github.com/emilianavt/OpenSeeFace). The tracker,
-not OpenHeadMouse, opens the webcam: until it sends packets the status reads
-"waiting for ... facetracker". The adapter does not import, install or download
-OpenSeeFace, and adds no Python dependencies to this project; it can optionally
-launch a tracker you have installed.
+Setup, configuration, validation, and troubleshooting for each input are in
+[docs/providers/](docs/providers/README.md):
 
-1. Obtain OpenSeeFace from its upstream project (on Windows, the release zip
-   contains `Binary\facetracker.exe` and its models). Either:
-   - let OpenHeadMouse launch it by setting `tracker_command` in
-     `config.json`, e.g. `"tracker_command": ["C:/OpenSeeFace/Binary/facetracker.exe"]`
-     (or `["C:/path/to/python.exe", "C:/OpenSeeFace/facetracker.py"]`). It is
-     started with `-c <camera> -i <udp_host> -p <udp_port>` plus `tracker_args`
-     (default `--faces 1`), its output goes to the log, and it is stopped with
-     the provider. If it exits, the status shows its exit code and last output; or
-   - run it yourself: `.\facetracker.exe -c 0 --faces 1 -i 127.0.0.1 -p 11573`.
-
-   Do not replace this project's dependencies with OpenSeeFace's older pinned
-   Python dependencies; run `facetracker.py` in its own environment.
-2. In OpenHeadMouse, select **OpenSeeFace (UDP webcam)** and click **Start**.
-   Keep mouse control off while checking movement directions, then calibrate
-   facing forward before enabling it. Do not run UniFace on the same camera.
-3. For a console-only check from this repository's root, run
-   `python -m providers.openSeeFace --port 11573 --face-id 0`
-   (add `--tracker C:/OpenSeeFace/Binary/facetracker.exe` to launch it too).
-   Turn left, look up and tilt the left ear down: yaw, pitch and roll respectively
-   should increase. Physical webcam validation is still required.
-
-The `providers.openseeface` settings in `config.json` accept `udp_host`, `udp_port`,
-`face_id` (default `0`), `tracking_lost_hold_ms` (default `500`), `tracker_command`
-(default `[]`, i.e. not launched), `camera` (default `0`) and `tracker_args`.
-An externally run tracker
-must send to that address/port and use the selected face ID. Localhost is the
-default; this UDP protocol is unauthenticated, so do not expose it to untrusted
-networks. No OpenSeeFace binaries or models are bundled with OpenHeadMouse.
-
-Only successful 3D fits generate samples. On startup or after the configured
-interval without a fresh valid pose, the provider reports `TRACKING_LOST`; it
-resumes on the next valid sample without inventing capture timestamps or held
-pose samples. Source timestamps come from OpenSeeFace's post-capture,
-pre-inference wall clock. Duplicates and backwards timestamps are discarded;
-restart the provider after resetting the sender clock. A socket/bind failure is
-reported as an error, while malformed datagrams are logged and discarded.
-Each provider gets an independent mouse profile, initially copied from the active
-profile when no saved profile exists.
-
-### Seeed XIAO nRF52840 Sense provider
-
-The XIAO Sense provider uses the onboard LSM6DS3TR-C IMU and communicates with
-the board over Bluetooth LE. Upload the Arduino sketch and install the board
-libraries using [`providers/xiao_ble/README.md`](./providers/xiao_ble/README.md),
-then select **XIAO nRF52840 Sense (BLE)**. The default orientation assumes the
-sensor axes already align with the canonical head frame; configure
-`providers.xiao_ble.device_to_head` in `config.json` for the board's actual
-mounting. This is a six-axis sensor without a magnetometer, so yaw is relative
-and drifts over time. Check its signs with
-`python test_orientation.py --provider xiao_ble --duration 20` before enabling
-mouse control.
-
-### Sony headphone provider
-
-The separate `providers/sony_provider.py` adapter implements `BaseProvider` and
-emits the same canonical `ProviderSample` quaternion schema as other inputs.
-It receives **v2 JSON telemetry**, not OpenTrack's binary packets, from
-[Sony Head Tracker](https://github.com/NicholasSlattery/sony-head-tracker).
-Sony Head Tracker **v2.2.0** is a pinned native dependency, not a pip package.
-Source setup (`python tools/prepare_release.py --assets`) downloads and verifies
-the platform's release archive, executable and licence checksums. First Sony use
-also installs it if missing (internet required). Windows and macOS full and
-HeadMouse-only executables bundle the bridge and its MIT licence; packaged apps
-never download it at runtime. The verified archive is bundled and extracted on
-use, preventing PyInstaller from rewriting signed/checksummed native bytes.
-Linux has no native Sony acquisition backend.
-
-Upstream reports support for WH/WF-1000XM5, WH/WF-1000XM6, ULT WEAR and LinkBuds S;
-compatibility depends on the headset exposing Android Head Tracker HID, firmware
-and OS Bluetooth support. XM4/XM3 are not supported. The bridge supports Windows
-11 and macOS 14+; Linux hardware acquisition is not provided. These are upstream
-compatibility reports, not hardware validation of this adapter.
-
-1. Pair and connect your headphones. Close any independently running Sony Head
-   Tracker instance so it does not compete for the sensor. On macOS, allow Input
-   Monitoring for the bridge when prompted.
-2. Select **Sony headphones (Sony Head Tracker)** and click **Start**, initially
-   with mouse control and dwell clicking off. OpenHeadMouse launches the bridge
-   with XYZ axes, no inversions and smoothing `1`, then waits for a valid v2 JSON
-   sample before activating tracking or starting calibration. Stop terminates
-   only the bridge process launched by this run.
-3. **On Windows 11, particularly after a fresh boot**, Bluetooth audio pairing
-   may not expose the Android Head Tracker sensor. If the managed bridge reports
-   that no tracker was found, OpenHeadMouse offers **Repair and retry**. Connect
-   and power on the headphones, accept the offer, then approve the Windows
-   administrator prompt. The bundled `repair --no-launch` command recreates the
-   Bluetooth HID sensor/driver binding without opening the native GUI. It may
-   briefly interrupt the headphones and closes other Sony Head Tracker windows.
-   OpenHeadMouse itself does not run as administrator; repair is never performed
-   without approval. Connection is retried once after a successful repair.
-   Cancelling either prompt stops startup; press Start to try again.
-   During repair, allow it to finish before stopping: OpenHeadMouse must not kill
-   the wrapper and leave its elevated driver-repair process running unattended.
-4. Other failures (or no valid data within **15 seconds** after bridge launch/retry)
-   show a short connection message with diagnostics under **Show Details**.
-   Start becomes available again. Repair is not offered for socket conflicts,
-   missing dependencies, a stalled stream, or macOS/external bridges.
-5. Check `python test_orientation.py --provider sony --duration 20`:
-   left turn, upward nod and left-ear-down tilt must give positive yaw, pitch
-   and roll. Then use OpenHeadMouse's calibration/recenter controls.
-
-**Externally managed bridge (advanced):** set `auto_start_bridge` to `false` in
-`providers.sony` to retain manual bridge control. Use **XYZ axes with no
-inversions**, not the bridge's YXZ/inverted defaults. Run one instance:
-
-```powershell
-.\sony-head-tracker.exe bridge --port 4242 --axis-map XYZ --invert none --smoothing 1
-```
-
-On macOS:
-
-```bash
-sony-head-tracker-macos bridge --port 4242 --axis-map XYZ --invert none --smoothing 1
-```
-
-Alternatively configure those axes, inversions and smoothing in the native
-bridge GUI. Smoothing `1` avoids double filtering; OpenHeadMouse applies its
-own filter. The JSON stream does not advertise axis settings, so the adapter
-cannot detect a misconfigured bridge.
-
-`providers.sony` in `config.json` accepts `udp_host` (default `127.0.0.1`),
-`udp_port` (default **4243**, the bridge's `--port + 1`),
-`tracking_lost_hold_ms` (default `500`), `auto_start_bridge` (default `true`) and
-`startup_timeout_s` (default `15`, positive finite seconds). The managed bridge
-requires loopback host `127.0.0.1` and JSON port `2..65535`, and automatically uses
-base port `udp_port - 1`. For an external bridge, update the receiver's JSON port
-if you change its base port. Each provider has an independent mouse profile,
-copied from the active profile when none has been saved. Existing user configs
-without a `sony` section use the defaults. In manual mode, Stop closes only the
-receiver, not the external bridge.
-
-**Timing limitation:** the startup log about monotonic receive time is
-informational, not a connection confirmation. JSON v2 contains no capture/device
-timestamp. With this explicit exception to the provider timing contract, `SonyProvider` timestamps
-each datagram immediately after socket receipt using `time.monotonic()`, and
-sets `raw_metadata.timestamp_source` to `host_monotonic_receive`. UDP/OS jitter
-therefore affects velocity estimates; these are not hardware-timed samples.
-Neither `packetsPerSecond` nor `receiveLatencyMs` is used to invent a clock.
-Native timestamps would require an upstream protocol extension.
-
-Malformed/unsupported packets are logged and discarded. Waiting or loss of valid
-samples for the configured interval reports `TRACKING_LOST` without emitting
-held poses; valid packets resume tracking. Bind/socket errors appear in status
-and logs. Keep the stream on loopback: UDP is unauthenticated. Do not recenter or
-change axes in the bridge during an OpenHeadMouse run; stop, configure the
-bridge, then restart and recalibrate to avoid reference-frame jumps.
+- [UniFace webcam](docs/providers/uniface.md)
+- [OpenSeeFace webcam or UDP](docs/providers/openseeface.md)
+- [xIMU3 USB or Wi-Fi](docs/providers/ximu3.md)
+- [AirPods CoreMotion (macOS)](docs/providers/airpods.md)
+- [Sony headphones](docs/providers/sony.md)
+- [XIAO nRF52840 Sense BLE](docs/providers/xiao_ble.md)
 
 ## Release editions
 
@@ -559,46 +415,13 @@ launch, then save settings to the user's configuration directory.
 
 ### xIMU3 mounting orientation
 
-When xIMU3 is selected, the **Mounting** dropdown appears beside the magnetometer
-option. Choose **LHS-Horizontal**, **LHS-Vertical**, **RHS-Horizontal**, or
-**RHS-Vertical**. Horizontal means hanging from glasses with USB pointing backward;
-vertical means mounted on the temple with USB pointing down. Printed arrows face
-out of the head in all four cases.
-
-The selection saves `axes_alignment` and `ahrs_axes_convention` and sends both
-settings to a connected device (USB or Wi-Fi). During a Wi-Fi outage it is applied
-on reconnection. Changing a live mount resets cursor mapping and restarts calibration
-if enabled. Existing non-preset settings appear as **Custom (from config)** and
-are preserved until a preset is selected. See [Coordinate Frame Conventions](docs/coordinate-frames.md)
-for the preset alignments.
+See the [xIMU3 provider guide](docs/providers/ximu3.md#configuration) for mounting
+presets, live configuration, and custom alignments.
 
 ### xIMU3 Wi-Fi AP connection
 
-Join the device's Wi-Fi AP before starting xIMU3. The device picker scans for USB and Wi-Fi
-announcements in the background; **Refresh devices** retries the scan. If announcements are
-missed, **Connect directly** uses `providers.ximu3.wifi_ip_address`,
-`wifi_port_send`, and `wifi_port_receive` from `config.json` (defaults:
-`192.168.1.1`, `9000`, `8001`). Announced devices instead use their advertised
-UDP ports. Confirm the computer is actually joined to the device's AP when direct
-connection does not produce data.
-
-The status under Input Provider distinguishes connection, configuration, waiting for
-samples, streaming, and reconnection. Tracking and initial calibration wait for a
-configured connection and a real quaternion. During a Wi-Fi outage cursor updates stop;
-the SDK retries until Stop is pressed. On recovery tracking resumes using the previous
-neutral pose, without counting the outage as a new recording session. Calibration that
-was interrupted before completion restarts after samples resume. Configuration-command
-rejections are errors, not successful connections. Both USB and Wi-Fi startup
-verify and apply the saved device settings.
-
-The xIMU3 SDK timestamps quaternion messages in microseconds of device time. The provider
-converts these to seconds before velocity-mode processing and recording, matching the
-other providers' timestamp unit; the measured sample interval, not the configured target
-rate, determines angular speed. Existing recordings made before this conversion retain
-their original microsecond timestamps and are not migrated.
-
-Requires the `ximu3` Python package 1.9.1 or newer. Settings are sent as JSON commands
-(e.g. `{"axesAlignment": 2}`) followed by `{"apply": null}`, as the x-IMU3 protocol requires.
+See the [xIMU3 provider guide](docs/providers/ximu3.md#setup) for USB/Wi-Fi setup,
+direct connection, reconnection behavior, and device timestamps.
 
 ### Absolute-mode fine pointing
 
@@ -742,8 +565,11 @@ identifies an inferred reference when no explicit calibration was recorded.
 The right side of the Fitts window uses the same layout as the head viewer. The **summary** shows:
 
 - ISO 9241-411 results: error rate, mean MT, Ae, We, IDe and throughput.
-- Estimated headmouse boundary clutches: the mean count per eligible trial, using paired,
-  synchronised head and cursor recordings. See the [clutch definition](docs/colab-analysis.md#estimated-headmouse-clutches).
+- Estimated off-screen and on-screen headmouse clutches: separate mean counts per eligible trial.
+  The off-screen estimate uses paired, synchronised head and cursor recordings; the on-screen
+  estimate detects a backward reset followed by faster recovery along the original
+  approach direction, rather than a throw/overshoot correction.
+  See the [definitions and limitations](docs/colab-analysis.md#estimated-headmouse-clutches).
 - Screen boundary contacts: the mean number of observed screen-edge contact episodes per
   recorded trial, with the number of contributing trials shown separately.
 - The path-accuracy measures from MacKenzie, Kauppinen & Silfverberg, *Accuracy measures for
@@ -768,10 +594,19 @@ Consecutive near-edge points count once; an initial near-edge sample starts an e
 This is approximate because older coordinates are canvas-local; it does not prove an
 exact screen hit. Missing paths or dimensions remain unavailable, not zero.
 
-The notebook reports **Clutch stats** in a separate table with raw boundary/clutch totals,
+The notebook reports **Clutch stats** in a separate table with raw boundary and both clutch totals,
 eligible target counts and per-target averages, including individual-session results
 and a dedicated CSV. These fields are omitted from the main Fitts, no-dwell and
-first-entry tables.
+first-entry tables. Expand **Clutch estimate settings** to adjust the detection thresholds;
+results recalculate immediately and exports include the active settings. Desktop playback
+continues to use the defaults. In both viewers, **Show clutch estimates** displays
+retrospective on-screen and off-screen indicators beside playback, including for
+excluded trials. These estimates do not establish intent.
+O/E interval marks below the graphs show on-screen and edge detections without
+changing miss backgrounds. Notebook trial controls beside the session selector
+seek to a trial's start; **Zoom to trial** expands that interval on every graph,
+including head acceleration. Desktop offers trial selection and timeline zoom
+above its cursor playback.
 
 Published work has reported actual **clutches per trial**, for example Nancel, Vogel and
 Lank, [*Clutching Is Not (Necessarily) the Enemy*](https://hal.science/hal-01523428)

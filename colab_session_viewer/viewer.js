@@ -95,6 +95,15 @@ const NotebookPlayback = (() => {
         };
     }
 
+    function clutchAt(state, time, key) {
+        const trial = state.trial;
+        if (!trial || time < trial.start || time > trial.end) return "inactive";
+        const episodes = trial[key];
+        if (episodes == null) return "unavailable";
+        const elapsed = time - trial.start;
+        return episodes.some(([start, end]) => elapsed >= start && elapsed <= end) ? "active" : "inactive";
+    }
+
     function mount(data, root) {
         const get = id => root.querySelector(`#${id}`);
         get("title").textContent = data.title + (data.synced ? " (synchronised)" : "");
@@ -104,6 +113,8 @@ const NotebookPlayback = (() => {
             "targets_analysed", "hits", "misses", "path_trial_count",
             "condition_trials_recorded", "condition_trials_analysed",
             "nodwell_trial_count", "nodwell_invalid_count", "nodwell_unknown_count",
+            "boundary_trial_count", "boundary_count", "clutch_trial_count", "clutch_count",
+            "onscreen_clutch_trial_count", "onscreen_clutch_count",
         ]);
         const sessionSummary = Object.entries(data.session_summary)
             .map(([key, value]) => {
@@ -118,21 +129,26 @@ const NotebookPlayback = (() => {
                 }
                 return `${key}${["head_samples", "head_duration_s"].includes(key) ? " (recorded total, before exclusions)" : ""}: ${text}`;
             }).join("\n");
-        let time = 0, playing = false, zoom = 1, timer = null;
+        const selectedTrial = data.trials[data.selected_trial ?? 0];
+        const range = data.zoom_to_trial && selectedTrial ?
+            [selectedTrial.start, selectedTrial.end] : [0, data.duration];
+        let time = data.initial_time ?? 0, playing = false, zoom = 1, timer = null;
         let cameraYaw = 0, cameraPitch = 0, cameraScale = 1;
         const slider = get("seek"), play = get("play"), speed = get("speed");
         const relativePose = get("relative-pose");
         get("reference-pose-source").textContent = `Reference pose: ${data.reference_pose_source}`;
-        slider.max = String(data.duration);
+        slider.min = String(range[0]);
+        slider.max = String(range[1]);
         const graphs = [];
         for (const [id, series] of [["head-graphs", data.head_graphs], ["cursor-graphs", data.cursor_graphs]]) {
             for (const item of series) {
                 const canvas = document.createElement("canvas");
                 canvas.width = 660;
-                canvas.height = 100;
+                canvas.height = 130;
                 canvas.setAttribute("aria-label", item.label);
                 get(id).appendChild(canvas);
-                const values = item.points.filter(Boolean).map(p => p[1]);
+                const values = item.points.filter(p => p &&
+                    (!data.zoom_to_trial || p[0] >= range[0] && p[0] <= range[1])).map(p => p[1]);
                 let low = values.length ? values.reduce((a, b) => Math.min(a, b)) : 0;
                 let high = values.length ? values.reduce((a, b) => Math.max(a, b)) : 1;
                 const pad = high > low ? (high - low) * 0.03 : 1;
@@ -261,10 +277,11 @@ const NotebookPlayback = (() => {
         }
         function drawGraphs(state) {
             for (const graph of graphs) {
-                const {canvas, label, points, low, high} = graph;
+                const {canvas, label, points} = graph;
+                const {low, high} = graph;
                 const ctx = canvas.getContext("2d", {willReadFrequently: true}), center = (low + high) / 2;
                 const half = (high - low) / 2 / zoom;
-                const x = t => 58 + t / Math.max(data.duration, 0.001) * (canvas.width - 70);
+                const x = t => 58 + (t - range[0]) / Math.max(range[1] - range[0], 0.001) * (canvas.width - 70);
                 const y = v => 88 - (v - center + half) / (2 * half) * 64;
                 const isCursor = label.startsWith("Cursor") || label.startsWith("Distance");
                 // Traces are fixed; only the playhead changes on each 40 ms tick.
@@ -274,7 +291,8 @@ const NotebookPlayback = (() => {
                     ctx.fillText(label, 58, 12);
                     ctx.fillText((center + half).toFixed(1), 2, 27);
                     ctx.fillText((center - half).toFixed(1), 2, 88);
-                    ctx.fillText("0.0 s", 58, 99); ctx.fillText(`${data.duration.toFixed(1)} s`, canvas.width - 65, 99);
+                    ctx.fillText(`${range[0].toFixed(1)} s`, 58, 99);
+                    ctx.fillText(`${range[1].toFixed(1)} s`, canvas.width - 65, 99);
                     ctx.save(); ctx.beginPath(); ctx.rect(58, 20, canvas.width - 70, 68); ctx.clip();
                     ctx.fillStyle = "#d9d9d9";
                     if (isCursor) {
@@ -312,6 +330,23 @@ const NotebookPlayback = (() => {
                     }
                     line(ctx, segment, graph.color || "#1f77b4");
                     ctx.restore();
+                    ctx.save(); ctx.beginPath(); ctx.rect(58, 102, canvas.width - 70, 28); ctx.clip();
+                    for (const trial of data.trials) {
+                        for (const [key, mark, color, row] of [
+                            ["onscreen_clutches", "O", "#00695c", 113],
+                            ["offscreen_clutches", "E", "#9c3d10", 127],
+                        ]) {
+                            ctx.fillStyle = color;
+                            for (const [a, b] of trial[key] || []) {
+                                const start = trial.start + a, end = trial.start + b;
+                                if (end < range[0] || start > range[1]) continue;
+                                const left = x(Math.max(range[0], start)), right = x(Math.min(range[1], end));
+                                line(ctx, [[left, row + 1], [right, row + 1]], color, 2);
+                                ctx.fillText(mark, (left + right) / 2, row);
+                            }
+                        }
+                    }
+                    ctx.restore();
                     graph.background = ctx.getImageData(0, 0, canvas.width, canvas.height);
                     graph.cachedZoom = zoom;
                 } else {
@@ -326,6 +361,19 @@ const NotebookPlayback = (() => {
         function render() {
             const state = stateAt(data, time);
             head(state); cursor(state); drawGraphs(state);
+            get("clutch-indicator").hidden = !get("show-clutch").checked;
+            for (const [id, label, key] of [
+                ["clutch-offscreen", "Off-screen", "offscreen_clutches"],
+                ["clutch-onscreen", "On-screen", "onscreen_clutches"],
+            ]) {
+                const status = clutchAt(state, time, key);
+                const indicator = get(id);
+                const text = `${label}: ${status}`;
+                if (indicator.textContent !== text) {
+                    indicator.textContent = text;
+                    indicator.className = status === "active" ? "clutch-active" : "";
+                }
+            }
             slider.value = String(time);
             get("time").textContent = `${time.toFixed(1)} / ${data.duration.toFixed(1)} s`;
         }
@@ -334,22 +382,23 @@ const NotebookPlayback = (() => {
         }
         play.onclick = () => {
             if (playing) return pause();
-            if (data.duration <= 0) return;
-            if (time >= data.duration) time = 0;
+            if (range[1] <= range[0]) return;
+            if (time >= range[1] || time < range[0]) time = range[0];
             playing = true; play.textContent = "Pause";
             timer = setInterval(() => {
                 if (!speed.checkValidity() || !speed.value) { pause(); speed.reportValidity(); return; }
-                time = Math.min(data.duration, time + 0.04 * Number(speed.value));
+                time = Math.min(range[1], time + 0.04 * Number(speed.value));
                 render();
-                if (time >= data.duration) pause();
+                if (time >= range[1]) pause();
             }, 40);
         };
         slider.oninput = () => { pause(); time = Number(slider.value); render(); };
-        get("rewind").onclick = () => { pause(); time = 0; render(); };
+        get("rewind").onclick = () => { pause(); time = range[0]; render(); };
         get("zoom-in").onclick = () => { zoom = Math.min(20, zoom * 1.25); render(); };
         get("zoom-out").onclick = () => { zoom = Math.max(1, zoom / 1.25); render(); };
         get("reset-camera").onclick = () => { cameraYaw = cameraPitch = 0; cameraScale = 1; render(); };
         relativePose.onchange = () => head(stateAt(data, time));
+        get("show-clutch").onchange = render;
         let drag = null;
         get("head").onpointerdown = event => { drag = [event.clientX, event.clientY]; event.target.setPointerCapture(event.pointerId); };
         get("head").onpointerup = () => { drag = null; };
@@ -368,7 +417,7 @@ const NotebookPlayback = (() => {
         render();
         return {state: () => stateAt(data, time), pause};
     }
-    return {stateAt, pathMeasures, mount};
+    return {stateAt, pathMeasures, clutchAt, mount};
 })();
 
 if (typeof module !== "undefined") module.exports = NotebookPlayback;

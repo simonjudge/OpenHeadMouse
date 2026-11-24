@@ -62,7 +62,7 @@ to `R_head = M · R_device · Mᵀ`.
 | XIAO nRF52840 Sense | LSM6DS3TR-C sensor axes | Configured as `providers.xiao_ble.device_to_head` | `qm.change_basis(q, M)` |
 
 Code: `providers/uniface_provider.py` (`_CAMERA_TO_HEAD_FRAME`),
-`providers/airpods/airpods_provider.py` (`_AIRPODS_TO_HEAD_FRAME`),
+`providers/airpods_provider.py` (`_AIRPODS_TO_HEAD_FRAME`),
 `providers/sony_provider.py` (`_SONY_TO_HEAD_FRAME`),
 `providers/ximu3_provider.py` (`_XIMU3_TO_HEAD_FRAME`),
 `providers/xiao_ble_provider.py` (`device_to_head`). The session viewer's face mesh is in
@@ -76,13 +76,13 @@ headphone axes unremapped. Its default YXZ order with X/Z inverted is **not**
 this frame and must not be used with the adapter. JSON v2 does not include the
 axis configuration; OpenHeadMouse cannot verify it automatically. The provider
 converts the scalar-first quaternion directly rather than reconstructing it from
-the bridge's differently defined Euler angles. See the [setup guide](../README.md#sony-headphone-provider).
+the bridge's differently defined Euler angles. See the [Sony setup guide](./providers/sony.md#setup).
 Synthetic tests cover isolated motions and combined rotations; physical Sony
 headphone validation remains required.
 
 ### OpenSeeFace camera alignment
 
-[providers/openSeeFace.py](../providers/openSeeFace.py) uses the upstream XYZW
+[providers/openseeface_provider.py](../providers/openseeface_provider.py) uses the upstream XYZW
 quaternion, whether it is computed in-process from the camera or received over
 UDP. That quaternion represents the inverse PnP rotation, not a conventional active
 model-to-camera quaternion. PnP also uses swapped image coordinates (row, column).

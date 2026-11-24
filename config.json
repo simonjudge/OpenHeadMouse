@@ -7,10 +7,10 @@
   "hotkeys": {
     "toggle_tracking": "<esc>"
   },
-  "active_provider": "ximu3",
+  "active_provider": "openseeface",
   "ui": {
     "recording_enabled": false,
-    "mouse_control_enabled": false,
+    "mouse_control_enabled": true,
     "calibration_enabled": false,
     "dwell_click": {
       "enabled": false,

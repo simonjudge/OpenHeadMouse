@@ -17,7 +17,10 @@ import numpy as np
 from core import quaternion_math as qm
 from core.recorder import RecordedSample, Recorder
 from core.session_stats import SessionStats
-from fitts_law.clutch import boundary_counts, clutch_counts
+from fitts_law.clutch import (
+    DEFAULT_CLUTCH_SETTINGS, ClutchSettings, boundary_counts, clutch_episodes,
+    onscreen_counts, onscreen_episodes,
+)
 from fitts_law.results import FittsResultsLogger, FittsStats, TrialResult
 from colab_session_viewer.dwell import (
     DWELL_BEHAVIOUR_FIELDS, DWELL_FIELDS, DWELL_LABELS, NODWELL_EQUIVALENTS,
@@ -338,23 +341,24 @@ def fitts_summary_row(participant: str, trials: list[TrialResult]) -> dict:
     }])["Fitts stats"][0]
 
 
-def clutch_summary_sessions(sessions: list[Session], trials: list[TrialResult]) -> dict:
+def clutch_summary_sessions(
+    sessions: list[Session], trials: list[TrialResult], settings: ClutchSettings = DEFAULT_CLUTCH_SETTINGS,
+) -> dict:
     """Pool counts, keeping each recording's own head stream and screen geometry."""
     selected = {id(trial) for trial in trials}
-    counts = [
-        count
-        for session in sessions
-        for count in clutch_counts(
-            [trial for trial in session.trials if id(trial) in selected],
-            session.samples, session.metadata,
-        )
-        if count is not None
-    ]
+    counts, onscreen = [], []
+    for session in sessions:
+        retained = [trial for trial in session.trials if id(trial) in selected]
+        offscreen = clutch_episodes(retained, session.samples, session.metadata, settings)
+        counts.extend(len(episodes) for episodes in offscreen if episodes is not None)
+        onscreen.extend(count for count in onscreen_counts(
+            retained, session.metadata, settings, offscreen=offscreen,
+        ) if count is not None)
     boundaries = [
         count
         for session in sessions
         for count in boundary_counts(
-            [trial for trial in session.trials if id(trial) in selected], session.metadata,
+            [trial for trial in session.trials if id(trial) in selected], session.metadata, settings,
         )
         if count is not None
     ]
@@ -362,9 +366,13 @@ def clutch_summary_sessions(sessions: list[Session], trials: list[TrialResult]) 
         "clutch_trial_count": len(counts),
         "clutch_count": sum(counts) if counts else None,
         "clutch_mean": float(np.mean(counts)) if counts else None,
+        "onscreen_clutch_trial_count": len(onscreen),
+        "onscreen_clutch_count": sum(onscreen) if onscreen else None,
+        "onscreen_clutch_mean": float(np.mean(onscreen)) if onscreen else None,
         "boundary_trial_count": len(boundaries),
         "boundary_count": sum(boundaries) if boundaries else None,
         "boundary_hits": float(np.mean(boundaries)) if boundaries else None,
+        **{f"clutch_setting_{key}": value for key, value in asdict(settings).items()},
     }
 
 
@@ -800,6 +808,7 @@ def participant_rows(
     head_opening_exclude_s: float = 0.0,
     include_dwell: bool = False,
     excluded_trial_ids: set[int] | None = None,
+    clutch_settings: ClutchSettings = DEFAULT_CLUTCH_SETTINGS,
 ) -> list[dict]:
     """Calculate all participant measures, pooling or averaging at the stated level.
 
@@ -866,7 +875,7 @@ def participant_rows(
             if key.startswith("overall_"):
                 row[key.removeprefix("overall_")] = value if trials else None
         row.update({f"path_{k}": v for k, v in FittsStats.accuracy_summary(trials).items()})
-        row.update(clutch_summary_sessions(recordings, trials))
+        row.update(clutch_summary_sessions(recordings, trials, clutch_settings))
         if include_dwell:
             row.update(selection_summary(recordings, trials))
         speeds, accelerations, ranges = [], [], []
@@ -965,11 +974,17 @@ def table_sources(sessions: list[Session], label: str) -> dict[str, list[str]]:
 
 def column_label(key: str) -> str:
     if key == "clutch_mean":
-        return "Estimated clutches / target"
+        return "Off-screen clutches / target"
     if key == "clutch_trial_count":
-        return "Clutch targets"
+        return "Off-screen eligible targets"
     if key == "clutch_count":
-        return "Clutches (total)"
+        return "Off-screen clutches (total)"
+    if key == "onscreen_clutch_mean":
+        return "On-screen clutches / target"
+    if key == "onscreen_clutch_trial_count":
+        return "On-screen eligible targets"
+    if key == "onscreen_clutch_count":
+        return "On-screen clutches (total)"
     if key == "boundary_count":
         return "Boundary contacts (total)"
     if key == "boundary_hits":
@@ -1101,6 +1116,8 @@ def participant_tables(rows: list[dict]) -> dict[str, list[dict]]:
         columns = (
             "targets_analysed", "boundary_trial_count", "boundary_count", "boundary_hits",
             "clutch_trial_count", "clutch_count", "clutch_mean",
+            "onscreen_clutch_trial_count", "onscreen_clutch_count", "onscreen_clutch_mean",
+            *[f"clutch_setting_{key}" for key in asdict(DEFAULT_CLUTCH_SETTINGS)],
         )
         tables["Clutch stats"] = [
             {"participant": row["participant"], **{key: row.get(key) for key in columns}}
@@ -1175,11 +1192,29 @@ def field_description(key: str) -> str:
         "throughput_bits_per_s": "Throughput (TP): a combined measure of pointing speed and accuracy; higher is better. The effective index of difficulty for all analysed targets is divided by their average movement time, in bits/s. Zero if average movement time is zero or negative.",
         "path_trial_count": "Number of analysed targets with enough cursor-path data for path measures: at least two points and different start and target positions.",
         "boundary_trial_count": "Number of analysed targets with a recorded boundary-event count, or a cursor path and saved screen dimensions allowing a near-edge estimate. This includes eligible targets with zero contacts.",
-        "boundary_count": "Total boundary-contact episodes over boundary_trial_count targets: saved event counts when available, otherwise estimated entries into a 30-pixel screen-edge zone from the saved trajectory. A first recorded point in the zone starts one episode; consecutive edge points, including corners, count once. Older canvas-local coordinates make this an approximation, not an exact screen-hit count.",
-        "clutch_count": "Total estimated headmouse clutches over clutch_trial_count eligible targets, not a per-target average.",
-        "clutch_trial_count": "Number of analysed headmouse targets with a recorded cursor path and complete synchronised head coverage suitable for the estimated clutch measure.",
-        "clutch_mean": "Estimated headmouse boundary clutches per eligible target. The detector requires head movement towards a near-edge cursor plateau, then head and cursor movement back; see calculation notes for thresholds and limitations. This is an estimate, not proof of intent or a validated clinical measure.",
-        "boundary_hits": "Average boundary-contact episodes per eligible target: boundary_count divided by boundary_trial_count. Uses recorded event counts when present, otherwise a 30-pixel near-edge trajectory estimate. It is not proof of clutching.",
+        "boundary_count": "Total boundary-contact episodes over boundary_trial_count targets: saved event counts when available, otherwise estimated entries into the configured screen-edge zone from the saved trajectory. A first recorded point in the zone starts one episode; consecutive edge points, including corners, count once. Older canvas-local coordinates make this an approximation, not an exact screen-hit count.",
+        "clutch_count": "Total estimated off-screen headmouse clutches over clutch_trial_count eligible targets, not a per-target average. Legacy CSV field name retained.",
+        "clutch_trial_count": "Number of analysed headmouse targets with a recorded cursor path and complete synchronised head coverage suitable for the off-screen estimate.",
+        "clutch_mean": "Estimated off-screen headmouse clutches per eligible target: head movement towards a near-edge cursor plateau, then head and cursor movement back. An estimate, not proof of intent.",
+        "onscreen_clutch_trial_count": "Analysed headmouse targets with at least three consecutive usable cursor samples; no head stream or screen dimensions are required.",
+        "onscreen_clutch_count": "Total estimated on-screen away-and-faster-return episodes over eligible targets.",
+        "onscreen_clutch_mean": "Estimated cursor resets per eligible target: a backward excursion before passing the target, followed by faster recovery along the original approach axis. Overlapping confirmed edge clutches take precedence. Not proof of intent.",
+        "boundary_hits": "Average boundary-contact episodes per eligible target: boundary_count divided by boundary_trial_count. Uses recorded event counts when present, otherwise the configured near-edge trajectory estimate. It is not proof of clutching.",
+        "clutch_setting_edge_zone_px": "Maximum distance from a screen edge in pixels for a near-edge cursor sample. Also used for legacy boundary estimates, not saved event counts.",
+        "clutch_setting_still_axis_px": "Maximum cursor displacement in pixels from the first point of the near-edge plateau on the edge-normal axis.",
+        "clutch_setting_min_still_s": "Minimum duration of a near-edge plateau, in seconds.",
+        "clutch_setting_max_cursor_gap_s": "Maximum time gap between cursor samples within an off-screen plateau or on-screen episode, in seconds.",
+        "clutch_setting_max_head_gap_s": "Maximum time gap between head samples covering an eligible trial, in seconds.",
+        "clutch_setting_outward_deg": "Minimum outward head rotation during the plateau, in degrees.",
+        "clutch_setting_return_deg": "Minimum head rotation back from the outward peak, in degrees.",
+        "clutch_setting_return_px": "Minimum inward cursor movement from the plateau, in pixels.",
+        "clutch_setting_return_window_s": "Maximum time after the plateau for the head and cursor return, in seconds.",
+        "clutch_setting_onscreen_hysteresis_px": "Target-axis displacement required to establish a reversal, in pixels.",
+        "clutch_setting_onscreen_retreat_px": "Minimum backward target-axis displacement AND increase in Euclidean distance to target, in pixels.",
+        "clutch_setting_onscreen_return_px": "Minimum forward target-axis displacement, in pixels; the entire retreat must also be recovered.",
+        "clutch_setting_onscreen_speed_ratio": "Mean forward target-axis speed must exceed this multiple of backward target-axis speed.",
+        "clutch_setting_onscreen_max_phase_s": "Maximum duration of each on-screen retreat and return phase, in seconds.",
+        "clutch_setting_onscreen_opposition": "Minimum cosine of opposition between retreat and return displacement vectors; 1 is exactly opposite.",
         "path_tre": "Target re-entry (TRE): average number of times the cursor enters the circular target again after its first entry, per usable path. The first entry is not counted. Trials with no re-entry contribute zero, so this average count can be below 1; it is not a percentage or a total.",
         "path_tac": "Task-axis crossing (TAC): average number of times the cursor crosses the straight line from start to target, per usable path. Points exactly on the line are ignored when counting crossings.",
         "path_mdc": "Movement-direction change (MDC): average number of side-to-side reversals across the line from start to target, per usable path. Steps with no sideways movement are ignored.",
@@ -1305,11 +1340,13 @@ def format_field(key: str, value) -> str:
     target_counts = {
         "exclude_first_targets_per_file", "targets_recorded", "targets_excluded",
         "targets_analysed", "hits", "misses", "path_trial_count", "boundary_trial_count", "clutch_trial_count",
-        "boundary_count", "clutch_count",
+        "boundary_count", "clutch_count", "onscreen_clutch_trial_count", "onscreen_clutch_count",
         "matching_targets_available", "matching_targets_selected", "matching_targets_omitted",
         "condition_trials_recorded", "condition_trials_analysed",
         "nodwell_trial_count", "nodwell_invalid_count", "nodwell_unknown_count",
     }
+    if value is not None and key.startswith("clutch_setting_"):
+        return str(value)
     if value is not None and (key in target_counts or key.startswith("dwell_") and key.endswith("_count")):
         return str(int(value))
     return format_number(value)
@@ -1564,6 +1601,7 @@ def summary_csv(rows: list[dict]) -> str:
 def playback_payload(
     session: Session, mesh_path: Path | None = None, *, exclude_first_targets: int = 0,
     initial_rest_exclude_s: float = 0.0, head_opening_exclude_s: float = 0.0,
+    clutch_settings: ClutchSettings = DEFAULT_CLUTCH_SETTINGS,
 ) -> dict:
     """Prepare full-resolution playback and its calculated plot/summary values.
 
@@ -1636,10 +1674,14 @@ def playback_payload(
         ]
     origin = span[0]
     trials, speed_points, distance_points = [], [], []
+    offscreen = clutch_episodes(session.trials, session.samples, session.metadata, clutch_settings)
+    onscreen = onscreen_episodes(session.trials, session.metadata, clutch_settings, offscreen=offscreen)
     for trial_index, (trial, start, end) in enumerate(zip(session.trials, starts, ends)):
         item = asdict(trial)
         item["start"], item["end"] = float(start - origin), float(end - origin)
         item["excluded"] = trial_index < exclude_first_targets
+        item["offscreen_clutches"] = offscreen[trial_index]
+        item["onscreen_clutches"] = onscreen[trial_index]
         item["planned_id_bits"] = planned_id(trial)
         trajectory = np.asarray(trial.trajectory, dtype=float).reshape(-1, 3)
         speeds = np.zeros(len(trajectory))
@@ -1709,7 +1751,9 @@ def playback_payload(
         "session_summary": participant_rows(
             [session], {session.participant: exclude_first_targets},
             initial_rest_exclude_s=initial_rest_exclude_s, head_opening_exclude_s=head_opening_exclude_s,
+            clutch_settings=clutch_settings,
         )[0],
+        "selected_trial": 0, "zoom_to_trial": False, "initial_time": 0,
     }
 
 

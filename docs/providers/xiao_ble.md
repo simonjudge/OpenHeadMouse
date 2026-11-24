@@ -3,13 +3,21 @@
 This guide covers flashing the board firmware and testing the XIAO Sense with
 OpenHeadMouse on Windows. The simplest firmware workflow is the standalone
 Arduino IDE; Visual Studio or VS Code is not required. The firmware sketch is
-[`firmware/OpenHeadMouseXiao/OpenHeadMouseXiao.ino`](./firmware/OpenHeadMouseXiao/OpenHeadMouseXiao.ino).
+[`OpenHeadMouseXiao.ino`](../../providers/xiao_ble/firmware/OpenHeadMouseXiao/OpenHeadMouseXiao.ino).
 
 This is specifically for **XIAO nRF52840 Sense** (or Sense Plus), with the
 onboard LSM6DS3TR-C IMU. The non-Sense XIAO nRF52840 does not have that IMU.
 Nothing needs to be soldered or connected to the board for this test.
 
-## 1. Install Arduino IDE and the XIAO board support
+## Requirements
+
+- XIAO nRF52840 Sense, a data-capable USB-C cable, and a BLE-capable computer.
+- Arduino IDE 2, Seeed's Mbed-enabled board core, and the libraries below.
+- OpenHeadMouse's Python dependencies, including Bleak, or an updated build.
+
+## Setup
+
+### 1. Install Arduino IDE and the XIAO board support
 
 1. Install [Arduino IDE 2](https://www.arduino.cc/en/software) and open it.
 2. Open **File > Preferences**. In **Additional boards manager URLs**, add:
@@ -27,7 +35,7 @@ Nothing needs to be soldered or connected to the board for this test.
 Seeed's board setup instructions are also in the
 [XIAO nRF52840 guide](https://wiki.seeedstudio.com/XIAO_BLE/).
 
-## 2. Install the two Arduino libraries
+### 2. Install the two Arduino libraries
 
 In Arduino IDE, open **Sketch > Include Library > Manage Libraries**. Search
 for and install:
@@ -38,7 +46,7 @@ for and install:
 The sketch reads the Sense's onboard IMU using Seeed's LSM6DS3 library and
 advertises its samples through ArduinoBLE. No microphone library is needed.
 
-## 3. Compile and upload the firmware
+### 3. Compile and upload the firmware
 
 1. Open the sketch file linked at the top of this page. The folder and `.ino`
    file have matching names, as required by Arduino sketches.
@@ -52,13 +60,7 @@ open **Tools > Serial Monitor** at **115200 baud**; the startup message is
 `OpenHeadMouse XIAO sensor advertising`. The serial monitor is optional for
 normal BLE tracking.
 
-If the board or port is missing, try another USB-C cable known to carry data,
-connect directly to the computer rather than through a hub, and reconnect the
-board. If compilation says `ArduinoBLE.h` or `LSM6DS3.h` is missing, install the
-corresponding library above and make sure the Mbed-enabled board core is
-selected.
-
-## 4. Run OpenHeadMouse
+### 4. Run OpenHeadMouse
 
 From a PowerShell terminal in the OpenHeadMouse repository root, install the
 Python dependencies if they are not already installed, then launch the app:
@@ -73,6 +75,32 @@ The connection status should progress from scanning/connecting to **tracking**
 after the first valid sensor notification. Initial calibration also waits for
 that first sample. For the first test, keep mouse control off and hold the
 board in the same orientation in which it will be worn.
+
+## Configuration
+
+Settings are under `providers.xiao_ble` in `config.json`:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `device_name` | unset | Optional advertised device name filter |
+| `service_uuid`, `characteristic_uuid` | UUIDs below | Must match the firmware |
+| `sample_timeout_s` | `1.0` | Interval without valid samples before tracking loss |
+| `scan_timeout_s` | `2.0` | Duration of each BLE scan |
+| `device_to_head` | Identity matrix | Sensor-to-head mounting rotation |
+
+Mouse gains and filtering are stored separately in `mouse_profiles.xiao_ble`.
+
+### Mounting and sensor axes
+
+The configuration entry `providers.xiao_ble.device_to_head` is a 3x3 rotation
+matrix mapping the IMU's sensor axes to the canonical head axes. Its default
+identity matrix assumes sensor +X points forward, +Y points left, and +Z points
+up. If your mounting differs, change that matrix in `config.json` and repeat
+the direction test. It must be a proper rotation (`det(M) = +1`); do not fix
+direction signs by changing mouse gains. See
+[`coordinate-frames.md`](../coordinate-frames.md) for the frame convention.
+
+## Validation
 
 Alternatively, test from the repository root without opening the GUI:
 
@@ -90,15 +118,19 @@ roll are gravity-referenced while yaw is relative and drifts with time. This
 provider is useful for trying the integration, but should not be treated as an
 absolute-heading tracker.
 
-## Mounting and sensor axes
+## Troubleshooting and limitations
 
-The configuration entry `providers.xiao_ble.device_to_head` is a 3x3 rotation
-matrix mapping the IMU's sensor axes to the canonical head axes. Its default
-identity matrix assumes sensor +X points forward, +Y points left, and +Z points
-up. If your mounting differs, change that matrix in `config.json` and repeat
-the direction test. It must be a proper rotation (`det(M) = +1`); do not fix
-direction signs by changing mouse gains. See
-[`coordinate-frames.md`](../../docs/coordinate-frames.md) for the frame convention.
+- Missing USB port: try another data-capable USB-C cable, connect directly to
+  the computer rather than through a hub, and reconnect the board.
+- Missing `ArduinoBLE.h` or `LSM6DS3.h`: install the corresponding library and
+  select the Mbed-enabled Seeed board core.
+- BLE scanning never finishes: check Bluetooth is enabled, the uploaded board
+  is powered, and no other program is connected to it. Normal use connects from
+  OpenHeadMouse; Windows audio-style pairing is not required.
+- Direction errors: verify the physical mounting matrix, not mouse gain signs.
+- Yaw drifts because the IMU has no magnetometer.
+- Firmware compilation and physical sensor-axis validation must be checked on
+  the board; desktop unit tests do not verify those steps.
 
 ## What the board sends
 
@@ -113,4 +145,4 @@ The sketch notifies a 16-byte little-endian packet approximately every 10 ms:
 The service UUID is `b28a0001-7f2d-4c9a-9b23-1d43c6e8a501`; the notification
 characteristic UUID is `b28a0002-7f2d-4c9a-9b23-1d43c6e8a501`. These and the
 packet layout must match between the sketch and
-[`providers/xiao_ble_provider.py`](../xiao_ble_provider.py).
+[`providers/xiao_ble_provider.py`](../../providers/xiao_ble_provider.py).

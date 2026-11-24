@@ -1,6 +1,6 @@
 """AirPods provider: Python UDP receiver for the Swift CoreMotion helper.
 
-The native Swift helper (in swift_src/) streams CMHeadphoneMotionManager
+The native Swift helper (in airpods/swift_src/) streams CMHeadphoneMotionManager
 quaternions as JSON over UDP to 127.0.0.1:5005. This provider listens on
 that socket and normalizes the stream into ProviderSample.
 
@@ -30,7 +30,7 @@ turn head LEFT -> yaw POSITIVE, nod UP -> pitch POSITIVE, tilt LEFT ear down
 -> roll POSITIVE.
 
 Swift Helper & Normalization:
-  The Swift helper (swift_src/main.swift) receives quaternions from
+  The Swift helper (airpods/swift_src/main.swift) receives quaternions from
   CMHeadphoneMotionManager, normalizes them to unit length, and transmits
   them unchanged in [w, x, y, z] scalar-first format. The frame conversion
   happens here in Python.

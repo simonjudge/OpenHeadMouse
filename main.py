@@ -178,7 +178,7 @@ def make_provider(name: str, config: dict):
             tracking_lost_hold_ms=provider_config.get("tracking_lost_hold_ms", 500.0),
         )
     if name == "openseeface":
-        from providers.openSeeFace import OpenSeeFaceProvider
+        from providers.openseeface_provider import OpenSeeFaceProvider
 
         return OpenSeeFaceProvider(
             source=provider_config.get("source", "camera"),
@@ -228,7 +228,7 @@ def make_provider(name: str, config: dict):
             scan_timeout_s=provider_config.get("scan_timeout_s", 2.0),
         )
     if name == "airpods":
-        from providers.airpods.airpods_provider import AirPodsProvider
+        from providers.airpods_provider import AirPodsProvider
 
         return AirPodsProvider(
             udp_host=provider_config.get("udp_host", "127.0.0.1"),
@@ -1139,7 +1139,7 @@ class App:
 
     def _on_ximu3_mounting_orientation_changed(self, name: str) -> None:
         from providers.ximu3_provider import Ximu3Provider
-        from providers.ximu3_settings import MOUNTING_ORIENTATIONS
+        from providers.ximu3.settings import MOUNTING_ORIENTATIONS
         from PySide6.QtWidgets import QMessageBox
 
         config = self._config.setdefault("providers", {}).setdefault("ximu3", {})
@@ -1709,7 +1709,7 @@ class App:
         from core.headmouse import TrackingState
         from providers.base_provider import ProviderState
 
-        openseeface = sys.modules.get("providers.openSeeFace")
+        openseeface = sys.modules.get("providers.openseeface_provider")
         if openseeface is not None and isinstance(self._provider, openseeface.OpenSeeFaceProvider):
             self.window.setup_panel.set_connection_status(
                 f"OpenSeeFace: {self._provider.status_text}"
@@ -1893,7 +1893,7 @@ def main(argv=None) -> int:
         from gui.headmouse_gui import HeadMouseWindow
 
         if getattr(sys, "frozen", False) and sys.platform in ("win32", "darwin"):
-            from providers.sony_bridge import ensure_bridge
+            from providers.sony.bridge import ensure_bridge
 
             ensure_bridge()
         window = HeadMouseWindow(initial_kx=1.0, initial_ky=1.0)

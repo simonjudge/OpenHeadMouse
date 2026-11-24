@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const {stateAt, pathMeasures, mount} = require("./viewer.js");
+const {stateAt, pathMeasures, clutchAt, mount} = require("./viewer.js");
 
 function trial(start, index = 0) {
     return {
@@ -34,12 +34,14 @@ test("head starts front-on and angle labels track the coloured axis tips on seek
     const elements = {};
     for (const id of ["title", "pretest", "session-summary", "seek", "play", "speed",
         "head", "head-live", "cursor", "cursor-live", "time", "rewind",
-        "zoom-in", "zoom-out", "reset-camera", "relative-pose", "reference-pose-source"]) {
+        "zoom-in", "zoom-out", "reset-camera", "relative-pose", "reference-pose-source",
+        "show-clutch", "clutch-indicator", "clutch-offscreen", "clutch-onscreen"]) {
         elements[id] = {width: 660, height: 330, getContext: () => ctx};
     }
     // Keep cursor rendering separate from the captured head draw calls.
     elements.cursor.getContext = () => ({...ctx, clearRect() {}, fillText() {}});
     elements["relative-pose"].checked = true;
+    elements["show-clutch"].checked = true;
     const graphStrokes = [];
     const graphFills = [];
     elements["head-graphs"] = {appendChild() {}};
@@ -88,6 +90,10 @@ test("head starts front-on and angle labels track the coloured axis tips on seek
     };
     const before = JSON.stringify(data);
     const viewer = mount(data, {querySelector: selector => elements[selector.slice(1)]});
+    assert.equal(elements["clutch-indicator"].hidden, false);
+    elements["show-clutch"].checked = false;
+    elements["show-clutch"].onchange();
+    assert.equal(elements["clutch-indicator"].hidden, true);
     assert.equal(elements["reference-pose-source"].textContent, "Reference pose: Calibration pose");
     assert.equal(graphStrokes[0][0], data.angle_colors.yaw);
     assert.equal(graphStrokes[1][0], data.angle_colors.pitch);
@@ -181,7 +187,8 @@ test("missed targets are red with pink cursor graphs and live target ID follows 
         }
         return elements[id];
     }};
-    const hit = trial(0), miss = {...trial(2), hit: false, excluded: true, planned_id_bits: 4.25};
+    const hit = {...trial(0), onscreen_clutches: [[.2, .5]], offscreen_clutches: null};
+    const miss = {...trial(2), hit: false, excluded: true, planned_id_bits: 4.25};
     const data = {
         title: "Test", synced: false, pretest_html: "", reference_pose_source: "",
         duration: 4, frames: [], head_graphs: [], head_task_end: null, pretests: [],
@@ -205,6 +212,13 @@ test("missed targets are red with pink cursor graphs and live target ID follows 
     assert.match(elements["session-summary"].textContent, /Current target planned ID: 1\.8 bits/);
     assert.match(elements["session-summary"].textContent, /targets_analysed: 2\n/);
     assert.match(elements["session-summary"].textContent, /error_rate: 50\.0% \(1\/2\)/);
+    elements.seek.value = ".3";
+    elements.seek.oninput();
+    assert.equal(elements["clutch-onscreen"].textContent, "On-screen: active");
+    assert.equal(elements["clutch-offscreen"].textContent, "Off-screen: unavailable");
+    elements.seek.value = ".6";
+    elements.seek.oninput();
+    assert.equal(elements["clutch-onscreen"].textContent, "On-screen: inactive");
     elements.seek.value = "2.5";
     elements.seek.oninput();
     assert.ok(targetStrokes.includes("#d62728"));
@@ -242,6 +256,66 @@ test("partial path, exact click, inter-trial gap, next trial and end", () => {
     assert.equal(stateAt(data, 3.5).trialIndex, 0);
     assert.equal(stateAt(data, 4).trialIndex, 1);
     assert.match(stateAt(data, 6).phase, /ended/);
+});
+
+test("clutch indicator uses detected intervals and distinguishes unavailable trials", () => {
+    const data = recording();
+    data.trials[0].offscreen_clutches = [[.2, .5]];
+    data.trials[0].onscreen_clutches = [];
+    data.trials[1].offscreen_clutches = null;
+    for (const [time, status] of [[1.9, "inactive"], [2.19, "inactive"], [2.3, "active"],
+        [2.51, "inactive"], [4.1, "unavailable"], [5.1, "inactive"]]) {
+        assert.equal(clutchAt(stateAt(data, time), time, "offscreen_clutches"), status);
+    }
+    assert.equal(clutchAt(stateAt(data, 2.3), 2.3, "onscreen_clutches"), "inactive");
+});
+
+test("trial zoom limits every graph and transport, with O/E interval marks below traces", t => {
+    const noop = () => {}, elements = {}, texts = [];
+    const ctx = {
+        clearRect: noop, beginPath: noop, moveTo: noop, lineTo: noop,
+        arc: noop, fill: noop, stroke: noop, fillText: noop,
+        fillRect: noop, strokeRect: noop, setLineDash: noop, save: noop,
+        restore: noop, rect: noop, clip: noop, getImageData: () => ({}), putImageData: noop,
+    };
+    const oldWindow = global.window, oldDocument = global.document;
+    global.window = {addEventListener: noop};
+    global.document = {createElement() {
+        const labels = [];
+        texts.push(labels);
+        return {setAttribute: noop, getContext: () => ({
+            ...ctx, fillText: (text, x, y) => labels.push({text, x, y}),
+        })};
+    }};
+    t.after(() => { global.window = oldWindow; global.document = oldDocument; });
+    const root = {querySelector(selector) {
+        const id = selector.slice(1);
+        return elements[id] ||= {width: 660, height: 280, appendChild: noop, getContext: () => ctx};
+    }};
+    const data = {
+        ...recording(), title: "", pretest_html: "", session_summary: {}, duration: 6,
+        screen: [800, 600], frames: [],
+        initial_time: 4, selected_trial: 1, zoom_to_trial: true,
+        trials: [trial(2), {...trial(4), onscreen_clutches: [[.1, .3]], offscreen_clutches: [[.6, .8]]}],
+        head_graphs: [{label: "Angular acceleration (deg/s2)", points: [[0, 1000], [4, 1], [4.5, 2], [6, 1000]]}],
+        cursor_graphs: [{label: "Cursor speed (px/s)", points: [[4, 1], [4.5, 2]]}],
+    };
+    const viewer = mount(data, root);
+    assert.equal(viewer.state().trialIndex, 1);
+    assert.equal(viewer.state().elapsed, 0);
+    assert.equal(elements.seek.min, "4");
+    assert.equal(elements.seek.max, "5");
+    for (const labels of texts) {
+        assert.ok(labels.some(p => p.text === "4.0 s"));
+        assert.ok(labels.some(p => p.text === "5.0 s"));
+        assert.ok(labels.some(p => p.text === "O" && p.y === 113));
+        assert.ok(labels.some(p => p.text === "E" && p.y === 127));
+        assert.ok(!labels.some(p => p.text === "1030.0"));
+    }
+    elements.seek.value = "4.5";
+    elements.seek.oninput();
+    elements.rewind.onclick();
+    assert.equal(elements.seek.value, "4");
 });
 
 test("empty trajectories retain prior click until click endpoint arrives", () => {

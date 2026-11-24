@@ -15,9 +15,9 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from core import quaternion_math as qm
-from providers import openSeeFace
+from providers import openseeface_provider
 from providers.base_provider import ProviderState
-from providers.openSeeFace import OpenSeeFaceProvider, _wire_quaternion_to_head
+from providers.openseeface_provider import OpenSeeFaceProvider, _wire_quaternion_to_head
 
 
 def _packet(timestamp=100.0, face_id=0, quaternion=None, got_3d=1):
@@ -163,7 +163,7 @@ def test_invalid_second_record_does_not_emit_partial_datagram():
 def test_failed_fit_never_emits_zero_or_held_pose(monkeypatch):
     provider = OpenSeeFaceProvider(tracking_lost_hold_ms=500)
     now = 10.0
-    monkeypatch.setattr(openSeeFace.time, "monotonic", lambda: now)
+    monkeypatch.setattr(openseeface_provider.time, "monotonic", lambda: now)
     provider._process_packet(_packet())
     provider.output_queue.get_nowait()
     now += 0.4
@@ -181,7 +181,7 @@ def test_failed_fit_never_emits_zero_or_held_pose(monkeypatch):
 def test_duplicate_and_backwards_samples_do_not_refresh_tracking(monkeypatch, caplog):
     provider = OpenSeeFaceProvider()
     now = 10.0
-    monkeypatch.setattr(openSeeFace.time, "monotonic", lambda: now)
+    monkeypatch.setattr(openseeface_provider.time, "monotonic", lambda: now)
     provider._process_packet(_packet())
     provider.output_queue.get_nowait()
     now += 1.0
@@ -360,7 +360,7 @@ def test_queue_overflow_keeps_latest_pose():
 
 def _synthetic_landmarks(yaw, pitch, roll, offset=(0.3, -0.2), distance=4.0):
     """Project upstream's contour model for a physical pose into (row, column) pixels."""
-    model = openSeeFace._CONTOUR_MODEL
+    model = openseeface_provider._CONTOUR_MODEL
     head_points = np.column_stack([model[:, 2], -model[:, 0], model[:, 1]])
     rotation = Rotation.from_euler("ZYX", [yaw, -pitch, -roll], degrees=True)
     moved = rotation.apply(head_points)
@@ -370,7 +370,7 @@ def _synthetic_landmarks(yaw, pitch, roll, offset=(0.3, -0.2), distance=4.0):
     columns = camera[:, 0] / camera[:, 2] * 640.0 + 320.0
     rows = camera[:, 1] / camera[:, 2] * 640.0 + 240.0
     lms = np.zeros((66, 3))
-    lms[openSeeFace._CONTOUR_LANDMARKS] = np.column_stack([rows, columns, np.ones_like(rows)])
+    lms[openseeface_provider._CONTOUR_LANDMARKS] = np.column_stack([rows, columns, np.ones_like(rows)])
     return lms
 
 
@@ -379,7 +379,7 @@ def _synthetic_landmarks(yaw, pitch, roll, offset=(0.3, -0.2), distance=4.0):
     (0, 0, 20), (0, 0, -20), (20, -10, 15), (-35, 20, -10),
 ])
 def test_camera_pnp_recovers_physical_pose(angles):
-    estimator = object.__new__(openSeeFace._CameraPoseEstimator)
+    estimator = object.__new__(openseeface_provider._CameraPoseEstimator)
     estimator.reset()
     for _ in range(2):  # cold start from the bounding box, then from the previous fit
         wire, error = estimator.solve_pose(_synthetic_landmarks(*angles), (480, 640, 3))
@@ -425,10 +425,10 @@ def _fake_camera(monkeypatch, opened=True):
     _FakeCapture.instances = []
     monkeypatch.setattr(cv2, "VideoCapture", lambda index, *backend: _FakeCapture(index, opened))
     monkeypatch.setattr(
-        openSeeFace, "ensure_models",
+        openseeface_provider, "ensure_models",
         lambda model_dir, model: (Path(model_dir) / "det.onnx", Path(model_dir) / "lm.onnx"),
     )
-    monkeypatch.setattr(openSeeFace, "_CameraPoseEstimator", _FakeEstimator)
+    monkeypatch.setattr(openseeface_provider, "_CameraPoseEstimator", _FakeEstimator)
 
 
 def test_camera_source_emits_only_valid_poses_and_reports_status(monkeypatch):
@@ -478,24 +478,24 @@ def test_models_are_pinned_and_verified(monkeypatch, tmp_path):
         core.model_assets, "download_verified",
         lambda url, path, expected: calls.append((url, path, expected)) or path,
     )
-    detection, landmark = openSeeFace.ensure_models(tmp_path, 1)
+    detection, landmark = openseeface_provider.ensure_models(tmp_path, 1)
     assert (detection, landmark) == (
         tmp_path / "mnv3_detection_opt.onnx", tmp_path / "lm_model1_opt.onnx"
     )
     for url, path, expected in calls:
-        assert url.endswith(f"/{openSeeFace._MODEL_COMMIT}/models/{path.name}")
-        assert expected == openSeeFace.MODEL_SHA256[path.name]
+        assert url.endswith(f"/{openseeface_provider._MODEL_COMMIT}/models/{path.name}")
+        assert expected == openseeface_provider.MODEL_SHA256[path.name]
     assert len(calls) == 2
 
 
 def test_real_models_run_and_find_no_face_in_blank_frame():
     pytest.importorskip("onnxruntime")
-    model_dir = openSeeFace._resolve_model_dir("models/openseeface")
-    detection = model_dir / openSeeFace._DETECTION_MODEL
-    landmark = model_dir / f"lm_model{openSeeFace.BUNDLED_MODEL}_opt.onnx"
+    model_dir = openseeface_provider._resolve_model_dir("models/openseeface")
+    detection = model_dir / openseeface_provider._DETECTION_MODEL
+    landmark = model_dir / f"lm_model{openseeface_provider.BUNDLED_MODEL}_opt.onnx"
     if not (detection.is_file() and landmark.is_file()):
         pytest.skip("OpenSeeFace models not downloaded")
-    estimator = openSeeFace._CameraPoseEstimator(detection, landmark)
+    estimator = openseeface_provider._CameraPoseEstimator(detection, landmark)
     assert estimator.process(np.zeros((480, 640, 3), np.uint8)) is None
     result = estimator.landmarks(np.full((480, 640, 3), 128, np.uint8), (200, 120, 240, 240))
     confidence, lms = result

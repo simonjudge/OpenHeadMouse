@@ -10,11 +10,15 @@ h2 { margin: 6px 0; font-size: 18px; }
 .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .panel { min-width: 0; border: 1px solid #ccc; padding: 8px; }
 canvas { display: block; width: 100%; }
+.cursor-scene { display: flex; align-items: stretch; gap: 8px; }
+.cursor-scene canvas { min-width: 0; flex: 1; }
+#clutch-indicator { width: 115px; flex: none; font-size: 12px; }
+.clutch-active { color: #a00000; font-weight: bold; }
 .scene { height: 280px; object-fit: contain; border: 1px solid #eee; touch-action: none; }
 pre { white-space: pre-wrap; font-size: 11px; margin: 8px 0; }
 details { margin-top: 8px; }
 button, input, select { font: inherit; }
-#head-graphs canvas, #cursor-graphs canvas { height: 100px; }
+#head-graphs canvas, #cursor-graphs canvas { height: 130px; }
 @media (max-width: 620px) { .panels { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -38,9 +42,17 @@ button, input, select { font: inherit; }
   </section>
   <section class="panel">
     <strong>Cursor / Fitts targets</strong>
-    <canvas id="cursor" class="scene" width="660" height="280" aria-label="Cursor and target playback"></canvas>
+    <label><input id="show-clutch" type="checkbox" checked> Show clutch estimates</label>
+    <div class="cursor-scene">
+      <canvas id="cursor" class="scene" width="660" height="280" aria-label="Cursor and target playback"></canvas>
+      <aside id="clutch-indicator" aria-live="polite">
+        <b>Estimated clutch</b><p id="clutch-offscreen"></p><p id="clutch-onscreen"></p>
+        <small>Retrospective estimate, not proof of intent. All trials shown.</small>
+      </aside>
+    </div>
     <small>Orange: path; red: cursor; blue targets: hits; red targets: misses.
-      Pink graph backgrounds: missed trials; green/purple markers: target start/click.</small>
+      Pink graph backgrounds: missed trials; green/purple markers: target start/click.
+      Below graphs: O = on-screen clutch, E = off-screen (edge) clutch; marks span detected intervals.</small>
     <div id="cursor-graphs"></div><pre id="cursor-live"></pre>
     <details><summary>Initial pose and range of movement</summary><div id="pretest"></div></details>
     <p>Pink cursor-graph backgrounds mark missed targets, including excluded misses; grey backgrounds mark excluded hits. Missed targets remain red during playback; excluded hits stay grey. Colours show the recorded outcome, even before the click. Traces keep their original colours. Time exclusions have separate scopes: recording opening for session movement statistics; hold opening for initial pose. Excluded target intervals are omitted from both pointing and head statistics.</p>

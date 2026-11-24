@@ -1,13 +1,24 @@
-# AirPods CoreMotion Helper
+# AirPods provider
+
+The [AirPods adapter](../../providers/airpods_provider.py) receives head-pose
+JSON from the macOS Swift CoreMotion helper.
 
 ## Requirements
+
 - macOS 14 or later
 - Xcode command-line tools
 - AirPods Pro (2nd generation) or AirPods Max
 
-## Source of truth
+## Setup
 
-This directory contains the only Swift helper implementation:
+Install Xcode command-line tools if needed with `xcode-select --install`, then
+connect and wear compatible AirPods. Use the application source setup or a build
+containing the Swift helper.
+
+### Source of truth
+
+[`providers/airpods/swift_src/`](../../providers/airpods/swift_src/) contains
+the only Swift helper implementation:
 
 - `main.swift` — menu-bar helper and CoreMotion-to-UDP bridge
 - `Package.swift` — SwiftPM build definition
@@ -17,11 +28,12 @@ OpenHeadMouse runs `main.swift` in a minimized Terminal window. Terminal must
 have Motion permission because an unsigned or ad-hoc-signed standalone
 helper is rejected by macOS TCC without an Apple Development signature.
 
-## Build
+### Build
 
-From this directory:
+From the repository root:
 
 ```bash
+cd providers/airpods/swift_src
 swift build
 ```
 
@@ -37,9 +49,9 @@ ad-hoc-signed executable when it requests Motion access.
 OpenHeadMouse executes the source directly, so rebuilding is not required after
 editing `main.swift`: pressing Stop and Start loads the latest source.
 
-## Run manually
+### Run manually
 
-From this directory:
+From `providers/airpods/swift_src/`:
 
 ```bash
 xcrun swift main.swift
@@ -55,7 +67,7 @@ xcrun swift main.swift --host 127.0.0.1 --port 5010
 Keep Terminal open. Stop with `Control-C` or choose Quit from the headphones
 menu-bar item.
 
-## Run through OpenHeadMouse
+### Run through OpenHeadMouse
 
 1. Select **AirPods (CoreMotion)**.
 2. Press **Start**.
@@ -63,10 +75,29 @@ menu-bar item.
    Python UDP receiver.
 4. Press **Stop** to stop both processes.
 
-## Troubleshooting
+## Configuration
+
+Settings are under `providers.airpods` in `config.json`: `udp_host` defaults to
+`127.0.0.1`, and `udp_port` defaults to `5005`. The managed helper receives the
+same host/port. When manually running it, pass matching `--host` and `--port`
+arguments. Mouse gains and filtering live in `mouse_profiles.airpods`.
+
+## Validation
+
+With the helper running in Terminal and the GUI receiver stopped, run from the
+repository root:
+
+```bash
+python test_orientation.py --provider airpods --duration 20
+```
+
+Turn left, look up, and tilt the left ear down: yaw, pitch, and roll should
+each increase. See [coordinate frames](../coordinate-frames.md).
+
+## Troubleshooting and limitations
 
 - **"CoreMotion not available":** Only AirPods Pro 2 or AirPods Max support CoreMotion. Earlier AirPods models won't work.
-- **No packets received:** Check that the helper is running and Microphone permission is granted.
+- **No packets received:** Check that the helper is running, Terminal has Motion permission, and the host/port match.
 - **Motion permission denied:** System Settings → Privacy & Security → Motion & Fitness → allow Terminal.
 
 ## How it Works
@@ -85,4 +116,7 @@ The UDP JSON schema is:
 }
 ```
 
-Timestamps are in seconds (Unix epoch); quaternions are normalized unit quaternions in `[w, x, y, z]` order.
+The current helper writes timestamps in Unix epoch seconds; quaternions are
+normalized unit quaternions in `[w, x, y, z]` order. The Python adapter changes
+the headphone axes into the canonical head frame. Heading has an arbitrary
+reference; this is not an absolute compass.

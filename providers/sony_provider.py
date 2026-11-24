@@ -28,7 +28,7 @@ import numpy as np
 
 from core import quaternion_math as qm
 from providers.base_provider import BaseProvider, ProviderSample, ProviderState
-from providers.sony_bridge import ensure_bridge
+from providers.sony.bridge import ensure_bridge
 
 _LOGGER = logging.getLogger(__name__)
 _SONY_TO_HEAD_FRAME = np.array([

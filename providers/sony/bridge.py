@@ -40,7 +40,7 @@ def ensure_bridge() -> Path:
     if sys.platform == "win32" and platform.machine().lower() not in ("amd64", "x86_64"):
         raise RuntimeError("The bundled Sony Head Tracker requires Windows x64.")
     asset = ASSETS[sys.platform]
-    root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+    root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
     directory = root / RELATIVE_DIRECTORY
     executable = directory / asset["executable"]
     license_path = directory / "LICENSE"

@@ -1,10 +1,10 @@
-"""Tests for providers/airpods/airpods_provider.py using the mock UDP sender from test_udp.py."""
+"""Tests for providers/airpods_provider.py using the mock UDP sender from test_udp.py."""
 
 import time
 
 import pytest
 
-from providers.airpods.airpods_provider import AirPodsProvider
+from providers.airpods_provider import AirPodsProvider
 from tests.test_udp import MockUDPSender
 
 

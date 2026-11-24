@@ -10,7 +10,7 @@ import sys
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from providers.ximu3_settings import MOUNTING_ORIENTATIONS
+from providers.ximu3.settings import MOUNTING_ORIENTATIONS
 
 
 class SetupPanel(QWidget):

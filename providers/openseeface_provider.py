@@ -13,7 +13,7 @@ expression features are not.
 ``source="udp"`` instead receives the standard binary packets from an
 independently run OpenSeeFace facetracker (default 127.0.0.1:11573).
 
-For a console-only pose check, run ``python -m providers.openSeeFace``.
+For a console-only pose check, run ``python -m providers.openseeface_provider``.
 
 Ported from emilianavt/OpenSeeFace (BSD 2-Clause, Copyright (c) 2019,
 Emiliana). See THIRD_PARTY_NOTICES.md. Protocol and pipeline reference:

@@ -27,6 +27,7 @@ from colab_session_viewer.outliers import review_targets
 from colab_session_viewer.dwell import (
     DWELL_BEHAVIOUR_FIELDS, NODWELL_EQUIVALENTS, NODWELL_FITTS_FIELDS, SELECTION_METHODS,
 )
+from fitts_law.clutch import DEFAULT_CLUTCH_SETTINGS, ClutchSettings
 
 _FOLDER = Path(__file__).parent
 _TABLE_NUMBERS = {
@@ -102,6 +103,26 @@ class NotebookViewer:
         self._changing = False
         self.participant = widgets.Dropdown(description="Participant:")
         self.session = widgets.Dropdown(description="Session:")
+        self.trial = widgets.BoundedIntText(
+            value=1, min=1, max=1, description="Trial:", disabled=True,
+            layout=widgets.Layout(width="135px"),
+        )
+        self.previous_trial = widgets.Button(
+            description="<", tooltip="Previous trial", disabled=True, layout=widgets.Layout(width="35px"),
+        )
+        self.next_trial = widgets.Button(
+            description=">", tooltip="Next trial", disabled=True, layout=widgets.Layout(width="35px"),
+        )
+        self.zoom_to_trial = widgets.Checkbox(
+            value=False, description="Zoom to trial", indent=False, disabled=True,
+            layout=widgets.Layout(width="140px"),
+        )
+        self._playback_session = None
+        self._seek_trial = False
+        self.trial.observe(self._trial_changed, names="value")
+        self.zoom_to_trial.observe(self._trial_changed, names="value")
+        self.previous_trial.on_click(lambda _: self._step_trial(-1))
+        self.next_trial.on_click(lambda _: self._step_trial(1))
         self.viewer = widgets.HTML(layout=widgets.Layout(width="100%"))
         self.message = widgets.HTML()
         self.load_demo = widgets.Checkbox(value=False, description="Load Demo Data", indent=False)
@@ -251,12 +272,62 @@ class NotebookViewer:
             ),
         ])], selected_index=None)
         self.fitts_calculation_review.set_title(0, "Fitts calculation review")
+        clutch_fields = (
+            ("edge_zone_px", "Near-edge zone (px)", "Distance from the screen edge; also affects legacy boundary estimates."),
+            ("still_axis_px", "Plateau tolerance (px)", "Maximum edge-normal cursor displacement from the plateau's first sample."),
+            ("min_still_s", "Minimum plateau (s)", "Minimum duration of the near-edge cursor plateau."),
+            ("max_cursor_gap_s", "Maximum cursor gap (s)", "Largest gap within an off-screen plateau or on-screen episode."),
+            ("max_head_gap_s", "Maximum head gap (s)", "Largest head-sample gap allowed within an eligible trial."),
+            ("outward_deg", "Outward head rotation (deg)", "Minimum head rotation toward the edge during the plateau."),
+            ("return_deg", "Head return (deg)", "Minimum head reversal from the outward peak."),
+            ("return_px", "Cursor return (px)", "Minimum inward cursor movement from the plateau."),
+            ("return_window_s", "Return window (s)", "Maximum time after the plateau for the head and cursor return."),
+            ("onscreen_hysteresis_px", "On-screen reversal tolerance (px)", "Target-axis displacement required to establish a reversal."),
+            ("onscreen_retreat_px", "On-screen retreat (px)", "Minimum backward target-axis displacement and increase in distance from the target."),
+            ("onscreen_return_px", "On-screen return (px)", "Minimum forward displacement; the return must also recover the entire retreat."),
+            ("onscreen_speed_ratio", "On-screen return speed ratio", "Mean forward target-axis speed must exceed this multiple of backward speed."),
+            ("onscreen_max_phase_s", "On-screen phase limit (s)", "Maximum duration of each retreat and return phase."),
+            ("onscreen_opposition", "On-screen direction opposition", "Minimum cosine of opposition between retreat and return; 1 means exactly opposite."),
+        )
+        self.clutch_controls = {}
+        self._resetting_clutch = False
+        controls = []
+        for key, label, tooltip in clutch_fields:
+            control = widgets.BoundedFloatText(
+                value=getattr(DEFAULT_CLUTCH_SETTINGS, key),
+                min=(1 if key == "onscreen_speed_ratio" else
+                     0.001 if key in ("max_cursor_gap_s", "max_head_gap_s",
+                                      "onscreen_hysteresis_px", "onscreen_max_phase_s") else 0),
+                max=1 if key == "onscreen_opposition" else 1e6, step=0.01, continuous_update=False,
+                layout=widgets.Layout(width="150px"),
+            )
+            self.clutch_controls[key] = control
+            controls.append(labelled(control, label, tooltip))
+            control.observe(self._clutch_settings_changed, names="value")
+        reset_clutch = widgets.Button(description="Reset clutch defaults")
+        reset_clutch.on_click(self._reset_clutch_settings)
+        self.clutch_settings_panel = widgets.Accordion(children=[widgets.VBox([
+            widgets.HTML(
+                "<p>Change the thresholds to compare the estimate with observed behaviour. "
+                "Results, CSVs and notebook playback update automatically (playback restarts); "
+                "recorded data and desktop playback are unchanged. "
+                "Near-edge also affects estimated boundary contacts in older files, but not saved event counts. "
+                "If the zone is at least half a screen dimension, off-screen and legacy boundary "
+                "estimates are unavailable; on-screen estimates do not require screen geometry.</p>"
+            ),
+            widgets.HBox(controls, layout=widgets.Layout(flex_flow="row wrap")),
+            reset_clutch,
+        ])], selected_index=0)
+        self.clutch_settings_panel.set_title(0, "Clutch estimate settings")
         self.session_widget = widgets.VBox([
             widgets.HTML("<h2>Session viewer</h2>"),
             widgets.HTML("<h3>Exclusions</h3>"),
             self.analysis_exclusions,
             self.head_exclusion_note,
-            widgets.HBox([self.participant, self.session]), self.viewer,
+            widgets.HBox([
+                self.participant, self.session, self.previous_trial, self.trial,
+                self.next_trial, self.zoom_to_trial,
+            ], layout=widgets.Layout(flex_flow="row wrap")), self.viewer,
             widgets.HTML("<h3>Participant summaries</h3><p>One row per participant. "
                          "Expand <b>Table Notes</b> for field definitions, session details and angle references.</p>"),
             self.rest_exclusion_note,
@@ -264,6 +335,7 @@ class NotebookViewer:
             widgets.HTML("<h2>Fitts results</h2>"),
             self.target_review,
             self.fitts_calculation_review,
+            self.clutch_settings_panel,
             self.fitts_table,
             widgets.HTML(_table_heading("No-Dwell stats")),
             self.nodwell_table,
@@ -380,6 +452,7 @@ class NotebookViewer:
                 session, exclude_first_targets=self.exclude_targets.value,
                 initial_rest_exclude_s=self.initial_rest_exclude.value,
                 head_opening_exclude_s=self.head_opening_exclude.value,
+                clutch_settings=self.clutch_settings,
             ))
         self.sessions.extend(sessions)
         self._changing = True
@@ -560,18 +633,49 @@ class NotebookViewer:
         if not self._changing:
             self._render()
 
+    def _step_trial(self, step):
+        if not self.trial.disabled:
+            self.trial.value = min(self.trial.max, max(1, self.trial.value + step))
+
+    def _trial_changed(self, _):
+        if not self._changing:
+            self._seek_trial = True
+            self._render()
+
     def _render(self):
         selected = next((s for s in self.sessions
                          if s.participant == self.participant.value and s.name == self.session.value), None)
         if selected is None:
+            self.trial.disabled = self.previous_trial.disabled = self.next_trial.disabled = True
+            self.zoom_to_trial.disabled = True
             self._show_empty()
             return
+        if selected is not self._playback_session:
+            self._changing = True
+            try:
+                self.trial.value = 1
+                self.trial.max = max(1, len(selected.trials))
+                self._seek_trial = False
+                self._playback_session = selected
+            finally:
+                self._changing = False
+        self.trial.disabled = self.zoom_to_trial.disabled = not selected.trials
+        self.previous_trial.disabled = not selected.trials or self.trial.value <= 1
+        self.next_trial.disabled = not selected.trials or self.trial.value >= len(selected.trials)
         try:
-            document = viewer_document(playback_payload(
+            payload = playback_payload(
                 selected, exclude_first_targets=self.exclude_targets.value,
                 initial_rest_exclude_s=self.initial_rest_exclude.value,
                 head_opening_exclude_s=self.head_opening_exclude.value,
-            ))
+                clutch_settings=self.clutch_settings,
+            )
+            payload["selected_trial"] = self.trial.value - 1
+            payload["zoom_to_trial"] = bool(selected.trials and self.zoom_to_trial.value)
+            payload["initial_time"] = (
+                payload["trials"][self.trial.value - 1]["start"]
+                if selected.trials and (self._seek_trial or self.zoom_to_trial.value) else 0
+            )
+            document = viewer_document(payload)
         except ValueError as error:
             self._show_analysis_error(error)
             return
@@ -586,6 +690,27 @@ class NotebookViewer:
     def exclusions(self):
         return {s.participant: self.exclude_targets.value for s in self.sessions}
 
+    @property
+    def clutch_settings(self) -> ClutchSettings:
+        return ClutchSettings(**{key: control.value for key, control in self.clutch_controls.items()})
+
+    def _clutch_settings_changed(self, change):
+        if not self._resetting_clutch:
+            self._refresh_after_analysis_change(change)
+            if self.participant.value is not None and self.session.value is not None:
+                self._render()
+
+    def _reset_clutch_settings(self, _button):
+        self._resetting_clutch = True
+        try:
+            for key, control in self.clutch_controls.items():
+                control.value = getattr(DEFAULT_CLUTCH_SETTINGS, key)
+        finally:
+            self._resetting_clutch = False
+        self._refresh_after_analysis_change(None)
+        if self.participant.value is not None and self.session.value is not None:
+            self._render()
+
     def summary_rows(self):
         """Calculate main participant rows using global exclusions, never matching.
 
@@ -597,6 +722,7 @@ class NotebookViewer:
             head_opening_exclude_s=self.head_opening_exclude.value,
             include_dwell=self.include_dwell.value,
             excluded_trial_ids=self._excluded_fitts_trials,
+            clutch_settings=self.clutch_settings,
         )
 
     def _refresh_after_analysis_change(self, _change):
@@ -644,6 +770,7 @@ class NotebookViewer:
                 head_opening_exclude_s=self.head_opening_exclude.value,
                 include_dwell=self.include_dwell.value,
                 excluded_trial_ids=self._excluded_fitts_trials,
+                clutch_settings=self.clutch_settings,
             )[0]
             row["session"] = session.name
             per_session.append(row)
@@ -721,10 +848,11 @@ class NotebookViewer:
                 "Raw boundary-contact and estimated clutch totals, with eligible-target counts and averages. "
                 "Uses the same first-target and review exclusions as the main Fitts results. "
                 "For older files without saved boundary counts, contacts are estimated from entries into a "
-                "30-pixel screen-edge zone in the recorded cursor path. Consecutive edge samples count once; "
+                "configured screen-edge zone in the recorded cursor path. Consecutive edge samples count once; "
                 "the first recorded sample in the zone counts as an observed episode. This is approximate "
-                "because older cursor coordinates are canvas-local. Clutches additionally require synchronised "
-                "head movement: a near-edge cursor plateau, outward head rotation and an inward return. "
+                "because older cursor coordinates are canvas-local. Off-screen clutches additionally require "
+                "synchronised head movement; on-screen clutches require a backward reset followed by faster "
+                "recovery along the original approach axis, not an ordinary throw/overshoot correction. "
                 "Missing data is unavailable, not zero. Totals pool eligible targets, not session averages. "
                 "These measures are not included in no-dwell or first-entry tables."
             ),
@@ -1171,7 +1299,7 @@ class NotebookViewer:
             f'<h4>{html.escape(field_key_title)}</h4>'
             '<p>Definitions apply to both participant and individual-session rows. '
             'Blank or &ldquo;-&rdquo; means unavailable, not zero. Measurements use 1 decimal place; '
-            'target counts are integers. Calculations retain precision. '
+            'target counts are integers and clutch settings retain their entered precision. Calculations retain precision. '
             'Error rates display as % (misses/targets); CSVs retain unrounded fractions.</p>'
             '<div style="max-width:100%;overflow-x:auto">'
             '<table class="field-key" style="width:100%;border-collapse:collapse;table-layout:auto;'

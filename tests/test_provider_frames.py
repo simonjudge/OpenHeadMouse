@@ -54,7 +54,7 @@ EXPECTED_INDEX = {"turn_left": 0, "look_up": 1, "left_ear_down": 2}  # yaw, pitc
 
 
 def _airpods_to_head(q_raw):
-    from providers.airpods.airpods_provider import AirPodsProvider
+    from providers.airpods_provider import AirPodsProvider
 
     provider = AirPodsProvider()
     w, x, y, z = q_raw
@@ -87,7 +87,7 @@ def _uniface_to_head(q_raw):
 
 
 def _openseeface_to_head(q_model):
-    from providers.openSeeFace import _wire_quaternion_to_head
+    from providers.openseeface_provider import _wire_quaternion_to_head
 
     frontal = _axis_angle([1, -1, 0], 180)
     wire = qm.inverse(qm.multiply(frontal, q_model))

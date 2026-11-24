@@ -100,6 +100,22 @@ tables. Both share the same `viewer` instance; loading more data updates the vie
 without rerunning its cell, and rerunning either display cell keeps the collection.
 Table numbers stay fixed when settings change. Table 7 is reserved for optional
 dwell behaviour results; tables inside **Table Notes** use suffixes such as **Table 6a**.
+Expand **Clutch estimate settings** above the Fitts tables to adjust the edge
+zone, plateau, head movement, return, on-screen reversal and sample-gap thresholds. Participant and
+individual-session Clutch stats, CSVs and playback update immediately; playback
+restarts when settings change. Current settings
+are included in the exported rows. Reset restores the defaults. The edge zone
+also affects trajectory-based boundary estimates in older recordings, but not
+saved boundary-event counts. Toggle **Show clutch estimates** beside the cursor
+playback to inspect retrospective off-screen and on-screen detected intervals.
+O/E marks below each graph identify on-screen/edge intervals independently of
+miss backgrounds. Trial controls beside the session selector seek to a trial's
+start; **Zoom to trial** restricts every timeline (including head acceleration)
+and the slider to that trial. Navigation rebuilds playback at the trial start
+without changing statistics. Playback includes excluded trials.
+The on-screen estimate now requires a backward reset and faster recovery along
+the initial approach axis, excluding ordinary throw/overshoot corrections.
+See [the calculation and limitations](../docs/colab-analysis.md#estimated-headmouse-clutches).
 The viewer cell disables nested output scrolling where the notebook frontend
 honours that setting. For full-screen output in Colab, run and select the viewer
 cell, then choose **View output fullscreen** in the **Command palette**. In

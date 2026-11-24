@@ -2,7 +2,7 @@
 
 import pytest
 
-from providers.airpods import airpods_provider
+from providers import airpods_provider
 
 
 class _FakeSocket:

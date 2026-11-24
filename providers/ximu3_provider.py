@@ -18,7 +18,7 @@ Mode 1 - hanging from glasses.  USB pointing back, printing of arrows pointing o
 Mode 2 - mounted with velcro on right temple.  USB pointing down, printing of arrows pointing out of head.  Alignment: "-Y+Z-X"
 
 All four presets use AHRS axes convention 2 (NED). Horizontal corresponds to
-Mode 1; Vertical corresponds to Mode 2. See providers/ximu3_settings.py.
+Mode 1; Vertical corresponds to Mode 2. See providers/ximu3/settings.py.
 
 The alignment maps the sensor axes onto the device body frame, which with NED is
 Forward-Right-Down (FRD) in head terms. The software then converts FRD into the
