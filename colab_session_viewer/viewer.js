@@ -95,15 +95,6 @@ const NotebookPlayback = (() => {
         };
     }
 
-    function clutchAt(state, time, key) {
-        const trial = state.trial;
-        if (!trial || time < trial.start || time > trial.end) return "inactive";
-        const episodes = trial[key];
-        if (episodes == null) return "unavailable";
-        const elapsed = time - trial.start;
-        return episodes.some(([start, end]) => elapsed >= start && elapsed <= end) ? "active" : "inactive";
-    }
-
     function mount(data, root) {
         const get = id => root.querySelector(`#${id}`);
         get("title").textContent = data.title + (data.synced ? " (synchronised)" : "");
@@ -144,7 +135,8 @@ const NotebookPlayback = (() => {
             for (const item of series) {
                 const canvas = document.createElement("canvas");
                 canvas.width = 660;
-                canvas.height = 130;
+                canvas.height = item.label.startsWith("Distance") ? 116 : 100;
+                canvas.className = item.label.startsWith("Distance") ? "clutch-markers" : "";
                 canvas.setAttribute("aria-label", item.label);
                 get(id).appendChild(canvas);
                 const values = item.points.filter(p => p &&
@@ -330,23 +322,25 @@ const NotebookPlayback = (() => {
                     }
                     line(ctx, segment, graph.color || "#1f77b4");
                     ctx.restore();
-                    ctx.save(); ctx.beginPath(); ctx.rect(58, 102, canvas.width - 70, 28); ctx.clip();
-                    for (const trial of data.trials) {
-                        for (const [key, mark, color, row] of [
-                            ["onscreen_clutches", "O", "#00695c", 113],
-                            ["offscreen_clutches", "E", "#9c3d10", 127],
-                        ]) {
-                            ctx.fillStyle = color;
-                            for (const [a, b] of trial[key] || []) {
-                                const start = trial.start + a, end = trial.start + b;
-                                if (end < range[0] || start > range[1]) continue;
-                                const left = x(Math.max(range[0], start)), right = x(Math.min(range[1], end));
-                                line(ctx, [[left, row + 1], [right, row + 1]], color, 2);
-                                ctx.fillText(mark, (left + right) / 2, row);
+                    if (label.startsWith("Distance")) {
+                        ctx.save(); ctx.beginPath(); ctx.rect(58, 102, canvas.width - 70, 14); ctx.clip();
+                        for (const trial of data.trials) {
+                            for (const [key, mark, color] of [
+                                ["onscreen_clutches", "O", "#00695c"],
+                                ["offscreen_clutches", "E", "#9c3d10"],
+                            ]) {
+                                ctx.fillStyle = color;
+                                for (const [a, b] of trial[key] || []) {
+                                    const start = trial.start + a, end = trial.start + b;
+                                    if (end < range[0] || start > range[1]) continue;
+                                    const left = x(Math.max(range[0], start)), right = x(Math.min(range[1], end));
+                                    line(ctx, [[left, 114], [right, 114]], color, 2);
+                                    ctx.fillText(mark, (left + right) / 2, 113);
+                                }
                             }
                         }
+                        ctx.restore();
                     }
-                    ctx.restore();
                     graph.background = ctx.getImageData(0, 0, canvas.width, canvas.height);
                     graph.cachedZoom = zoom;
                 } else {
@@ -361,19 +355,6 @@ const NotebookPlayback = (() => {
         function render() {
             const state = stateAt(data, time);
             head(state); cursor(state); drawGraphs(state);
-            get("clutch-indicator").hidden = !get("show-clutch").checked;
-            for (const [id, label, key] of [
-                ["clutch-offscreen", "Off-screen", "offscreen_clutches"],
-                ["clutch-onscreen", "On-screen", "onscreen_clutches"],
-            ]) {
-                const status = clutchAt(state, time, key);
-                const indicator = get(id);
-                const text = `${label}: ${status}`;
-                if (indicator.textContent !== text) {
-                    indicator.textContent = text;
-                    indicator.className = status === "active" ? "clutch-active" : "";
-                }
-            }
             slider.value = String(time);
             get("time").textContent = `${time.toFixed(1)} / ${data.duration.toFixed(1)} s`;
         }
@@ -398,7 +379,6 @@ const NotebookPlayback = (() => {
         get("zoom-out").onclick = () => { zoom = Math.max(1, zoom / 1.25); render(); };
         get("reset-camera").onclick = () => { cameraYaw = cameraPitch = 0; cameraScale = 1; render(); };
         relativePose.onchange = () => head(stateAt(data, time));
-        get("show-clutch").onchange = render;
         let drag = null;
         get("head").onpointerdown = event => { drag = [event.clientX, event.clientY]; event.target.setPointerCapture(event.pointerId); };
         get("head").onpointerup = () => { drag = null; };
@@ -417,7 +397,7 @@ const NotebookPlayback = (() => {
         render();
         return {state: () => stateAt(data, time), pause};
     }
-    return {stateAt, pathMeasures, clutchAt, mount};
+    return {stateAt, pathMeasures, mount};
 })();
 
 if (typeof module !== "undefined") module.exports = NotebookPlayback;

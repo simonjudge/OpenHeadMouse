@@ -12,18 +12,11 @@ import numpy as np
 class ClutchSettings:
     edge_zone_px: float = 30.0
     still_axis_px: float = 4.0
-    min_still_s: float = 0.06
     max_cursor_gap_s: float = 0.5
     max_head_gap_s: float = 0.2
     outward_deg: float = 2.0
-    return_deg: float = 1.0
-    return_px: float = 20.0
-    return_window_s: float = 0.6
-    onscreen_hysteresis_px: float = 8.0
     onscreen_retreat_px: float = 60.0
-    onscreen_return_px: float = 20.0
     onscreen_speed_ratio: float = 1.2
-    onscreen_max_phase_s: float = 3.0
     onscreen_opposition: float = 0.5
 
     def __post_init__(self):
@@ -31,8 +24,7 @@ class ClutchSettings:
             value = getattr(self, field.name)
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"{field.name} must be finite and non-negative")
-            if field.name in ("max_cursor_gap_s", "max_head_gap_s", "onscreen_hysteresis_px",
-                              "onscreen_max_phase_s") and value == 0:
+            if field.name in ("max_cursor_gap_s", "max_head_gap_s") and value == 0:
                 raise ValueError(f"{field.name} must be positive")
         if self.onscreen_speed_ratio < 1:
             raise ValueError("onscreen_speed_ratio must be at least 1")
@@ -84,9 +76,10 @@ def clutch_counts(trials, samples, metadata, settings: ClutchSettings = DEFAULT_
 def clutch_episodes(trials, samples, metadata, settings: ClutchSettings = DEFAULT_CLUTCH_SETTINGS):
     """Return off-screen episode intervals relative to trial start, or None.
 
-    Screen dimensions, cursor trajectory and complete shared-clock head
-    coverage are required. The saved cursor coordinates are canvas-local, so
-    the edge zone is approximate when the canvas origin is unknown.
+    Screen dimensions, cursor trajectory and shared-clock head coverage are
+    required; a recording-end shortfall up to max_head_gap_s is tolerated.
+    Cursor coordinates are canvas-local, so the edge zone is approximate
+    when the canvas origin is unknown.
     """
     access = str(metadata.get("access_method") or "").replace(" ", "").lower()
     if access not in {"headmouse", "openheadmouse"}:
@@ -112,7 +105,8 @@ def _trial_clutches(trial, times, angles, width, height, settings):
     if trial.start_host_time is None or trial.end_host_time is None or not trial.trajectory:
         return None
     start, end = trial.start_host_time, trial.end_host_time
-    if end <= start or times[0] > start or times[-1] < end:
+    if (end <= start or times[0] > start or start > times[-1]
+            or end > times[-1] + settings.max_head_gap_s):
         return None
     first = max(0, int(np.searchsorted(times, start, side="right")) - 1)
     last = min(len(times), int(np.searchsorted(times, end, side="left")) + 1)
@@ -125,7 +119,7 @@ def _trial_clutches(trial, times, angles, width, height, settings):
     if points[0, 0] < 0 or points[-1, 0] > duration:
         return None
     points = np.vstack((points, [duration, *trial.click_pos]))
-    relative_times = times[first:last] - start
+    head_times = times[first:last]
     head = angles[first:last]
     detections = []
     # Positive yaw/pitch moves the cursor left/up in the normal headmouse mapping.
@@ -144,20 +138,23 @@ def _trial_clutches(trial, times, angles, width, height, settings):
                 while (j < stop and points[j + 1, 0] - points[j, 0] <= settings.max_cursor_gap_s
                        and abs(coordinate[j + 1] - coordinate[i]) <= settings.still_axis_px):
                     j += 1
-                if j > i and points[j, 0] - points[i, 0] >= settings.min_still_s:
+                if j > i:
                     a, b = points[i, 0], points[j, 0]
-                    grid = np.r_[a, relative_times[(relative_times > a) & (relative_times < b)], b]
-                    orientation = sign * np.interp(grid, relative_times, head[:, axis - 1])
+                    grid = np.r_[start + a, head_times[(head_times > start + a) & (head_times < start + b)],
+                                 start + b]
+                    orientation = sign * np.interp(grid, head_times, head[:, axis - 1])
                     peak = float(np.max(orientation))
                     if peak - orientation[0] >= settings.outward_deg:
-                        later = np.flatnonzero(
-                            (points[:, 0] > b) & (points[:, 0] <= b + settings.return_window_s)
-                            & ((coordinate - coordinate[i] >= settings.return_px) if side == 0
-                               else (coordinate[i] - coordinate >= settings.return_px)))
-                        for k in later:
+                        for k in range(j + 1, len(points)):
+                            if points[k, 0] - points[k - 1, 0] > settings.max_cursor_gap_s:
+                                break
+                            inward = (coordinate[k] - coordinate[i] if side == 0
+                                      else coordinate[i] - coordinate[k])
+                            if points[k, 0] <= b or inward < settings.still_axis_px:
+                                continue
                             departure = points[k, 0]
-                            returned = sign * np.interp(departure, relative_times, head[:, axis - 1])
-                            if peak - returned >= settings.return_deg:
+                            returned = sign * np.interp(start + departure, head_times, head[:, axis - 1])
+                            if peak - returned >= settings.outward_deg:
                                 detections.append((a, departure))
                                 break
                         if detections and detections[-1][0] == a:
@@ -187,6 +184,21 @@ def onscreen_counts(trials, metadata, settings: ClutchSettings = DEFAULT_CLUTCH_
     """Count target-axis reset-and-recovery episodes, or None without usable paths."""
     return [len(episodes) if episodes is not None else None
             for episodes in onscreen_episodes(trials, metadata, settings, offscreen=offscreen)]
+
+
+def total_clutch_counts(offscreen, onscreen):
+    """Return binary target-level OR counts, preserving unknown negatives.
+
+    A positive from either detector is sufficient; a zero requires both
+    detectors to be available. Multiple episodes still count as one target.
+    """
+    if len(offscreen) != len(onscreen):
+        raise ValueError("Off-screen and on-screen counts must match trials")
+    return [
+        1 if (edge is not None and edge > 0) or (reset is not None and reset > 0)
+        else 0 if edge is not None and reset is not None else None
+        for edge, reset in zip(offscreen, onscreen)
+    ]
 
 
 def onscreen_episodes(trials, metadata, settings: ClutchSettings = DEFAULT_CLUTCH_SETTINGS, *, offscreen=None):
@@ -259,31 +271,29 @@ def _onscreen_run(points, target, target_radius, direction, settings):
         away_vector = points[b, 1:] - points[a, 1:]
         back_vector = points[c, 1:] - points[b, 1:]
         lengths = np.linalg.norm(away_vector) * np.linalg.norm(back_vector)
+        opposition = -np.dot(away_vector, back_vector)
         return (distance[a] > target_radius and remaining[a] >= -target_radius
-                and away >= settings.onscreen_retreat_px and back >= settings.onscreen_return_px
-                and distance[b] - distance[a] >= settings.onscreen_retreat_px
-                and back >= away
+                and away >= settings.onscreen_retreat_px
                 and away_time > 0 and back_time > 0
-                and max(away_time, back_time) <= settings.onscreen_max_phase_s
-                and lengths > 0 and np.dot(away_vector, back_vector) < 0
-                and -np.dot(away_vector, back_vector) >= settings.onscreen_opposition * lengths
+                and opposition > 0
+                and opposition >= settings.onscreen_opposition * lengths
                 and back / back_time > settings.onscreen_speed_ratio * away / away_time)
 
     for i in range(1, len(points)):
         if state == "seeking":
             if remaining[i] <= remaining[low]:
                 low = i
-            elif remaining[i] - remaining[low] >= settings.onscreen_hysteresis_px:
+            elif remaining[i] - remaining[low] >= settings.onscreen_retreat_px:
                 peak, state = i, "away"
         elif state == "away":
             if remaining[i] >= remaining[peak]:
                 peak = i
-            elif remaining[peak] - remaining[i] >= settings.onscreen_hysteresis_px:
+            elif remaining[peak] - remaining[i] >= settings.onscreen_retreat_px:
                 end, state = i, "return"
         else:
             if remaining[i] < remaining[end]:
                 end = i
-            elif remaining[i] - remaining[end] >= settings.onscreen_hysteresis_px:
+            elif remaining[i] - remaining[end] >= settings.onscreen_retreat_px:
                 low, peak, state = end, i, "away"
         if state == "return" and remaining[end] <= remaining[low]:
             if is_clutch(low, peak, end):

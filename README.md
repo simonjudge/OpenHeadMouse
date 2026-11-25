@@ -565,7 +565,8 @@ identifies an inferred reference when no explicit calibration was recorded.
 The right side of the Fitts window uses the same layout as the head viewer. The **summary** shows:
 
 - ISO 9241-411 results: error rate, mean MT, Ae, We, IDe and throughput.
-- Estimated off-screen and on-screen headmouse clutches: separate mean counts per eligible trial.
+- Total Clutches: proportion of eligible trials with at least one on-screen or
+  off-screen clutch, counting each trial once. Separate episode averages are also shown.
   The off-screen estimate uses paired, synchronised head and cursor recordings; the on-screen
   estimate detects a backward reset followed by faster recovery along the original
   approach direction, rather than a throw/overshoot correction.
@@ -594,19 +595,26 @@ Consecutive near-edge points count once; an initial near-edge sample starts an e
 This is approximate because older coordinates are canvas-local; it does not prove an
 exact screen hit. Missing paths or dimensions remain unavailable, not zero.
 
-The notebook reports **Clutch stats** in a separate table with raw boundary and both clutch totals,
+The notebook reports **Clutch stats** in a separate table, starting with **Total Clutches / target**
+(targets with either type divided by eligible targets), then raw boundary and both clutch episode totals,
 eligible target counts and per-target averages, including individual-session results
 and a dedicated CSV. These fields are omitted from the main Fitts, no-dwell and
-first-entry tables. Expand **Clutch estimate settings** to adjust the detection thresholds;
-results recalculate immediately and exports include the active settings. Desktop playback
-continues to use the defaults. In both viewers, **Show clutch estimates** displays
-retrospective on-screen and off-screen indicators beside playback, including for
-excluded trials. These estimates do not establish intent.
-O/E interval marks below the graphs show on-screen and edge detections without
+first-entry tables. Expand **Clutch estimate settings** to adjust three on-screen,
+three off-screen and two data-quality thresholds. Off-screen return reuses the plateau
+tolerance and outward angular threshold; head coverage may end up to the maximum
+head gap before a trial ends (the last angle is held constant).
+Results recalculate immediately. Table 10 follows Table 9 and omits settings
+columns; the combined summary CSV retains the active settings. Desktop playback
+continues to use the defaults. These estimates do not establish intent.
+O/E interval marks share one row below the distance graph, including for excluded trials, without
 changing miss backgrounds. Notebook trial controls beside the session selector
 seek to a trial's start; **Zoom to trial** expands that interval on every graph,
 including head acceleration. Desktop offers trial selection and timeline zoom
 above its cursor playback.
+The notebook's cumulative cursor-path plots also highlight the actual trajectory
+segments classified as O (teal) or E (brown), including when stepping through
+individual targets. Highlights update with the settings and remain in SVG downloads.
+See the [labelled synthetic trajectory examples](docs/colab-analysis.md#annotated-synthetic-cursor-trajectories).
 
 Published work has reported actual **clutches per trial**, for example Nancel, Vogel and
 Lank, [*Clutching Is Not (Necessarily) the Enemy*](https://hal.science/hal-01523428)

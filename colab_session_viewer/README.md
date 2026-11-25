@@ -86,12 +86,21 @@ target number within its file and source filename. The click is
 appended to the saved trajectory as in the path statistics; a trial without
 saved path samples shows its click only, not a fabricated path.
 
+Selected paths, including single-target stepping, have translucent **O (teal)**
+and **E (brown)** highlights over their estimated on-screen/off-screen clutch
+segments. These reuse playback/Table 10 intervals and the current clutch
+settings, including off-screen precedence; changing settings refreshes the
+highlights without changing the path selection. Hover for trial-relative times.
+Highlights do not bridge excessive cursor gaps or duplicate timestamps.
+Missing evidence is not treated as proof of no clutch. See the
+[labelled synthetic trajectory examples](../docs/colab-analysis.md#annotated-synthetic-cursor-trajectories).
+
 Different screen sizes, and estimated versus recorded dimensions, are shown in
 separate proportional screen rectangles. If screen dimensions are missing, the
 same estimate as playback is used and marked as estimated. Click **Download image
 (SVG)** in the compact footer below the plot, on the same line as the screen
 dimensions, to save the participant's current plot as a scalable image; it contains
-the selected paths and participant label. Treat downloaded images as participant
+the selected paths, clutch highlights/key and participant label. Treat downloaded images as participant
 data. Plot range settings do not change statistics or playback.
 
 The loading cell displays only import controls, ZIP review and manifest downloads.
@@ -100,15 +109,21 @@ tables. Both share the same `viewer` instance; loading more data updates the vie
 without rerunning its cell, and rerunning either display cell keeps the collection.
 Table numbers stay fixed when settings change. Table 7 is reserved for optional
 dwell behaviour results; tables inside **Table Notes** use suffixes such as **Table 6a**.
-Expand **Clutch estimate settings** above the Fitts tables to adjust the edge
-zone, plateau, head movement, return, on-screen reversal and sample-gap thresholds. Participant and
+Expand **Clutch estimate settings** above the Fitts tables to adjust three
+off-screen settings (edge zone, plateau/cursor return, head rotation/reversal),
+three on-screen settings (retreat/reversal, speed ratio, direction opposition),
+and two sample-gap limits. The head-gap limit also permits a shortfall at the
+recording end, holding the last angle constant. Participant and
 individual-session Clutch stats, CSVs and playback update immediately; playback
 restarts when settings change. Current settings
-are included in the exported rows. Reset restores the defaults. The edge zone
+are included in the combined summary CSV, not Table 10 or its dedicated CSV.
+Table 10 follows Table 9 and starts with **Total Clutches / target**: the proportion
+of eligible targets with either type, counting each target once, plus raw clutched-
+target and eligible-target counts. A detected clutch establishes a positive;
+a zero requires both detectors to be available. Reset restores the defaults. The edge zone
 also affects trajectory-based boundary estimates in older recordings, but not
-saved boundary-event counts. Toggle **Show clutch estimates** beside the cursor
-playback to inspect retrospective off-screen and on-screen detected intervals.
-O/E marks below each graph identify on-screen/edge intervals independently of
+saved boundary-event counts.
+O/E marks share one row below the distance graph to identify on-screen/edge intervals independently of
 miss backgrounds. Trial controls beside the session selector seek to a trial's
 start; **Zoom to trial** restricts every timeline (including head acceleration)
 and the slider to that trial. Navigation rebuilds playback at the trial start

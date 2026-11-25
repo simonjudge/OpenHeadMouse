@@ -134,6 +134,7 @@ class NotebookViewer:
         self.load_demo.observe(self._load_demo_changed, names="value")
         self.table = widgets.HTML()
         self.fitts_table = widgets.HTML()
+        self.clutch_table = widgets.HTML()
         self.target_review = widgets.VBox()
         self._target_review_controls: dict[int, widgets.Checkbox] = {}
         self._excluded_fitts_trials: set[int] = set()
@@ -274,20 +275,13 @@ class NotebookViewer:
         self.fitts_calculation_review.set_title(0, "Fitts calculation review")
         clutch_fields = (
             ("edge_zone_px", "Near-edge zone (px)", "Distance from the screen edge; also affects legacy boundary estimates."),
-            ("still_axis_px", "Plateau tolerance (px)", "Maximum edge-normal cursor displacement from the plateau's first sample."),
-            ("min_still_s", "Minimum plateau (s)", "Minimum duration of the near-edge cursor plateau."),
-            ("max_cursor_gap_s", "Maximum cursor gap (s)", "Largest gap within an off-screen plateau or on-screen episode."),
-            ("max_head_gap_s", "Maximum head gap (s)", "Largest head-sample gap allowed within an eligible trial."),
-            ("outward_deg", "Outward head rotation (deg)", "Minimum head rotation toward the edge during the plateau."),
-            ("return_deg", "Head return (deg)", "Minimum head reversal from the outward peak."),
-            ("return_px", "Cursor return (px)", "Minimum inward cursor movement from the plateau."),
-            ("return_window_s", "Return window (s)", "Maximum time after the plateau for the head and cursor return."),
-            ("onscreen_hysteresis_px", "On-screen reversal tolerance (px)", "Target-axis displacement required to establish a reversal."),
-            ("onscreen_retreat_px", "On-screen retreat (px)", "Minimum backward target-axis displacement and increase in distance from the target."),
-            ("onscreen_return_px", "On-screen return (px)", "Minimum forward displacement; the return must also recover the entire retreat."),
+            ("still_axis_px", "Plateau / cursor return (px)", "Maximum edge-normal displacement from the plateau's first sample AND minimum inward return from it."),
+            ("outward_deg", "Head rotation / reversal (deg)", "Minimum outward rotation during the plateau AND reversal from its peak."),
+            ("onscreen_retreat_px", "On-screen retreat / reversal (px)", "Minimum backward target-axis displacement; also establishes each reversal. Recovery must regain the reset start."),
             ("onscreen_speed_ratio", "On-screen return speed ratio", "Mean forward target-axis speed must exceed this multiple of backward speed."),
-            ("onscreen_max_phase_s", "On-screen phase limit (s)", "Maximum duration of each retreat and return phase."),
             ("onscreen_opposition", "On-screen direction opposition", "Minimum cosine of opposition between retreat and return; 1 means exactly opposite."),
+            ("max_cursor_gap_s", "Maximum cursor gap (s)", "Largest gap within an off-screen plateau AND return, or an on-screen episode."),
+            ("max_head_gap_s", "Maximum head gap / end shortfall (s)", "Largest head-sample gap within an eligible trial; also permits this much missing coverage at the recording end."),
         )
         self.clutch_controls = {}
         self._resetting_clutch = False
@@ -296,8 +290,7 @@ class NotebookViewer:
             control = widgets.BoundedFloatText(
                 value=getattr(DEFAULT_CLUTCH_SETTINGS, key),
                 min=(1 if key == "onscreen_speed_ratio" else
-                     0.001 if key in ("max_cursor_gap_s", "max_head_gap_s",
-                                      "onscreen_hysteresis_px", "onscreen_max_phase_s") else 0),
+                     0.001 if key in ("max_cursor_gap_s", "max_head_gap_s") else 0),
                 max=1 if key == "onscreen_opposition" else 1e6, step=0.01, continuous_update=False,
                 layout=widgets.Layout(width="150px"),
             )
@@ -341,6 +334,7 @@ class NotebookViewer:
             self.nodwell_table,
             widgets.HTML(_table_heading("First-entry selection stats")),
             self.first_entry_table,
+            self.clutch_table,
             widgets.HTML(
                 "<h3>Cumulative cursor paths</h3><p>One plot per participant across all their Fitts files. "
                 "Targets are numbered 1&ndash;N continuously across the participant's files (files in recording "
@@ -351,6 +345,8 @@ class NotebookViewer:
                 "Different screen sizes are shown separately; missing dimensions are estimated as in playback. "
                 "Lines show saved samples through the click; if no path was recorded, only the click appears. "
                 "Colours repeat after 10 targets. Circles are targets; dots are clicks. "
+                "Translucent highlights show O (teal, on-screen) and E (brown, off-screen) clutch "
+                "intervals using the current estimate settings; hover for their times. "
                 "Download an SVG image using the link below each plot.</p>"
             ),
             self.cursor_paths,
@@ -742,6 +738,7 @@ class NotebookViewer:
     def _show_analysis_error(self, error):
         self.table.value = f"<p style='color:#b00020'>Cannot calculate summaries: {html.escape(str(error))}</p>"
         self.fitts_table.value = ""
+        self.clutch_table.value = ""
         self.target_review.children = ()
         self.nodwell_table.value = ""
         self.first_entry_table.value = ""
@@ -754,6 +751,7 @@ class NotebookViewer:
         if not rows:
             self.table.value = "No recordings imported."
             self.fitts_table.value = ""
+            self.clutch_table.value = ""
             self.nodwell_table.value = ""
             self.first_entry_table.value = ""
             self.rest_exclusion_note.value = ""
@@ -803,6 +801,7 @@ class NotebookViewer:
             )
         head_sections = []
         fitts_sections = []
+        clutch_sections = []
         descriptions = {
             "Session summary": "Recording counts and durations.",
             "Initial head positions": (
@@ -845,7 +844,11 @@ class NotebookViewer:
                 "contributing targets."
             ),
             "Clutch stats": (
-                "Raw boundary-contact and estimated clutch totals, with eligible-target counts and averages. "
+                "Total Clutches / target is the proportion of eligible targets with at least one on-screen "
+                "OR off-screen clutch; each target counts once, even with multiple episodes. "
+                "A detected clutch from either type establishes a positive; a zero requires both types "
+                "to be assessable. Also reports raw boundary-contact and separate clutch episode totals, "
+                "with eligible-target counts and averages. "
                 "Uses the same first-target and review exclusions as the main Fitts results. "
                 "For older files without saved boundary counts, contacts are estimated from entries into a "
                 "configured screen-edge zone in the recorded cursor path. Consecutive edge samples count once; "
@@ -872,9 +875,10 @@ class NotebookViewer:
         }
         for label, table_rows in participant_tables(rows).items():
             number = str(_TABLE_NUMBERS[label])
-            sections = fitts_sections if label in (
-                "Fitts stats", "Fitts targets and hits", "Dwell behaviour stats", "Clutch stats",
-            ) else head_sections
+            sections = (clutch_sections if label == "Clutch stats" else
+                        fitts_sections if label in (
+                            "Fitts stats", "Fitts targets and hits", "Dwell behaviour stats",
+                        ) else head_sections)
             filename = label.lower().replace(" ", "_") + ".csv"
             columns = list(table_rows[0])
             session_rows = [
@@ -955,6 +959,7 @@ class NotebookViewer:
             + "".join(head_sections)
         )
         self.fitts_table.value = "".join(fitts_sections)
+        self.clutch_table.value = "".join(clutch_sections)
         self._refresh_cursor_paths()
         self._refresh_selection_tables()
 
@@ -1244,7 +1249,9 @@ class NotebookViewer:
         sessions = self._participant_sessions(participant)
         try:
             selection = parse_target_selection(control.text.value, control.maximum)
-            control.output.value = cursor_path_plot(sessions, selection, self.exclude_targets.value)
+            control.output.value = cursor_path_plot(
+                sessions, selection, self.exclude_targets.value, self.clutch_settings,
+            )
         except (ValueError, TypeError) as error:
             control.output.value = f'<p style="color:#b00020">Cannot draw cursor paths: {html.escape(str(error))}</p>'
 

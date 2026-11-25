@@ -19,7 +19,7 @@ from core.recorder import RecordedSample, Recorder
 from core.session_stats import SessionStats
 from fitts_law.clutch import (
     DEFAULT_CLUTCH_SETTINGS, ClutchSettings, boundary_counts, clutch_episodes,
-    onscreen_counts, onscreen_episodes,
+    onscreen_counts, onscreen_episodes, total_clutch_counts,
 )
 from fitts_law.results import FittsResultsLogger, FittsStats, TrialResult
 from colab_session_viewer.dwell import (
@@ -346,14 +346,17 @@ def clutch_summary_sessions(
 ) -> dict:
     """Pool counts, keeping each recording's own head stream and screen geometry."""
     selected = {id(trial) for trial in trials}
-    counts, onscreen = [], []
+    counts, onscreen, totals = [], [], []
     for session in sessions:
         retained = [trial for trial in session.trials if id(trial) in selected]
         offscreen = clutch_episodes(retained, session.samples, session.metadata, settings)
-        counts.extend(len(episodes) for episodes in offscreen if episodes is not None)
-        onscreen.extend(count for count in onscreen_counts(
+        edge_counts = [len(episodes) if episodes is not None else None for episodes in offscreen]
+        reset_counts = onscreen_counts(
             retained, session.metadata, settings, offscreen=offscreen,
-        ) if count is not None)
+        )
+        counts.extend(count for count in edge_counts if count is not None)
+        onscreen.extend(count for count in reset_counts if count is not None)
+        totals.extend(count for count in total_clutch_counts(edge_counts, reset_counts) if count is not None)
     boundaries = [
         count
         for session in sessions
@@ -363,6 +366,9 @@ def clutch_summary_sessions(
         if count is not None
     ]
     return {
+        "total_clutch_trial_count": len(totals),
+        "total_clutch_count": sum(totals) if totals else None,
+        "total_clutch_mean": float(np.mean(totals)) if totals else None,
         "clutch_trial_count": len(counts),
         "clutch_count": sum(counts) if counts else None,
         "clutch_mean": float(np.mean(counts)) if counts else None,
@@ -973,6 +979,12 @@ def table_sources(sessions: list[Session], label: str) -> dict[str, list[str]]:
 
 
 def column_label(key: str) -> str:
+    if key == "total_clutch_mean":
+        return "Total Clutches / target"
+    if key == "total_clutch_count":
+        return "Targets with any clutch"
+    if key == "total_clutch_trial_count":
+        return "Total Clutches eligible targets"
     if key == "clutch_mean":
         return "Off-screen clutches / target"
     if key == "clutch_trial_count":
@@ -1114,10 +1126,10 @@ def participant_tables(rows: list[dict]) -> dict[str, list[dict]]:
         ]
     if any("clutch_trial_count" in row for row in rows):
         columns = (
+            "total_clutch_mean", "total_clutch_count", "total_clutch_trial_count",
             "targets_analysed", "boundary_trial_count", "boundary_count", "boundary_hits",
             "clutch_trial_count", "clutch_count", "clutch_mean",
             "onscreen_clutch_trial_count", "onscreen_clutch_count", "onscreen_clutch_mean",
-            *[f"clutch_setting_{key}" for key in asdict(DEFAULT_CLUTCH_SETTINGS)],
         )
         tables["Clutch stats"] = [
             {"participant": row["participant"], **{key: row.get(key) for key in columns}}
@@ -1194,26 +1206,22 @@ def field_description(key: str) -> str:
         "boundary_trial_count": "Number of analysed targets with a recorded boundary-event count, or a cursor path and saved screen dimensions allowing a near-edge estimate. This includes eligible targets with zero contacts.",
         "boundary_count": "Total boundary-contact episodes over boundary_trial_count targets: saved event counts when available, otherwise estimated entries into the configured screen-edge zone from the saved trajectory. A first recorded point in the zone starts one episode; consecutive edge points, including corners, count once. Older canvas-local coordinates make this an approximation, not an exact screen-hit count.",
         "clutch_count": "Total estimated off-screen headmouse clutches over clutch_trial_count eligible targets, not a per-target average. Legacy CSV field name retained.",
-        "clutch_trial_count": "Number of analysed headmouse targets with a recorded cursor path and complete synchronised head coverage suitable for the off-screen estimate.",
+        "total_clutch_mean": "Proportion of eligible targets with at least one on-screen OR off-screen clutch: total_clutch_count / total_clutch_trial_count, from 0 to 1. Each target contributes at most one, not its episode count.",
+        "total_clutch_count": "Number of targets with at least one detected on-screen or off-screen clutch. Multiple episodes and both types in one target count once.",
+        "total_clutch_trial_count": "Targets with a positive from either detector, or usable estimates from both detectors. A zero from only one available detector leaves the combined result unknown and excluded.",
+        "clutch_trial_count": "Number of analysed headmouse targets with a recorded cursor path and synchronised head coverage suitable for the off-screen estimate, allowing a recording-end shortfall up to max_head_gap_s.",
         "clutch_mean": "Estimated off-screen headmouse clutches per eligible target: head movement towards a near-edge cursor plateau, then head and cursor movement back. An estimate, not proof of intent.",
         "onscreen_clutch_trial_count": "Analysed headmouse targets with at least three consecutive usable cursor samples; no head stream or screen dimensions are required.",
         "onscreen_clutch_count": "Total estimated on-screen away-and-faster-return episodes over eligible targets.",
         "onscreen_clutch_mean": "Estimated cursor resets per eligible target: a backward excursion before passing the target, followed by faster recovery along the original approach axis. Overlapping confirmed edge clutches take precedence. Not proof of intent.",
         "boundary_hits": "Average boundary-contact episodes per eligible target: boundary_count divided by boundary_trial_count. Uses recorded event counts when present, otherwise the configured near-edge trajectory estimate. It is not proof of clutching.",
         "clutch_setting_edge_zone_px": "Maximum distance from a screen edge in pixels for a near-edge cursor sample. Also used for legacy boundary estimates, not saved event counts.",
-        "clutch_setting_still_axis_px": "Maximum cursor displacement in pixels from the first point of the near-edge plateau on the edge-normal axis.",
-        "clutch_setting_min_still_s": "Minimum duration of a near-edge plateau, in seconds.",
-        "clutch_setting_max_cursor_gap_s": "Maximum time gap between cursor samples within an off-screen plateau or on-screen episode, in seconds.",
-        "clutch_setting_max_head_gap_s": "Maximum time gap between head samples covering an eligible trial, in seconds.",
-        "clutch_setting_outward_deg": "Minimum outward head rotation during the plateau, in degrees.",
-        "clutch_setting_return_deg": "Minimum head rotation back from the outward peak, in degrees.",
-        "clutch_setting_return_px": "Minimum inward cursor movement from the plateau, in pixels.",
-        "clutch_setting_return_window_s": "Maximum time after the plateau for the head and cursor return, in seconds.",
-        "clutch_setting_onscreen_hysteresis_px": "Target-axis displacement required to establish a reversal, in pixels.",
-        "clutch_setting_onscreen_retreat_px": "Minimum backward target-axis displacement AND increase in Euclidean distance to target, in pixels.",
-        "clutch_setting_onscreen_return_px": "Minimum forward target-axis displacement, in pixels; the entire retreat must also be recovered.",
+        "clutch_setting_still_axis_px": "Maximum edge-normal displacement from the plateau's first sample AND minimum inward cursor return from that position, in pixels.",
+        "clutch_setting_max_cursor_gap_s": "Maximum cursor-sample gap within an off-screen plateau and its return, or an on-screen episode, in seconds.",
+        "clutch_setting_max_head_gap_s": "Maximum head-sample gap covering an eligible trial AND maximum tolerated shortfall at the head recording's end, in seconds. The last head angle is held constant during this shortfall; start coverage remains required.",
+        "clutch_setting_outward_deg": "Minimum outward head rotation during the plateau AND minimum head reversal from its outward peak, in degrees.",
+        "clutch_setting_onscreen_retreat_px": "Minimum backward target-axis excursion, also reused as the displacement needed to establish each reversal, in pixels. The return must recover the entire excursion.",
         "clutch_setting_onscreen_speed_ratio": "Mean forward target-axis speed must exceed this multiple of backward target-axis speed.",
-        "clutch_setting_onscreen_max_phase_s": "Maximum duration of each on-screen retreat and return phase, in seconds.",
         "clutch_setting_onscreen_opposition": "Minimum cosine of opposition between retreat and return displacement vectors; 1 is exactly opposite.",
         "path_tre": "Target re-entry (TRE): average number of times the cursor enters the circular target again after its first entry, per usable path. The first entry is not counted. Trials with no re-entry contribute zero, so this average count can be below 1; it is not a percentage or a total.",
         "path_tac": "Task-axis crossing (TAC): average number of times the cursor crosses the straight line from start to target, per usable path. Points exactly on the line are ignored when counting crossings.",
@@ -1341,6 +1349,7 @@ def format_field(key: str, value) -> str:
         "exclude_first_targets_per_file", "targets_recorded", "targets_excluded",
         "targets_analysed", "hits", "misses", "path_trial_count", "boundary_trial_count", "clutch_trial_count",
         "boundary_count", "clutch_count", "onscreen_clutch_trial_count", "onscreen_clutch_count",
+        "total_clutch_count", "total_clutch_trial_count",
         "matching_targets_available", "matching_targets_selected", "matching_targets_omitted",
         "condition_trials_recorded", "condition_trials_analysed",
         "nodwell_trial_count", "nodwell_invalid_count", "nodwell_unknown_count",

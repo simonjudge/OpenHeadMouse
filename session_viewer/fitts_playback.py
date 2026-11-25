@@ -35,7 +35,9 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QSpinBox, QToolBar, QVBoxLayout, QWidget,
 )
 
-from fitts_law.clutch import clutch_episodes, clutch_summary, onscreen_counts, onscreen_episodes
+from fitts_law.clutch import (
+    clutch_episodes, clutch_summary, onscreen_counts, onscreen_episodes, total_clutch_counts,
+)
 from fitts_law.results import FittsResultsLogger, FittsStats, TrialResult
 from gui.window_actions import add_close_action
 from session_viewer.measure_help import MeasureLabel
@@ -281,20 +283,7 @@ class FittsPlaybackWindow(QMainWindow):
         trial_controls.addStretch(1)
         left_layout.addLayout(trial_controls)
         self.canvas = FittsScreenCanvas()
-        scene_layout = QHBoxLayout()
-        scene_layout.addWidget(self.canvas, 1)
-        self.clutch_indicator = QLabel("Estimated clutch<br>Off-screen: inactive<br>On-screen: inactive")
-        self.clutch_indicator.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.clutch_indicator.setToolTip(
-            "Retrospective estimate using default thresholds, shown for all trials including excluded trials. "
-            "Active spans the entire detected episode; unavailable means insufficient data."
-        )
-        scene_layout.addWidget(self.clutch_indicator)
-        left_layout.addLayout(scene_layout, 2)
-        self.show_clutch = QCheckBox("Show clutch estimates")
-        self.show_clutch.setChecked(True)
-        self.show_clutch.toggled.connect(self.clutch_indicator.setVisible)
-        left_layout.addWidget(self.show_clutch)
+        left_layout.addWidget(self.canvas, 2)
 
         self.graphs_widget = pg.GraphicsLayoutWidget()
         self.graphs_widget.ci.layout.setSpacing(2)
@@ -313,7 +302,7 @@ class FittsPlaybackWindow(QMainWindow):
         self.dist_line = self.dist_plot.addLine(x=0, pen=pg.mkPen("#007bff", width=2, style=Qt.DashLine))
         self.dist_plot.setXLink(self.speed_plot)
         self.clutch_plot = self.graphs_widget.addPlot(row=2, col=0)
-        self.clutch_plot.setMaximumHeight(65)
+        self.clutch_plot.setMaximumHeight(50)
         self.clutch_plot.hideAxis("left")
         self.clutch_plot.setLabel("bottom", "Time (s); O: on-screen, E: off-screen (edge)")
         self.clutch_plot.setYRange(0, 1, padding=0)
@@ -466,7 +455,6 @@ class FittsPlaybackWindow(QMainWindow):
         self._prepare_clutch_episodes()
         self._refresh_pretest_summary()
         self._refresh_summary()
-        self._update_clutch_indicator(self.clock.time)
 
     def load_fitts_session(self, trials: list[TrialResult], metadata: dict | None = None, name: str = "Fitts") -> None:
         """Load (or replace) the Fitts session being replayed (standalone playback)."""
@@ -658,8 +646,11 @@ class FittsPlaybackWindow(QMainWindow):
         boundary = FittsStats.boundary_summary(trials, self.metadata)
         clutch = clutch_summary(trials, self._head_samples, self.metadata)
         offscreen = clutch_episodes(trials, self._head_samples, self.metadata)
-        onscreen = [count for count in onscreen_counts(trials, self.metadata, offscreen=offscreen)
-                    if count is not None]
+        reset_counts = onscreen_counts(trials, self.metadata, offscreen=offscreen)
+        onscreen = [count for count in reset_counts if count is not None]
+        totals = [count for count in total_clutch_counts(
+            [len(episodes) if episodes is not None else None for episodes in offscreen], reset_counts,
+        ) if count is not None]
         hits = sum(1 for t in trials if t.hit)
         duration = float(self._ends.max() - self._starts.min())
         access = self.metadata.get("access_method") or "—"
@@ -675,6 +666,8 @@ class FittsPlaybackWindow(QMainWindow):
             f"<b>We:</b> {iso['overall_effective_width_px']:.1f} px<br>"
             f"<b>IDe:</b> {iso['overall_index_of_difficulty_bits']:.2f} bits<br>"
             f"<b>Throughput:</b> {iso['overall_throughput_bits_per_s']:.2f} bits/s<br>"
+            f"<b>Total Clutches:</b> {_fmt(float(np.mean(totals)) if totals else None, '.2f')} /trial "
+            f"({_fmt(sum(totals) if totals else None, 'd')} targets with any clutch; {len(totals)} trials)<br>"
             f"<b>Off-screen clutches:</b> {_fmt(clutch['clutch_mean'], '.2f')} /trial "
             f"({_fmt(clutch['clutch_count'], 'd')} total; {clutch['clutch_trial_count']} trials)<br>"
             f"<b>On-screen clutches:</b> {_fmt(float(np.mean(onscreen)) if onscreen else None, '.2f')} /trial "
@@ -714,36 +707,18 @@ class FittsPlaybackWindow(QMainWindow):
         for item in self._clutch_marker_items:
             self.clutch_plot.removeItem(item)
         self._clutch_marker_items = []
-        for per_trial, mark, color, row in (
-            (self._onscreen_clutches, "O", "#00695c", .75),
-            (self._offscreen_clutches, "E", "#9c3d10", .25),
+        for per_trial, mark, color in (
+            (self._onscreen_clutches, "O", "#00695c"),
+            (self._offscreen_clutches, "E", "#9c3d10"),
         ):
             for start, episodes in zip(self._starts, per_trial):
                 for a, b in episodes or []:
                     left, right = start - self._time_origin + a, start - self._time_origin + b
-                    bar = self.clutch_plot.plot([left, right], [row, row], pen=pg.mkPen(color, width=2))
+                    bar = self.clutch_plot.plot([left, right], [.5, .5], pen=pg.mkPen(color, width=2))
                     text = pg.TextItem(mark, color=color, anchor=(.5, .5))
-                    text.setPos(float((left + right) / 2), row)
+                    text.setPos(float((left + right) / 2), .5)
                     self.clutch_plot.addItem(text)
                     self._clutch_marker_items.extend([bar, text])
-
-    def _update_clutch_indicator(self, t: float) -> None:
-        idx = int(np.searchsorted(self._starts, t, side="right")) - 1
-        inside = 0 <= idx < len(self.trials) and t <= self._ends[idx]
-        lines = ["<b>Estimated clutch</b>"]
-        for label, per_trial in (("Off-screen", self._offscreen_clutches),
-                                 ("On-screen", self._onscreen_clutches)):
-            if not inside:
-                status = "inactive"
-            elif per_trial[idx] is None:
-                status = "unavailable"
-            else:
-                elapsed = t - self._starts[idx]
-                status = ("active" if any(a <= elapsed <= b for a, b in per_trial[idx])
-                          else "inactive")
-            text = f"{label}: {status}"
-            lines.append(f"<span style='color:#a00000'><b>{text}</b></span>" if status == "active" else text)
-        self.clutch_indicator.setText("<br>".join(lines))
 
     def _on_playing_changed(self, playing: bool) -> None:
         if playing and self.trials and self.zoom_to_trial.isChecked():
@@ -768,7 +743,6 @@ class FittsPlaybackWindow(QMainWindow):
                 self.clock.pause()
                 self.clock.seek(end)
                 return
-        self._update_clutch_indicator(t)
         if not self.trials or (self._head_task_range is not None and t < self._starts[0]):
             if self._head_task_range is not None:
                 self._show_head_task(t)

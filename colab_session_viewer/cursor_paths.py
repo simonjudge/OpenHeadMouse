@@ -8,7 +8,12 @@ import html
 import re
 from collections import defaultdict
 
+import numpy as np
+
 from colab_session_viewer.data import Session, fitts_screen_dimensions, retained_trials
+from fitts_law.clutch import (
+    DEFAULT_CLUTCH_SETTINGS, ClutchSettings, clutch_episodes, onscreen_episodes,
+)
 from fitts_law.results import FittsStats, TrialResult
 
 COLORS = ("#0057b8", "#cf281c", "#008442", "#a644ae", "#a05b00", "#007f87",
@@ -80,7 +85,28 @@ def format_target_selection(numbers) -> str:
     return ", ".join(parts)
 
 
-def cursor_path_plot(sessions: list[Session], selection, exclude: int) -> str:
+def _episode_paths(trial: TrialResult, start: float, end: float, max_gap: float):
+    """Clip recorded paths to an episode, without bridging missing samples."""
+    points = np.asarray(trial.trajectory, dtype=float).reshape(-1, 3)
+    duration = (trial.end_host_time - trial.start_host_time
+                if trial.start_host_time is not None and trial.end_host_time is not None
+                else trial.end_time - trial.start_time)
+    if points[-1, 0] < duration:
+        points = np.vstack((points, [duration, *trial.click_pos]))
+    gaps = np.diff(points[:, 0])
+    breaks = np.flatnonzero((gaps <= 0) | (gaps > max_gap)) + 1
+    for run in np.split(points, breaks):
+        first, last = max(start, run[0, 0]), min(end, run[-1, 0])
+        if last < first:
+            continue
+        times = np.r_[first, run[(run[:, 0] > first) & (run[:, 0] < last), 0], last]
+        yield np.column_stack([np.interp(times, run[:, 0], run[:, axis]) for axis in (1, 2)])
+
+
+def cursor_path_plot(
+    sessions: list[Session], selection, exclude: int,
+    settings: ClutchSettings = DEFAULT_CLUTCH_SETTINGS,
+) -> str:
     """Render one participant's selected targets (participant-wide 1-based numbers)."""
     selection = set(selection)
     if not selection or min(selection) < 1:
@@ -113,6 +139,17 @@ def cursor_path_plot(sessions: list[Session], selection, exclude: int) -> str:
             f'width="{w:.3f}" height="{h:.3f}"/></clipPath></defs>'
         )
         contents = []
+        by_session = defaultdict(list)
+        for entry in trials:
+            by_session[id(entry[0])].append(entry)
+        estimates = {}
+        for entries in by_session.values():
+            session = entries[0][0]
+            selected_trials = [entry[3] for entry in entries]
+            offscreen = clutch_episodes(selected_trials, session.samples, session.metadata, settings)
+            onscreen = onscreen_episodes(selected_trials, session.metadata, settings, offscreen=offscreen)
+            for entry, edge, reset in zip(entries, offscreen, onscreen):
+                estimates[(id(session), entry[2])] = (edge, reset)
         for session, index, file_number, trial in trials:
             color = COLORS[(index - 1) % len(COLORS)]
             label = f"Target {index} ({session.name}, file target {file_number})"
@@ -122,15 +159,42 @@ def cursor_path_plot(sessions: list[Session], selection, exclude: int) -> str:
             title = html.escape(f"{label} - {'hit' if trial.hit else 'miss'}")
             points = FittsStats.path_points(trial)
             coords = " ".join(f"{20 + x * scale:.3f},{top + yy * scale:.3f}" for x, yy in points)
+            highlights = []
+            edge, reset = estimates[(id(session), file_number)]
+            for episodes, kind, mark, highlight_color in (
+                (reset, "onscreen", "O", "#00695c"), (edge, "offscreen", "E", "#9c3d10"),
+            ):
+                for start, end in episodes or []:
+                    for path in _episode_paths(trial, start, end, settings.max_cursor_gap_s):
+                        highlighted = " ".join(
+                            f"{20 + x * scale:.3f},{top + yy * scale:.3f}" for x, yy in path
+                        )
+                        highlights.append(
+                            f'<polyline class="clutch-highlight clutch-{kind}" data-start="{start:g}" '
+                            f'data-end="{end:g}" points="{highlighted}" fill="none" '
+                            f'stroke="{highlight_color}" stroke-width="8" opacity="0.45" '
+                            'stroke-linecap="round" stroke-linejoin="round">'
+                            f'<title>{mark}: {kind} clutch, {start:g}-{end:g} s from trial start</title>'
+                            '</polyline>'
+                        )
             contents.append(
-                f'<g><title>{title}</title><circle cx="{20 + tx * scale:.3f}" cy="{top + ty * scale:.3f}" '
+                f'<g><title>{title}</title>'
+                f'<circle cx="{20 + tx * scale:.3f}" cy="{top + ty * scale:.3f}" '
                 f'r="{trial.width_px * scale / 2:.3f}" fill="none" stroke="{color}" stroke-width="1.2"/>'
                 f'<polyline points="{coords}" fill="none" stroke="{color}" stroke-width="1.5" '
-                'stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>'
+                'stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>' + "".join(highlights) +
                 f'<circle cx="{20 + cx * scale:.3f}" cy="{top + cy * scale:.3f}" r="2" fill="{color}"/></g>'
             )
         elements.append(f'<g clip-path="url(#{clip_id})">' + "".join(contents) + "</g>")
         y = top + h + 30
+    elements.append(
+        f'<g aria-label="Clutch highlight key"><line x1="24" x2="48" y1="{y - 14:g}" '
+        f'y2="{y - 14:g}" stroke="#00695c" stroke-width="8" opacity="0.45"/>'
+        f'<text x="58" y="{y - 9:g}" font-size="13">O: on-screen clutch</text>'
+        f'<line x1="230" x2="254" y1="{y - 14:g}" y2="{y - 14:g}" stroke="#9c3d10" '
+        f'stroke-width="8" opacity="0.45"/>'
+        f'<text x="264" y="{y - 9:g}" font-size="13">E: off-screen clutch</text></g>'
+    )
     title = f"{participant}: cumulative cursor paths, targets {format_target_selection(selection)}"
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{html.escape(title, quote=True)}" '
@@ -150,5 +214,8 @@ def cursor_path_plot(sessions: list[Session], selection, exclude: int) -> str:
         '<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">'
         f'<a download="cumulative_cursor_paths_{filename}.svg" href="data:image/svg+xml;base64,{encoded}">Download image (SVG)</a>'
         f'<span>{html.escape("; ".join(screens))}</span></div>'
+        '<p>Clutch highlights use the current estimate settings. Hover over a highlight for its '
+        'trial-relative interval. No highlight means none detected or insufficient data, not proof '
+        'of no clutching.</p>'
         f'<details><summary>Path colours and source files</summary><ul>{legend_html}</ul></details>'
     )

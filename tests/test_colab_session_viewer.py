@@ -977,7 +977,7 @@ def test_split_tables_keep_one_row_per_participant_and_rom_task_only(tmp_path):
     assert "<h3>Table 6: Fitts stats</h3>" not in head_markup
     assert "<h3>Table 6: Fitts stats</h3>" in fitts_markup
     assert "<h3>Table 2: Initial head positions</h3>" not in fitts_markup
-    markup = head_markup + fitts_markup
+    markup = head_markup + fitts_markup + viewer.clutch_table.value
     assert markup.count('class="report-data"') == 16
     assert markup.count('class="field-key"') == 9
     assert markup.count('class="session-details"') == 7
@@ -1187,7 +1187,7 @@ def test_table_order_compact_headers_and_sources(tmp_path):
     assert table_sources([session], "Initial head positions") == {"P": []}
     viewer = NotebookViewer()
     viewer._add_sessions([session])
-    markup = viewer.table.value + viewer.fitts_table.value
+    markup = viewer.table.value + viewer.fitts_table.value + viewer.clutch_table.value
     assert "<summary><b>Source files</b></summary>" not in markup
     assert markup.count('<div class="session-details">') == 7
     assert "table-layout:auto" in markup
@@ -1240,7 +1240,7 @@ def test_collapsed_reference_sources_and_complete_field_keys(tmp_path):
                 self.in_field = False
 
     parser = ReportParser()
-    markup = viewer.table.value + viewer.fitts_table.value
+    markup = viewer.table.value + viewer.fitts_table.value + viewer.clutch_table.value
     parser.feed(markup)
     assert parser.details
     assert all("open" not in attrs for attrs in parser.details)
@@ -1453,7 +1453,7 @@ def test_any_root_csv_manifest_imports_only_listed_recordings(tmp_path):
     assert sessions[0].participant == "A"
     viewer = NotebookViewer()
     viewer._add_sessions(sessions)
-    markup = viewer.table.value + viewer.fitts_table.value
+    markup = viewer.table.value + viewer.fitts_table.value + viewer.clutch_table.value
     assert markup.count("<h3>") == 7
     assert "<h3>Table 10: Clutch stats</h3>" in markup
     for number, label in enumerate(("Session summary", "Initial head positions", "Range of movement stats",

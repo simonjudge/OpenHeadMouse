@@ -200,8 +200,22 @@ of initial target entries or a percentage. The first entry is not counted;
 paths with no re-entry contribute zero, so an average below 1 is expected.
 The path-trial-count column is its denominator.
 
-**Table 10: Clutch stats** reports boundary contacts and estimated off-screen and on-screen clutches
-separately from the main Fitts table. It includes **raw totals**
+**Table 10: Clutch stats**, immediately after Table 9, reports boundary contacts and estimated off-screen and on-screen clutches
+separately from the main Fitts table. Its first measure, **Total Clutches / target**
+(`total_clutch_mean`), is the proportion of eligible targets whose trajectory
+contains **at least one on-screen OR off-screen clutch**. Each target contributes
+1 or 0, even when it contains several episodes or both types:
+
+`total_clutch_mean = total_clutch_count / total_clutch_trial_count`
+
+`total_clutch_count` counts targets with any clutch, not episodes; the result is
+a fraction from 0 to 1, not the sum of the separate per-target episode averages.
+A positive from either detector establishes a clutched target even if the other
+detector is unavailable. A zero requires both detectors to be available; a zero
+from one type with the other unavailable is unknown and excluded from the total
+denominator. With no eligible targets, the count and mean are blank.
+
+The table also includes **raw episode totals**
 (`boundary_count`, `clutch_count`, `onscreen_clutch_count`), eligible target counts
 (`boundary_trial_count`, `clutch_trial_count`, `onscreen_clutch_trial_count`) and per-target averages
 (`boundary_hits`, `clutch_mean`, `onscreen_clutch_mean`). The `clutch_*` result
@@ -235,53 +249,144 @@ Both measures below are operational estimates, not validated clutch detectors
 or proof of intent. Counts and means include eligible misses and are pooled
 across recordings rather than averaging session means.
 
-The **off-screen** estimate is an inferred boundary saturation and return, not merely
-an edge hit: the cursor stays nearly stationary on the edge-normal axis while
-the head continues turning outward, and then both head and cursor return inward.
-`clutch_trial_count` is its denominator.
-
 Expand **Clutch estimate settings** above the Fitts tables to change these
 thresholds and immediately recalculate participant and individual-session
 results and downloads. **Reset clutch defaults** restores the values below.
-The same settings are included in each clutch-table CSV row and the combined
-summary CSV; they are not saved to the recordings or used by desktop playback.
+Settings are kept in the controls and combined summary CSV, not in Table 10,
+its individual-session rows or its dedicated CSV. They are not saved to the
+recordings or used by desktop playback.
 Notebook playback uses the current settings and restarts when they change.
 The near-edge zone also changes trajectory-based boundary estimates, but not
 saved event counts. If the zone is at least half the width or height, estimates
 requiring screen geometry are unavailable for that recording.
 
-The detector uses the saved trajectory and yaw/pitch head samples aligned by
-their shared host clock. With the default settings, for each of the four sides it:
+#### The eight settings
 
-1. Finds cursor samples within 30 logical pixels of that side using the saved
-   screen dimensions. On that side's axis, a run must remain within 4 pixels
-   of its first sample for at least 0.06 seconds, with no cursor-sample gap
-   over 0.5 seconds.
-2. During that run, the head must turn at least 2 degrees outward: positive
-   yaw at the left, negative yaw at the right, positive pitch at the top or
-   negative pitch at the bottom. Angles are unwrapped and interpolated to
-   cursor times.
-3. Within 0.6 seconds after the run, the cursor must move at least 20 pixels
-   inward and the head must reverse at least 1 degree from its outward peak.
-   Overlapping detections at a corner count as one episode.
+There are **three on-screen**, **three off-screen**, and **two data-quality**
+settings. No separate plateau-duration, return-distance, return-angle,
+return-window, reversal-hysteresis or absolute phase-duration controls remain.
+The definitions deliberately reuse the existing thresholds instead.
 
-These are pragmatic thresholds, **not a validated published clutch detector**.
-The definition assumes normal positive-gain headmouse directions and recorded
-yaw/pitch correspond to the device controlling the cursor; inverted axes,
-different mappings, sensor mounting, latency, or independent head and cursor
-devices can invalidate it. It is calculated only for files labelled
-`HeadMouse` or `OpenHeadMouse`, with screen dimensions, at least two trajectory
-samples, and head samples covering the entire trial on the shared host clock,
-with no head-sample gap over the configured maximum (default 0.2 seconds).
-Missing or partial data is excluded, not counted as zero.
+| Setting / symbol | Default | Meaning |
+|---|---:|---|
+| `edge_zone_px` / `Z` | 30 logical px | Maximum cursor distance from a screen side. Also used for legacy boundary-contact estimates. |
+| `still_axis_px` / `S` | 4 logical px | Maximum edge-normal displacement from the plateau's first position; **also** minimum inward cursor return from that position. |
+| `outward_deg` / `H` | 2 deg | Minimum outward head rotation during the plateau; **also** minimum head reversal from its peak. |
+| `onscreen_retreat_px` / `R` | 60 logical px | Minimum backward excursion along the fixed target axis; **also** displacement establishing each reversal. |
+| `onscreen_speed_ratio` / `K` | 1.2 | Mean forward recovery speed must be **strictly greater than** `K` times mean backward speed. |
+| `onscreen_opposition` / `Q` | 0.5 | Minimum cosine of opposition between the retreat and recovery displacement vectors. `0.5` means an angle of at least 120 deg; `1` requires exactly opposite vectors. |
+| `max_cursor_gap_s` / `G_cursor` | 0.5 s | Largest consecutive cursor-sample gap allowed within an off-screen plateau **and return**, or an on-screen episode. |
+| `max_head_gap_s` / `G_head` | 0.2 s | Largest head-sample gap spanning an eligible trial; **also** maximum shortfall at the head recording's end. |
 
-Cursor samples are event-driven and can be missing while the cursor is outside
-the canvas. A short gap between near-edge samples is therefore an inference,
-not proof that the cursor stayed still. Older files do not record the canvas
-origin relative to the screen; the edge zone is an approximation, especially
-at the top and bottom. Sampling, missed events, edge targets and noise can cause
-both missed detections and false positives. A zero is not proof of no clutching,
-and head rotation alone cannot establish the user's intent.
+All settings must be finite and non-negative. Gap limits must be positive,
+`K >= 1`, and `0 <= Q <= 1`. A zero geometric/angular threshold removes that
+minimum evidence requirement; zero `R` also removes the reversal noise floor.
+Even at `Q = 0`, recovery must still point into the opposing half-plane
+(angle strictly greater than 90 deg). These are exploratory controls, not
+validated clinical thresholds.
+
+#### Annotated synthetic cursor trajectories
+
+![Actual x-y cursor trajectory plots with clutch highlights and all eight settings labelled](images/clutch-settings.png)
+
+These are **x-y cursor trajectories**, not distance-versus-time graphs. The
+screenshot uses the same SVG renderer as **Cumulative cursor paths**, with
+instructional callouts added. Screen coordinates have their origin at the
+top-left and y increases downwards; target circles and click dots retain the
+interface's normal appearance. The brown part of the left trajectory is the
+estimated E episode; the teal part of the right trajectory is the estimated O
+episode. Labels show all six detector settings, the fixed approach axis,
+nominal target radius, measured excursions and reset/return points `a`, `b`, `c`.
+The shared `S` and `H` thresholds are used in both outward and return conditions.
+
+Time and head rotation cannot be read from cursor-path shape alone: the speed
+callout uses the recorded timestamps, the E angular callout uses the paired
+head samples, and the two data-quality settings are explained below the plots.
+The data is entirely synthetic, not recordings from a participant.
+
+#### Clutch highlights on selected cursor paths
+
+In **Cumulative cursor paths**, choose one target with **Next**, **Previous** or
+the **Targets** box to inspect its full trajectory. Selected multi-target
+plots also show these highlights. A wide, translucent **teal O** or **brown E**
+stroke covers only the portion classified as that clutch type, leaving the
+normal per-target path colour visible. The key is below the screen rectangle;
+hover over a highlight for its trial-relative start/end times.
+
+Highlights reuse the detector intervals used by playback and Table 10, including
+E precedence over overlapping O candidates. Changing clutch settings recalculates
+them without changing the target selection, underlying paths or statistics
+exclusions. The downloaded SVG contains the same highlights and their key.
+First-target exclusions and continuous target numbering behave as before.
+
+Episode boundaries are clipped to the timed cursor trajectory, linearly
+interpolating an endpoint between recorded samples if needed, and including
+the click when it is later than the final recorded sample. Highlight strokes
+never bridge cursor gaps over `G_cursor` or duplicate timestamps, even though
+the ordinary path connects saved positions. A stationary classified portion
+may look like a highlighted dot or a short segment, not a long excursion.
+Off-screen highlights need the paired head stream and saved screen dimensions;
+on-screen highlights do not. No highlight can mean either no detected clutch
+or unavailable evidence, not proof that no clutch occurred.
+
+#### Off-screen estimate
+
+An **off-screen** clutch is inferred boundary saturation followed by inward
+return, not merely an edge visit. Cursor position is nearly stationary along
+the edge-normal axis while the head continues outward, then both return.
+
+For each of the four sides:
+
+1. Use recorded cursor positions, not the planned trial start. For left/top,
+   a sample is near the side when `coordinate <= Z`; for right/bottom,
+   `coordinate >= extent - Z`, where extent is saved screen width/height.
+   Find consecutive near-side runs.
+2. Within each run, form a plateau from `a` through `b`: at least two cursor
+   samples, each within `S` pixels of its first edge-normal coordinate
+   (`abs(coordinate[i] - coordinate[a]) <= S`), and each consecutive gap
+   at most `G_cursor`. Tangential motion is unrestricted. There is **no**
+   separate minimum duration. When stability fails, consider the next
+   plateau without bridging that failure.
+3. Unwrap head yaw/pitch across +/-180 deg and linearly interpolate them on
+   the shared host clock. Include all head samples inside the plateau as
+   well as its interpolated endpoints, so an intervening peak is not missed.
+   Define outward-signed angle `h`: positive yaw for left, negative yaw for
+   right, positive pitch for top, negative pitch for bottom.
+   Let `h_peak` be the plateau maximum. Require `h_peak - h[a] >= H`.
+4. After `b`, seek the **first recorded cursor sample** `c` for which both
+   inward displacement from the plateau's first coordinate is at least `S`
+   and head reversal `h_peak - h[c] >= H`. Inward displacement is
+   `coordinate[c] - coordinate[a]` at left/top and its negative at right/bottom.
+   Do not cross a cursor gap greater than `G_cursor`. There is no separate
+   return deadline: a slow but continuously sampled return can qualify.
+5. The episode is `[t[a], t[c]]`, relative to trial start. Count one completed
+   episode for this near-side run, then continue with later visits.
+   Sort and merge overlapping/touching side detections, so a corner is one
+   episode, not one per axis.
+
+Using `H` for reversal and `S` for cursor departure can change annotation
+endpoints compared with the previous separate 1-deg/20-px return thresholds.
+Removing the deadline can also admit later continuously sampled returns.
+
+Off-screen eligibility requires a `HeadMouse`/`OpenHeadMouse` label, finite
+screen dimensions greater than `2*Z`, at least two recorded trajectory samples,
+and at least two finite shared-clock head samples in the recording. The
+head stream is sorted by host time; duplicate host timestamps keep the last
+sample. Missing/non-finite host times or yaw/pitch make the head estimate
+unavailable. The trial
+must start within the head recording's coverage. Head gaps in the bracketing
+samples for the whole trial, not only its candidate episode, must be no greater
+than `G_head`. If the trial ends after the last head sample, a shortfall up to
+`G_head` is allowed; interpolation **holds the last head angle constant** over
+that tail, rather than inventing a continued rotation. A larger shortfall,
+missing start coverage or an excessive internal gap makes the trial unavailable.
+The recording's endpoint tolerance is not an extra setting.
+
+Missing trial host times, empty/non-finite paths, decreasing cursor timestamps,
+or path times outside the trial make this estimate unavailable. The click is
+included at the trial's host-clock duration. Eligible zero-event trials,
+including misses, contribute zero; unavailable trials do not. `clutch_mean`
+is episode count divided by `clutch_trial_count`.
 
 #### On-screen estimate
 
@@ -301,25 +406,32 @@ For each `HeadMouse` or `OpenHeadMouse` trial:
    motion increases it. If the first point is already within the nominal
    target radius, no reset is counted because the approach axis is unreliable.
 2. Track a local minimum of `r` (reset start `a`), then a maximum (turnaround
-   `b`). An 8 px change establishes a reversal, ignoring smaller direction
+   `b`). An `R`-pixel change establishes each reversal, ignoring smaller direction
    fluctuations. Equal extrema use the latest sample so an initial stationary
    wait does not inflate retreat duration.
 3. The reset must start outside the target's nominal radius and not more than
    one target radius **past the target plane** (`r[a] >= -radius`). Backward
-   displacement `r[b] - r[a]` **and** the increase in Euclidean target distance
-   must each be at least **60 px**. The dual check rejects largely sideways
-   detours; the radius allowance avoids a hard centre-line decision for small
-   positioning errors.
+   displacement `A = r[b] - r[a]` must be at least `R`. No additional
+   radial-distance-increase test is applied. The radius allowance avoids a
+   hard centre-line decision for small positioning errors.
 4. End the return at the **first recorded sample** `c` that regains the reset
    start's target-axis position (`r[c] <= r[a]`), not at the eventual closest
-   point or click. Return displacement must also be at least 20 px. If another
-   backward reversal occurs before recovery, abandon the incomplete candidate
-   and evaluate the new excursion. Count each recovered excursion once.
-5. Mean forward speed `(r[b] - r[c]) / (t[c] - t[b])` must be **strictly greater
-   than 1.2 times** mean backward speed `(r[b] - r[a]) / (t[b] - t[a])`.
-   Both phases must have positive duration and last at most 3 seconds.
-   The return displacement must oppose the retreat displacement with cosine
-   of opposition at least 0.5 (angle at least 120 degrees).
+   point or click. Return displacement `B = r[b] - r[c]` therefore already
+   satisfies `B >= A`; there is no independent return-distance threshold.
+   If another backward reversal of at least `R` occurs before recovery,
+   abandon the incomplete candidate and evaluate the new excursion.
+   Count each recovered excursion once.
+5. Define retreat duration `T_away = t[b] - t[a]`, recovery duration
+   `T_back = t[c] - t[b]`, and corresponding mean target-axis speeds
+   `v_away = A / T_away`, `v_back = B / T_back`. Require positive durations
+   and `v_back > K * v_away`. There is no absolute phase-duration limit;
+   the required speed difference is relative.
+6. Let retreat vector `d_away = cursor[b] - cursor[a]` and recovery vector
+   `d_back = cursor[c] - cursor[b]`. Require opposing motion and
+   `-dot(d_away, d_back) >= Q * norm(d_away) * norm(d_back)`.
+   This is the cosine-of-opposition condition; it rejects returns that head
+   largely sideways instead of reversing the reset. Positive excursion and
+   full recovery ensure nonzero displacement vectors.
 
 This rejects the usual initial **throw and tracking correction**: moving
 towards or beyond the target and tracking back does not contain a backward
@@ -328,8 +440,12 @@ fixed signed axis avoids interpreting an overshoot as a new retreat merely
 because radial target distance increases. Ending the return at recovery also
 prevents subsequent overshoot/settling from diluting its speed.
 
+The nominal target radius is `width_px / 2`, derived from the recording, not
+an extra tuning parameter. Euclidean distance is used for the start-outside-
+target guard; `r` is used for retreat, recovery, speeds and the target-plane guard.
+
 The recorded click is appended when later than the final trajectory sample.
-Gaps over 0.5 seconds and duplicate timestamps split the path; no episode spans
+Gaps over `G_cursor` and duplicate timestamps split the path; no episode spans
 them. Decreasing timestamps, out-of-trial timestamps or non-finite paths make
 the estimate unavailable. At least three consecutive usable samples are needed.
 Edge visits do **not** by themselves split the path: a reset may briefly touch
@@ -344,26 +460,34 @@ Counts are summed over eligible trials; `onscreen_clutch_mean` is total count
 divided by `onscreen_clutch_trial_count`, including eligible zero-count trials.
 These are exploratory defaults, **not a validated intent classifier**.
 Large corrections with the same reset/recovery pattern may still qualify.
-Small, slow, incomplete, sideways or poorly sampled resets can be missed.
+Small resets, insufficiently faster recoveries, incomplete, sideways or poorly
+sampled resets can be missed.
 A curved approach can make the original axis less representative. The nominal
 radius is an approximation for non-circular targets. Event-driven sampling and
 OS pointer processing further limit interpretation; zero means none detected,
 not proof that none occurred. Validate visually and vary the exposed thresholds.
 
-In notebook and desktop playback, **Show clutch estimates** displays separate
-on-screen and off-screen indicators beside the cursor screen. They illuminate
-over the entire detected interval, including the retreat, using the completed
-trial retrospectively (not as a real-time prediction). An unavailable estimate
-is labelled separately from an inactive one. Playback shows all trials,
-including those excluded from summary statistics; desktop uses defaults.
+The off-screen definition assumes normal positive-gain headmouse directions
+and recorded yaw/pitch from the device controlling the cursor. Inverted axes,
+other mappings, mounting, latency or independent head/cursor devices can
+invalidate it. Roll, displayed acceleration/speed graphs, saved boundary counts,
+TRE, dwell settings and planned amplitude are not direct classification inputs.
+Cursor samples are event-driven and can be absent outside the canvas; a
+short, permitted gap does not prove that the cursor stayed still. Older
+canvas-local coordinates have an unknown screen offset. Edge targets, noise,
+sampling and unrelated movements can therefore cause false positives or missed
+events. Neither head rotation nor these estimates establishes intent.
 
-Below the graphs, **O** (teal) marks an on-screen estimate and **E** (brown) an
+Below the distance graph, **O** (teal) marks an on-screen estimate and **E** (brown) an
 off-screen/edge estimate. Each mark is centred on a line spanning that episode,
-on separate rows so the types do not obscure each other. These annotations are
+with both types on one compact row because overlapping detections are removed.
+There are no text indicators beside playback or marks under speed/head graphs.
+These annotations are
 independent of the existing miss/exclusion background colours and remain
-visible while paused or seeking. All notebook graphs, including head
-acceleration, carry the same time-aligned marks; desktop has a shared strip
-below its cursor graphs.
+visible while paused or seeking. They use the completed trial retrospectively,
+not as a real-time prediction or proof of intent. Playback shows all trials,
+including excluded ones; desktop uses defaults and has the same single-row
+strip below its distance graph.
 
 To the right of the notebook session selector, use **<**, the **Trial** number
 box, or **>** to pause and seek to a trial's start. **Zoom to trial** restricts

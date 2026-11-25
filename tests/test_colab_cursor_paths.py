@@ -1,12 +1,14 @@
 import base64
 import re
 import xml.etree.ElementTree as ET
+from dataclasses import replace
 
+import numpy as np
 import pytest
 
 from colab_session_viewer.app import NotebookViewer
 from colab_session_viewer.cursor_paths import (
-    cursor_path_plot, format_target_selection, numbered_targets, parse_target_selection,
+    _episode_paths, cursor_path_plot, format_target_selection, numbered_targets, parse_target_selection,
 )
 from colab_session_viewer.data import Session, fitts_screen_dimensions
 from fitts_law.results import TrialResult
@@ -150,3 +152,75 @@ def test_participant_text_controls_stepping_and_exclusions_are_independent():
     p.text.value = "1-3"
     p.down.click()
     assert p.text.value == "3"
+
+
+def test_clutch_highlights_match_playback_intervals_and_clip_to_the_episode():
+    from colab_session_viewer.data import playback_payload
+    from tests.test_fitts_clutch import META, onscreen_trial, samples, trial as edge_trial
+
+    item = Session("P", "Clutches", trials=[edge_trial(), onscreen_trial()],
+                   samples=samples(), metadata=META, fitts_filename="clutches.json")
+    root = extract(cursor_path_plot([item], [1, 2], 0))
+    ns = {"s": "http://www.w3.org/2000/svg"}
+    highlights = [line for line in root.findall(".//s:polyline", ns)
+                  if "clutch-highlight" in line.attrib.get("class", "")]
+    assert [line.attrib["class"] for line in highlights] == [
+        "clutch-highlight clutch-offscreen", "clutch-highlight clutch-onscreen",
+    ]
+    payload = playback_payload(item)
+    for line, trial_index, kind, endpoints in (
+        (highlights[0], 0, "offscreen", [(0, 300), (30, 300)]),
+        (highlights[1], 1, "onscreen", [(250, 300), (265, 300)]),
+    ):
+        start, end = payload["trials"][trial_index][kind + "_clutches"][0]
+        assert (float(line.attrib["data-start"]), float(line.attrib["data-end"])) == (start, end)
+        coords = np.array([point.split(",") for point in line.attrib["points"].split()], dtype=float)
+        expected = np.array(endpoints) * (460 / 600) + [20, 45]
+        np.testing.assert_allclose(coords[[0, -1]], expected, atol=.001)
+        assert float(line.attrib["stroke-width"]) > 1.5
+    assert len(root.findall(".//s:polyline", ns)) == 4
+    assert "O: on-screen clutch" in "".join(root.itertext())
+    assert "E: off-screen clutch" in "".join(root.itertext())
+    assert "clutch-onscreen" not in cursor_path_plot([item], [1], 0)
+    assert "clutch-offscreen" not in cursor_path_plot([item], [1, 2], 1)
+
+
+def test_episode_paths_interpolate_endpoints_include_click_and_do_not_bridge_gaps():
+    from tests.test_fitts_clutch import onscreen_trial
+
+    item = replace(onscreen_trial(), trajectory=[
+        [0, 100, 300], [.2, 200, 300], [1, 300, 300], [1.2, 400, 300],
+    ], click_pos=(500, 300))
+    segments = list(_episode_paths(item, .1, 1.1, .5))
+    assert len(segments) == 2
+    np.testing.assert_allclose(segments[0], [[150, 300], [200, 300]])
+    np.testing.assert_allclose(segments[1], [[300, 300], [350, 300]])
+    duplicate = replace(item, trajectory=[
+        [0, 100, 300], [.2, 200, 300], [.2, 250, 300], [.4, 300, 300],
+    ])
+    first, second = _episode_paths(duplicate, 0, .4, .5)
+    np.testing.assert_allclose(first, [[100, 300], [200, 300]])
+    np.testing.assert_allclose(second, [[250, 300], [300, 300]])
+    with_click = replace(item, trajectory=[[1.6, 100, 300], [1.8, 200, 300]])
+    segment, = _episode_paths(with_click, 1.8, 2, .5)
+    np.testing.assert_allclose(segment, [[200, 300], [500, 300]])
+
+
+def test_clutch_highlights_refresh_with_controls_without_mutating_paths():
+    from tests.test_fitts_clutch import META, onscreen_trial, trial as edge_trial
+
+    item = Session("P", "Cursor only", trials=[onscreen_trial()], metadata=META, fitts_filename="cursor.json")
+    viewer = NotebookViewer()
+    viewer._add_sessions([item])
+    control = viewer._cursor_path_controls["P"]
+    assert "clutch-onscreen" in control.output.value
+    assert "clutch-offscreen" not in control.output.value
+    original = [point[:] for point in item.trials[0].trajectory]
+    viewer.clutch_controls["onscreen_retreat_px"].value = 76
+    assert "clutch-onscreen" not in control.output.value
+    viewer._reset_clutch_settings(None)
+    assert "clutch-onscreen" in control.output.value
+    assert item.trials[0].trajectory == original
+    unavailable = replace(edge_trial(), trajectory=[[0, 50, 300]] + edge_trial().trajectory[1:])
+    empty = Session("P", "No head", trials=[unavailable], metadata=META, fitts_filename="no-head.json")
+    assert "clutch-highlight clutch-" not in cursor_path_plot([empty], [1], 0)

@@ -1,8 +1,8 @@
 {
   "mode": "ISO Standard",
-  "num_targets": "9",
-  "amplitudes": "300,600",
-  "widths": "30,60",
+  "num_targets": "3",
+  "amplitudes": "300",
+  "widths": "30",
   "repetitions": 1,
   "randomize_targets": false,
   "stimulus": "Circle (ISO standard)",

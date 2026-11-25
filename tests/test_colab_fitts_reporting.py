@@ -67,8 +67,8 @@ def test_boundary_contacts_pool_available_trials_and_follow_exclusions():
     viewer = NotebookViewer()
     viewer.sessions = [session]
     viewer._refresh_table()
-    assert "<h3>Table 10: Clutch stats</h3>" in viewer.fitts_table.value
-    exported = csv_rows(viewer.fitts_table.value, "clutch_stats.csv")[0]
+    assert "<h3>Table 10: Clutch stats</h3>" in viewer.clutch_table.value
+    exported = csv_rows(viewer.clutch_table.value, "clutch_stats.csv")[0]
     assert float(exported["boundary_hits"]) == 1
     assert exported["boundary_count"] == "2"
     assert exported["boundary_trial_count"] == "2"

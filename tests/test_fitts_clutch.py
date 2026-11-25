@@ -9,6 +9,7 @@ from core.recorder import RecordedSample
 from fitts_law.clutch import (
     ClutchSettings, boundary_counts, clutch_counts, clutch_episodes, clutch_summary, onscreen_counts,
     onscreen_episodes,
+    total_clutch_counts,
 )
 from fitts_law.results import TrialResult
 
@@ -56,7 +57,7 @@ def test_corner_is_one_episode_and_later_return_is_another():
     head = samples()
     for s in head:
         s.yaw_deg = float(np.interp(s.timestamp, [0, .2, .4, .55, 1, 1.2, 1.35, 2],
-                                    [0, 0, 3, 1, 0, 3, 1, 0]))
+                                    [0, 0, 3, .5, 0, 3, .5, 0]))
     assert clutch_counts([two], head, META) == [2]
 
 
@@ -71,6 +72,46 @@ def test_missing_or_inadequate_recording_is_not_zero():
     assert clutch_summary([t], [], META) == {
         "clutch_trial_count": 0, "clutch_count": None, "clutch_mean": None,
     }
+
+
+def test_head_end_shortfall_uses_gap_tolerance_without_relaxing_other_coverage():
+    t = trial()
+    head = samples()
+    assert clutch_counts([t], head[:-4], META) == [1]
+    assert clutch_counts([t], head[:-5], META) == [None]
+    assert clutch_counts([t], head[1:], META) == [None]
+    assert clutch_counts([t], head[:10] + head[16:], META) == [None]
+    after_recording = replace(t, start_host_time=1002.01, end_host_time=1002.1)
+    assert clutch_counts([after_recording], head, META) == [None]
+    tail = replace(t, end_host_time=1000.5, end_time=.5, trajectory=t.trajectory[:4])
+    assert clutch_counts([tail], head[:9], META) == [0]
+
+
+def test_offscreen_reuses_rotation_threshold_and_requires_continuous_return():
+    t = trial()
+    no_reversal = samples(yaw=(0, 0, 3, 1.5, 1.5))
+    assert clutch_counts([t], no_reversal, META) == [0]
+    delayed = replace(t, trajectory=t.trajectory[:4] + [
+        [.7, 6, 300], [.95, 10, 300], [1.2, 40, 300],
+    ])
+    head = samples()
+    for s in head:
+        s.yaw_deg = float(np.interp(s.timestamp, [0, .2, .4, 1, 1.2, 2], [0, 0, 3, 3, 0, 0]))
+    assert clutch_episodes([delayed], head, META) == [[(.2, 1.2)]]
+    gap = replace(t, trajectory=t.trajectory[:4] + [[.91, 100, 300]])
+    assert clutch_counts([gap], samples(), META) == [0]
+
+
+def test_short_plateau_has_no_independent_duration_requirement():
+    t = replace(trial(), trajectory=[
+        [0, 100, 300], [.2, 0, 300], [.21, 0, 300], [.24, 6, 300], [.3, 100, 300],
+    ])
+    head = samples()
+    head = [replace(head[0], host_time=1000 + time, yaw_deg=yaw)
+            for time, yaw in ((0, 0), (.1, 0), (.2, 0), (.21, 3), (.24, 0),
+                              (.3, 0), (.5, 0), (.7, 0), (.9, 0), (1.1, 0),
+                              (1.3, 0), (1.5, 0), (1.7, 0), (1.9, 0), (2, 0))]
+    assert clutch_counts([t], head, META, ClutchSettings(max_head_gap_s=.21)) == [1]
 
 
 def test_legacy_boundary_counts_use_paths_and_merge_corner_contacts():
@@ -136,9 +177,8 @@ def test_boundary_pool_uses_each_sessions_dimensions_and_weights_targets_equally
 
 
 @pytest.mark.parametrize("setting,value", [
-    ("still_axis_px", 0), ("min_still_s", .21), ("max_cursor_gap_s", .05),
-    ("max_head_gap_s", .01), ("outward_deg", 4), ("return_deg", 3),
-    ("return_px", 101), ("return_window_s", .1),
+    ("still_axis_px", 0), ("max_cursor_gap_s", .05),
+    ("max_head_gap_s", .01), ("outward_deg", 4),
 ])
 def test_changing_each_detection_threshold_affects_result(setting, value):
     original = trial()
@@ -167,8 +207,8 @@ def test_edge_zone_setting_affects_legacy_paths_not_saved_events():
 
 
 @pytest.mark.parametrize("values", [{"outward_deg": -1}, {"edge_zone_px": float("nan")},
-                                   {"return_window_s": float("inf")}, {"max_head_gap_s": 0},
-                                   {"onscreen_hysteresis_px": 0}, {"onscreen_max_phase_s": 0},
+                                   {"still_axis_px": float("inf")}, {"max_head_gap_s": 0},
+                                   {"max_cursor_gap_s": 0},
                                    {"onscreen_speed_ratio": .9}, {"onscreen_opposition": 1.1}])
 def test_invalid_clutch_settings_are_rejected(values):
     with pytest.raises(ValueError):
@@ -186,15 +226,28 @@ def test_notebook_controls_refresh_participant_session_and_csv_results():
     viewer.sessions = [session]
     viewer._refresh_table()
     assert viewer.summary_rows()[0]["clutch_count"] == 1
+    assert viewer.summary_rows()[0]["total_clutch_mean"] == 1
     viewer.clutch_controls["outward_deg"].value = 4
     assert viewer.summary_rows()[0]["clutch_count"] == 0
-    row = csv_rows(viewer.fitts_table.value, "clutch_stats.csv")[0]
+    row = csv_rows(viewer.clutch_table.value, "clutch_stats.csv")[0]
     assert row["clutch_count"] == "0"
-    assert float(row["clutch_setting_outward_deg"]) == 4
-    assert row["clutch_setting_min_still_s"] == "0.06"
-    session_details = viewer.fitts_table.value.split("Table 10b: Individual sessions")[1]
-    assert "<td>P</td><td>test</td><td>1</td><td>1</td><td>1</td><td>1.0</td><td>1</td><td>0</td>" in session_details
-    assert ">0.06<" in session_details
+    assert (row["onscreen_clutch_count"], row["total_clutch_count"], row["total_clutch_mean"]) == (
+        "1", "1", "1.0",
+    )
+    viewer.clutch_controls["onscreen_retreat_px"].value = 101
+    changed = csv_rows(viewer.clutch_table.value, "clutch_stats.csv")[0]
+    assert (changed["total_clutch_count"], changed["total_clutch_mean"]) == ("0", "0.0")
+    viewer.clutch_controls["onscreen_retreat_px"].value = 60
+    assert not any(key.startswith("clutch_setting_") for key in row)
+    assert viewer.summary_rows()[0]["clutch_setting_outward_deg"] == 4
+    session_details = viewer.clutch_table.value.split("Table 10b: Individual sessions")[1]
+    assert "Total Clutches / target" in session_details
+    assert "clutch_setting_" not in session_details
+    children = viewer.session_widget.children
+    assert children.index(viewer.clutch_table) == children.index(viewer.first_entry_table) + 1
+    assert "Table 10: Clutch stats" not in viewer.fitts_table.value
+    assert "clutch_setting_" not in viewer.clutch_table.value
+    assert "clutch_setting_outward_deg" in summary_csv(viewer.summary_rows())
     assert viewer.summary_rows()[0]["boundary_count"] == 1
     viewer._reset_clutch_settings(None)
     assert viewer.summary_rows()[0]["clutch_count"] == 1
@@ -230,10 +283,7 @@ def test_onscreen_retreat_and_faster_return_and_tunable_thresholds():
     assert onscreen_counts([t], META, offscreen=[None]) == [1]
     for settings in (
         replace(ClutchSettings(), onscreen_retreat_px=76),
-        replace(ClutchSettings(), onscreen_return_px=91),
         replace(ClutchSettings(), onscreen_speed_ratio=2.5),
-        replace(ClutchSettings(), onscreen_hysteresis_px=91),
-        replace(ClutchSettings(), onscreen_max_phase_s=.5),
         replace(ClutchSettings(), max_cursor_gap_s=.2),
     ):
         assert onscreen_counts([t], META, settings) == [0]
@@ -263,6 +313,46 @@ def test_onscreen_multiple_episodes_and_target_correction():
         [.7, 370, 300], [.8, 390, 300], [.9, 400, 300],
     ], click_pos=(400, 300))
     assert onscreen_counts([correction], META) == [0]
+
+
+def test_onscreen_has_no_independent_phase_limit_and_uses_axis_excursion():
+    t = onscreen_trial()
+    times = np.r_[np.arange(0, 4.01, .4), [4.1, 4.2, 4.3]]
+    x = np.r_[np.linspace(250, 175, 11), [205, 235, 265]]
+    slow_retreat = replace(t, trajectory=[[time, point, 300] for time, point in zip(times, x)],
+                          end_time=4.5, end_host_time=1004.5)
+    assert onscreen_episodes([slow_retreat], META) == [[(0.0, 4.3)]]
+    diagonal = replace(t, trajectory=[
+        [0, 100, 300], [.2, 300, 100], [.5, 260, 153], [.8, 225, 200],
+        [.9, 270, 140], [1, 315, 80],
+    ], click_pos=(315, 80))
+    assert onscreen_episodes([diagonal], META) == [[(.2, 1.0)]]
+
+
+def test_total_clutches_count_targets_once_and_preserve_unknown_negatives():
+    assert total_clutch_counts([2, 1, 0, None, None, 0], [3, 0, 0, 2, 0, None]) == [
+        1, 1, 0, 1, None, None,
+    ]
+    with pytest.raises(ValueError, match="match trials"):
+        total_clutch_counts([0], [])
+    mixed = replace(trial(), click_pos=(265, 300), trajectory=trial().trajectory + [
+        [.9, 250, 300], [1.2, 215, 300], [1.5, 175, 300],
+        [1.6, 205, 300], [1.7, 235, 300], [1.8, 265, 300],
+    ])
+    clear = replace(trial(), trajectory=[[0, 100, 300], [.2, 200, 300], [.4, 300, 300]],
+                    click_pos=(300, 300))
+    session = Session("P", "test", trials=[mixed, clear], samples=samples(), metadata=META)
+    row = participant_tables(participant_rows([session]))["Clutch stats"][0]
+    assert (row["clutch_count"], row["onscreen_clutch_count"]) == (1, 1)
+    assert (row["total_clutch_trial_count"], row["total_clutch_count"], row["total_clutch_mean"]) == (2, 1, .5)
+    assert list(row)[1:4] == ["total_clutch_mean", "total_clutch_count", "total_clutch_trial_count"]
+    excluded = participant_rows([session], excluded_trial_ids={id(mixed)})[0]
+    assert (excluded["total_clutch_count"], excluded["total_clutch_mean"]) == (0, 0)
+    missing_head = Session("P", "cursor only", trials=[onscreen_trial(), clear], metadata=META)
+    pooled = participant_tables(participant_rows([session, missing_head]))["Clutch stats"][0]
+    assert (pooled["total_clutch_trial_count"], pooled["total_clutch_count"], pooled["total_clutch_mean"]) == (
+        3, 2, pytest.approx(2 / 3),
+    )
 
 
 def test_onscreen_allows_edge_visit_but_does_not_bridge_gaps_or_missing_data():
@@ -303,25 +393,28 @@ def test_onscreen_summary_playback_and_exclusion_use_same_episodes():
     assert playback_payload(session, clutch_settings=settings)["trials"][0]["onscreen_clutches"] == []
 
 
-def test_desktop_clutch_indicator_tracks_seek_and_toggle(qt_app):
+def test_desktop_clutch_marks_remain_without_text_indicators(qt_app):
     from session_viewer.fitts_playback import FittsPlaybackWindow
 
     window = FittsPlaybackWindow()
     try:
         window.load_fitts_session([onscreen_trial()], META, "test")
         window.clock.seek(1000.3)
-        assert "On-screen: active" in window.clutch_indicator.text()
-        assert "Off-screen: unavailable" in window.clutch_indicator.text()
+        assert not hasattr(window, "clutch_indicator")
+        assert not hasattr(window, "show_clutch")
+        marks = [item for item in window._clutch_marker_items if hasattr(item, "toPlainText")]
+        assert [item.toPlainText() for item in marks] == ["O"]
+        assert marks[0].pos().y() == .5
         window.clock.seek(1001)
-        assert "On-screen: inactive" in window.clutch_indicator.text()
-        window.show_clutch.setChecked(False)
-        assert window.clutch_indicator.isHidden()
+        assert window._clutch_marker_items
         window.load_fitts_session([trial()], META, "off-screen")
         window.set_head_session_samples(samples())
         window.clock.seek(1000.3)
-        assert "Off-screen: active" in window.clutch_indicator.text()
+        marks = [item for item in window._clutch_marker_items if hasattr(item, "toPlainText")]
+        assert [item.toPlainText() for item in marks] == ["E"]
+        assert marks[0].pos().y() == .5
         window.clock.seek(1001)
-        assert "Off-screen: inactive" in window.clutch_indicator.text()
+        assert window._clutch_marker_items
     finally:
         window.close()
 
@@ -334,12 +427,15 @@ def test_notebook_settings_refresh_playback_and_export():
                       metadata=META, fitts_filename="test.json", head_filename="head.json")
     viewer = NotebookViewer()
     viewer._add_sessions([session])
+    assert "show-clutch" not in viewer.viewer.value
+    assert "clutch-indicator" not in viewer.viewer.value
     assert "&quot;onscreen_clutches&quot;: [[0.0, 0.9]]" in viewer.viewer.value
     viewer.clutch_controls["onscreen_retreat_px"].value = 76
     assert "&quot;onscreen_clutches&quot;: []" in viewer.viewer.value
-    row = csv_rows(viewer.fitts_table.value, "clutch_stats.csv")[0]
+    row = csv_rows(viewer.clutch_table.value, "clutch_stats.csv")[0]
     assert row["onscreen_clutch_count"] == "0"
-    assert float(row["clutch_setting_onscreen_retreat_px"]) == 76
+    assert not any(key.startswith("clutch_setting_") for key in row)
+    assert viewer.summary_rows()[0]["clutch_setting_onscreen_retreat_px"] == 76
     viewer._reset_clutch_settings(None)
     assert "&quot;onscreen_clutches&quot;: [[0.0, 0.9]]" in viewer.viewer.value
 

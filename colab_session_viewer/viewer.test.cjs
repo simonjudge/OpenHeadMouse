@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const {stateAt, pathMeasures, clutchAt, mount} = require("./viewer.js");
+const {stateAt, pathMeasures, mount} = require("./viewer.js");
 
 function trial(start, index = 0) {
     return {
@@ -34,14 +34,12 @@ test("head starts front-on and angle labels track the coloured axis tips on seek
     const elements = {};
     for (const id of ["title", "pretest", "session-summary", "seek", "play", "speed",
         "head", "head-live", "cursor", "cursor-live", "time", "rewind",
-        "zoom-in", "zoom-out", "reset-camera", "relative-pose", "reference-pose-source",
-        "show-clutch", "clutch-indicator", "clutch-offscreen", "clutch-onscreen"]) {
+        "zoom-in", "zoom-out", "reset-camera", "relative-pose", "reference-pose-source"]) {
         elements[id] = {width: 660, height: 330, getContext: () => ctx};
     }
     // Keep cursor rendering separate from the captured head draw calls.
     elements.cursor.getContext = () => ({...ctx, clearRect() {}, fillText() {}});
     elements["relative-pose"].checked = true;
-    elements["show-clutch"].checked = true;
     const graphStrokes = [];
     const graphFills = [];
     elements["head-graphs"] = {appendChild() {}};
@@ -90,10 +88,6 @@ test("head starts front-on and angle labels track the coloured axis tips on seek
     };
     const before = JSON.stringify(data);
     const viewer = mount(data, {querySelector: selector => elements[selector.slice(1)]});
-    assert.equal(elements["clutch-indicator"].hidden, false);
-    elements["show-clutch"].checked = false;
-    elements["show-clutch"].onchange();
-    assert.equal(elements["clutch-indicator"].hidden, true);
     assert.equal(elements["reference-pose-source"].textContent, "Reference pose: Calibration pose");
     assert.equal(graphStrokes[0][0], data.angle_colors.yaw);
     assert.equal(graphStrokes[1][0], data.angle_colors.pitch);
@@ -212,13 +206,6 @@ test("missed targets are red with pink cursor graphs and live target ID follows 
     assert.match(elements["session-summary"].textContent, /Current target planned ID: 1\.8 bits/);
     assert.match(elements["session-summary"].textContent, /targets_analysed: 2\n/);
     assert.match(elements["session-summary"].textContent, /error_rate: 50\.0% \(1\/2\)/);
-    elements.seek.value = ".3";
-    elements.seek.oninput();
-    assert.equal(elements["clutch-onscreen"].textContent, "On-screen: active");
-    assert.equal(elements["clutch-offscreen"].textContent, "Off-screen: unavailable");
-    elements.seek.value = ".6";
-    elements.seek.oninput();
-    assert.equal(elements["clutch-onscreen"].textContent, "On-screen: inactive");
     elements.seek.value = "2.5";
     elements.seek.oninput();
     assert.ok(targetStrokes.includes("#d62728"));
@@ -258,20 +245,8 @@ test("partial path, exact click, inter-trial gap, next trial and end", () => {
     assert.match(stateAt(data, 6).phase, /ended/);
 });
 
-test("clutch indicator uses detected intervals and distinguishes unavailable trials", () => {
-    const data = recording();
-    data.trials[0].offscreen_clutches = [[.2, .5]];
-    data.trials[0].onscreen_clutches = [];
-    data.trials[1].offscreen_clutches = null;
-    for (const [time, status] of [[1.9, "inactive"], [2.19, "inactive"], [2.3, "active"],
-        [2.51, "inactive"], [4.1, "unavailable"], [5.1, "inactive"]]) {
-        assert.equal(clutchAt(stateAt(data, time), time, "offscreen_clutches"), status);
-    }
-    assert.equal(clutchAt(stateAt(data, 2.3), 2.3, "onscreen_clutches"), "inactive");
-});
-
-test("trial zoom limits every graph and transport, with O/E interval marks below traces", t => {
-    const noop = () => {}, elements = {}, texts = [];
+test("trial zoom keeps O/E on one row below distance only, without text indicators", t => {
+    const noop = () => {}, elements = {}, texts = [], canvases = [];
     const ctx = {
         clearRect: noop, beginPath: noop, moveTo: noop, lineTo: noop,
         arc: noop, fill: noop, stroke: noop, fillText: noop,
@@ -283,13 +258,16 @@ test("trial zoom limits every graph and transport, with O/E interval marks below
     global.document = {createElement() {
         const labels = [];
         texts.push(labels);
-        return {setAttribute: noop, getContext: () => ({
+        const canvas = {setAttribute: noop, getContext: () => ({
             ...ctx, fillText: (text, x, y) => labels.push({text, x, y}),
         })};
+        canvases.push(canvas);
+        return canvas;
     }};
     t.after(() => { global.window = oldWindow; global.document = oldDocument; });
     const root = {querySelector(selector) {
         const id = selector.slice(1);
+        assert.ok(!["clutch-indicator", "show-clutch", "clutch-offscreen", "clutch-onscreen"].includes(id));
         return elements[id] ||= {width: 660, height: 280, appendChild: noop, getContext: () => ctx};
     }};
     const data = {
@@ -298,7 +276,10 @@ test("trial zoom limits every graph and transport, with O/E interval marks below
         initial_time: 4, selected_trial: 1, zoom_to_trial: true,
         trials: [trial(2), {...trial(4), onscreen_clutches: [[.1, .3]], offscreen_clutches: [[.6, .8]]}],
         head_graphs: [{label: "Angular acceleration (deg/s2)", points: [[0, 1000], [4, 1], [4.5, 2], [6, 1000]]}],
-        cursor_graphs: [{label: "Cursor speed (px/s)", points: [[4, 1], [4.5, 2]]}],
+        cursor_graphs: [
+            {label: "Cursor speed (px/s)", points: [[4, 1], [4.5, 2]]},
+            {label: "Distance to target (px)", points: [[4, 10], [4.5, 5]]},
+        ],
     };
     const viewer = mount(data, root);
     assert.equal(viewer.state().trialIndex, 1);
@@ -308,10 +289,12 @@ test("trial zoom limits every graph and transport, with O/E interval marks below
     for (const labels of texts) {
         assert.ok(labels.some(p => p.text === "4.0 s"));
         assert.ok(labels.some(p => p.text === "5.0 s"));
-        assert.ok(labels.some(p => p.text === "O" && p.y === 113));
-        assert.ok(labels.some(p => p.text === "E" && p.y === 127));
         assert.ok(!labels.some(p => p.text === "1030.0"));
     }
+    assert.ok(texts.slice(0, 2).every(labels => !labels.some(p => ["O", "E"].includes(p.text))));
+    assert.ok(texts[2].some(p => p.text === "O" && p.y === 113));
+    assert.ok(texts[2].some(p => p.text === "E" && p.y === 113));
+    assert.deepEqual(canvases.map(canvas => canvas.height), [100, 100, 116]);
     elements.seek.value = "4.5";
     elements.seek.oninput();
     elements.rewind.onclick();
